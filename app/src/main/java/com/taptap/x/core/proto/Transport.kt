@@ -1,10 +1,15 @@
 package com.taptap.x.core.proto
 
+import com.taptap.x.core.DnsResolver
 import com.taptap.x.data.ProfileItem
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.ConnectException
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
+import javax.net.ssl.SSLException
 
 /**
  * Shared transport ladder for VMess/VLESS/Trojan (M2): TCP → TLS → WS.
@@ -41,6 +46,15 @@ object Transport {
         fun close() = runCatching { socket.close() }
     }
 
+    /**
+     * Open the transport ladder (TCP → TLS → WS). Every stage tags its
+     * failure ("DNS gagal: ...", "TCP gagal: ...", "TLS gagal: ...",
+     * "WS gagal: ...") so the phone status shows WHERE the dial died
+     * instead of a bare "timeout" — v1.0.4 only ever showed that.
+     * The exception types are preserved on purpose: [SocketTimeoutException]
+     * stays a timeout and [SSLException] stays a TLS failure, so
+     * `TunForwarder.dialFailureReason` keeps mapping them the same way.
+     */
     fun open(item: ProfileItem): OpenStream {
         require(item.address.isNotBlank()) { "Address proxy kosong" }
         require(item.port in 1..65535) { "Port proxy di luar 1..65535: ${item.port}" }
@@ -50,7 +64,24 @@ object Transport {
             if (protect != null && !protect(plain)) {
                 throw IllegalStateException("protect() gagal — dial tidak bisa bypass VPN")
             }
-            plain.connect(InetSocketAddress(item.address, item.port), CONNECT_TIMEOUT_MS)
+            // Tahap DNS: resolve langsung (UDP ke 8.8.8.8, bypass TUN),
+            // fallback ke resolver sistem bila gagal (relay DNS mungkin
+            // jalan). JANGAN resolve lewat InetSocketAddress(host, port):
+            // konstruktor itu memanggil resolver sistem TANPA timeout —
+            // saat VPN naik lookup-nya masuk ke TUN dan menggantung
+            // sampai resolver menyerah (gejala v1.0.4: status macet di
+            // "Connecting..." selamanya). Di sini address sudah IP
+            // hasil resolve, jadi connect() tidak lookup lagi.
+            val target = DnsResolver.resolveWithSystemFallback(item.address, item.port)
+            try {
+                plain.connect(InetSocketAddress(target, item.port), CONNECT_TIMEOUT_MS)
+            } catch (e: SocketTimeoutException) {
+                throw SocketTimeoutException("TCP gagal: ${e.message}")
+            } catch (e: ConnectException) {
+                throw ConnectException("TCP gagal: ${e.message}")
+            } catch (e: IOException) {
+                throw IOException("TCP gagal: ${e.message}", e)
+            }
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
         } catch (e: Exception) {
             runCatching { plain.close() }
@@ -59,19 +90,37 @@ object Transport {
         var socket: Socket = plain
         var input: InputStream = plain.getInputStream()
         var output: OutputStream = plain.getOutputStream()
+        val network = item.network.ifBlank { "tcp" }.lowercase()
+        if (network != "tcp" && network != "ws") {
+            runCatching { socket.close() }
+            throw IllegalArgumentException("network $network belum didukung (hanya tcp/ws)")
+        }
         try {
             if (item.tls) {
-                socket = TlsUtil.wrap(plain, item)
+                // Tahap TLS. SNI tetap domain asli (item.sni atau
+                // item.address): TlsUtil.wrap menerima item apa adanya
+                // — createSocket(plain, host, ...) tidak me-resolve
+                // host karena socket sudah terkoneksi; SNI di-set
+                // eksplisit dari item, bukan dari IP hasil resolve.
+                try {
+                    socket = TlsUtil.wrap(plain, item)
+                } catch (e: SSLException) {
+                    throw SSLException("TLS gagal: ${e.message}")
+                } catch (e: Exception) {
+                    throw IOException("TLS gagal: ${e.message}", e)
+                }
                 input = socket.getInputStream()
                 output = socket.getOutputStream()
             }
-            val network = item.network.ifBlank { "tcp" }.lowercase()
             if (network == "ws") {
-                val ws = WsTransport.connect(input, output, wsHost(item), wsPath(item))
-                input = ws.input
-                output = ws.output
-            } else if (network != "tcp") {
-                throw IllegalArgumentException("network $network belum didukung (hanya tcp/ws)")
+                // Tahap WS.
+                try {
+                    val ws = WsTransport.connect(input, output, wsHost(item), wsPath(item))
+                    input = ws.input
+                    output = ws.output
+                } catch (e: Exception) {
+                    throw IOException("WS gagal: ${e.message}", e)
+                }
             }
         } catch (e: Exception) {
             runCatching { socket.close() }

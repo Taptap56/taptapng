@@ -6,34 +6,75 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.widget.ArrayAdapter
-import android.widget.Spinner
+import android.widget.AutoCompleteTextView
+import android.widget.EditText
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.Chip
-import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.switchmaterial.SwitchMaterial
+import com.google.android.material.textfield.TextInputLayout
+import com.google.gson.JsonParser
 import com.taptap.x.R
 import com.taptap.x.TaptapXApp
+import com.taptap.x.core.CertFingerprintFetcher
 import com.taptap.x.data.ConfigType
 import com.taptap.x.data.ProfileItem
 import com.taptap.x.data.ProfileStore
+import com.taptap.x.data.SettingsStore
 
 /**
  * Profile editor with Views, mirroring v2rayNG's server activities:
- * common fields + protocol fields + the "Xray method" chips
- * (SlowDNS / Onering / Pemicu) + the SSH method chips (Payload /
- * Enhanced / TLS / SlowDNS, like v2rayNG's ServerSshActivity).
- * Save lives in the top bar (checkmark), like v2rayNG.
+ * (a) Basic -> (b) protocol fields -> (c) Network -> (d) Stream
+ * Security (TLS) -> (e) Xray method chips (SlowDNS / Onering /
+ * Pemicu) + the SSH method chips (Payload / Enhanced / TLS /
+ * SlowDNS, like v2rayNG's ServerSshActivity). Every field is an
+ * OUTLINED TextInputLayout; dropdowns are exposed
+ * AutoCompleteTextViews. Save lives in the top bar (checkmark).
+ *
+ * Fields the M2 engine does not use yet are still stored on the
+ * profile, so v2rayNG <-> TaptapX copy round-trips (LinkParser).
  */
 class ServerEditorActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_GUID = "guid"
         const val EXTRA_TYPE = "type"
+
+        // Dropdown options, exactly as in v2rayNG.
+        private val VMESS_SECURITY = listOf("chacha20-poly1305", "aes-128-gcm", "auto", "none", "zero")
+        private val FLOWS = listOf("", "xtls-rprx-vision", "xtls-rprx-vision-udp443")
+        private val SS_METHODS = listOf(
+            "aes-256-gcm", "aes-128-gcm", "chacha20-poly1305", "chacha20-ietf-poly1305",
+            "xchacha20-poly1305", "xchacha20-ietf-poly1305", "none", "plain",
+            "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305",
+        )
+        private val NETWORKS = listOf("tcp", "kcp", "ws", "httpupgrade", "xhttp", "h2", "grpc")
+        private val TCP_HEAD_TYPES = listOf("none", "http")
+        private val KCP_HEAD_TYPES = listOf("none", "srtp", "utp", "wechat-video", "dtls", "wireguard", "dns")
+        private val GRPC_MODES = listOf("gun", "multi")
+        private val XHTTP_MODES = listOf("auto", "packet-up", "stream-up", "stream-one")
+        private val STREAM_SECURITY = listOf("", "tls", "reality")
+        private val FINGERPRINTS = listOf(
+            "", "chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq",
+            "random", "randomized",
+        )
+        private val ALPNS = listOf("", "h3", "h2", "http/1.1", "h3,h2,http/1.1", "h3,h2", "h2,http/1.1")
+        private val BROWSER_DIALER_DISPLAYS = listOf("Disable", "OkHttp", "WebView")
+        private val BROWSER_DIALER_VALUES = listOf("", "OkHttp", "WebView")
+        private val DNSTT_TYPE_DISPLAYS = listOf("TXT", "NULL")
+        private val DNSTT_TYPE_VALUES = listOf("txt", "null")
+        private val SSH_SNI_VERSION_DISPLAYS = listOf("Default", "TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3")
+        private val SSH_SNI_VERSION_VALUES = listOf("default", "tls1", "tls1.1", "tls1.2", "tls1.3")
     }
 
     private lateinit var store: ProfileStore
     private var existing: ProfileItem? = null
     private var configType: ConfigType = ConfigType.SSH
+
+    /** Dropdown id -> (display list, value list) for display<->value mapping. */
+    private val dropdownOptions = mutableMapOf<Int, Pair<List<String>, List<String>>>()
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(TaptapXApp.wrapLocale(newBase))
@@ -56,47 +97,156 @@ class ServerEditorActivity : AppCompatActivity() {
         setSupportActionBar(toolbar)
         toolbar.setNavigationOnClickListener { finish() }
 
-        val networkSpinner = findViewById<Spinner>(R.id.spinner_network)
-        networkSpinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            resources.getStringArray(R.array.network_entries),
-        )
-
+        bindDropdowns()
         fillFields()
         bindChips()
+        bindFetchButton()
         updateSections()
     }
 
+    // ---- view helpers ----
+
     private fun text(id: Int): String =
-        findViewById<TextInputEditText>(id).text?.toString().orEmpty()
+        findViewById<EditText>(id).text?.toString().orEmpty()
 
     private fun setText(id: Int, value: String) {
-        findViewById<TextInputEditText>(id).setText(value)
+        findViewById<EditText>(id).setText(value)
     }
 
     private fun chip(id: Int): Chip = findViewById(id)
 
+    private fun switch(id: Int): SwitchMaterial = findViewById(id)
+
+    private fun show(id: Int, visible: Boolean) {
+        findViewById<View>(id).visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    private fun bindDropdown(
+        id: Int,
+        displays: List<String>,
+        values: List<String> = displays,
+        selected: String = "",
+    ) {
+        val view = findViewById<AutoCompleteTextView>(id)
+        view.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, displays))
+        dropdownOptions[id] = displays to values
+        val idx = values.indexOf(selected)
+        view.setText(if (idx >= 0) displays[idx] else selected, false)
+    }
+
+    /** Current dropdown value (display text mapped back to its value). */
+    private fun dropdownValue(id: Int): String {
+        val view = findViewById<AutoCompleteTextView>(id)
+        val shown = view.text?.toString().orEmpty()
+        val (displays, values) = dropdownOptions[id] ?: return shown
+        val idx = displays.indexOf(shown)
+        return if (idx >= 0) values[idx] else shown
+    }
+
+    private fun bindDropdowns() {
+        bindDropdown(R.id.input_vmess_security, VMESS_SECURITY, selected = "auto")
+        bindDropdown(R.id.input_flow, FLOWS)
+        bindDropdown(R.id.input_ss_security, SS_METHODS, selected = "aes-256-gcm")
+        bindDropdown(R.id.input_network, NETWORKS, selected = "tcp")
+        bindDropdown(R.id.input_header_type, TCP_HEAD_TYPES, selected = "none")
+        bindDropdown(R.id.input_grpc_mode, GRPC_MODES, selected = "gun")
+        bindDropdown(R.id.input_xhttp_mode, XHTTP_MODES, selected = "auto")
+        bindDropdown(R.id.input_browser_dialer, BROWSER_DIALER_DISPLAYS, BROWSER_DIALER_VALUES)
+        bindDropdown(R.id.input_stream_security, STREAM_SECURITY)
+        bindDropdown(R.id.input_fingerprint, FINGERPRINTS)
+        bindDropdown(R.id.input_alpn, ALPNS)
+        bindDropdown(R.id.input_dnstt_type, DNSTT_TYPE_DISPLAYS, DNSTT_TYPE_VALUES, selected = "txt")
+        bindDropdown(
+            R.id.input_ssh_sni_version, SSH_SNI_VERSION_DISPLAYS, SSH_SNI_VERSION_VALUES,
+            selected = "default",
+        )
+        findViewById<AutoCompleteTextView>(R.id.input_network).setOnItemClickListener { _, _, _, _ ->
+            updateNetworkSections()
+        }
+        findViewById<AutoCompleteTextView>(R.id.input_stream_security).setOnItemClickListener { _, _, _, _ ->
+            updateTlsSections()
+        }
+    }
+
+    // ---- fill ----
+
     private fun fillFields() {
-        val item = existing ?: return
+        val item = existing
+        if (item == null) {
+            // New server: v2rayNG defaults (port 443, 22 for SSH).
+            setText(R.id.input_port, if (configType == ConfigType.SSH) "22" else "443")
+            setText(R.id.input_pemicu_interval, "15")
+            return
+        }
         setText(R.id.input_remarks, item.remarks)
         setText(R.id.input_group, item.group)
         setText(R.id.input_address, item.address)
         setText(R.id.input_port, item.port.toString())
+        // SSH
         setText(R.id.input_username, item.username)
         setText(R.id.input_password, item.password)
         setText(R.id.input_private_key, item.privateKey)
-        setText(R.id.input_uuid, item.uuid)
-        setText(R.id.input_password_proxy, item.password)
-        setText(R.id.input_method, item.method)
-        setText(R.id.input_host, item.host)
-        setText(R.id.input_path, item.path)
-        setText(R.id.input_sni, item.sni)
-        setText(R.id.input_fingerprint, item.fingerprint)
-        setText(R.id.input_alpn, item.alpn)
         setText(R.id.input_ssh_payload, item.sshPayload)
         setText(R.id.input_ssh_remote_proxy, item.sshRemoteProxy)
         setText(R.id.input_ssh_sni, item.sshSni)
+        bindDropdown(
+            R.id.input_ssh_sni_version, SSH_SNI_VERSION_DISPLAYS, SSH_SNI_VERSION_VALUES,
+            selected = item.sshSniVersion,
+        )
+        switch(R.id.switch_ssh_insecure).isChecked = item.sshInsecure
+        // Protocol fields
+        setText(R.id.input_uuid, item.uuid)
+        bindDropdown(R.id.input_vmess_security, VMESS_SECURITY, selected = item.security.ifBlank { "auto" })
+        bindDropdown(R.id.input_flow, FLOWS, selected = item.flow)
+        setText(R.id.input_encryption, item.encryption.ifBlank { item.method })
+        setText(R.id.input_password_proxy, item.password)
+        bindDropdown(
+            R.id.input_ss_security, SS_METHODS,
+            selected = item.method.ifBlank { "aes-256-gcm" },
+        )
+        bindDropdown(R.id.input_network, NETWORKS, selected = item.network.ifBlank { "tcp" })
+        // gRPC reuses the host/path boxes as authority/serviceName;
+        // KCP reuses the path box as the seed (path itself is hidden).
+        if (item.network == "grpc") {
+            setText(R.id.input_host, item.authority.ifBlank { item.host })
+            setText(R.id.input_path, item.serviceName.ifBlank { item.path })
+        } else {
+            setText(R.id.input_host, item.host)
+            setText(R.id.input_path, item.path)
+        }
+        bindDropdown(
+            R.id.input_header_type,
+            if (item.network == "kcp") KCP_HEAD_TYPES else TCP_HEAD_TYPES,
+            selected = item.headerType.ifBlank { "none" },
+        )
+        bindDropdown(R.id.input_grpc_mode, GRPC_MODES, selected = item.mode.ifBlank { "gun" })
+        bindDropdown(R.id.input_xhttp_mode, XHTTP_MODES, selected = item.xhttpMode.ifBlank { "auto" })
+        setText(R.id.input_seed, item.seed)
+        setText(R.id.input_kcp_mtu, item.kcpMtu)
+        setText(R.id.input_kcp_tti, item.kcpTti)
+        setText(R.id.input_xhttp_extra, item.xhttpExtra)
+        setText(R.id.input_final_mask, item.finalMask)
+        bindDropdown(
+            R.id.input_browser_dialer, BROWSER_DIALER_DISPLAYS, BROWSER_DIALER_VALUES,
+            selected = item.browserDialerMode,
+        )
+        bindDropdown(R.id.input_stream_security, STREAM_SECURITY, selected = item.streamSecurity)
+        setText(R.id.input_sni, item.sni)
+        bindDropdown(R.id.input_fingerprint, FINGERPRINTS, selected = item.fingerprint)
+        bindDropdown(R.id.input_alpn, ALPNS, selected = item.alpn)
+        switch(R.id.switch_insecure).isChecked = item.insecure
+        setText(R.id.input_ech, item.echConfigList)
+        setText(R.id.input_vcn, item.verifyPeerCertByName)
+        setText(R.id.input_pcs, item.pinnedCA256)
+        setText(R.id.input_reality_pbk, item.realityPublicKey)
+        setText(R.id.input_reality_sid, item.realityShortId)
+        setText(R.id.input_reality_spx, item.realitySpiderX)
+        setText(R.id.input_reality_pqv, item.realityMldsa65Verify)
+        // Xray method
+        bindDropdown(
+            R.id.input_dnstt_type, DNSTT_TYPE_DISPLAYS, DNSTT_TYPE_VALUES,
+            selected = item.dnsttRecordType.ifBlank { "txt" },
+        )
         setText(R.id.input_dnstt_ns, item.dnsttNS)
         setText(R.id.input_dnstt_pubkey, item.dnsttPubkey)
         setText(R.id.input_dnstt_resolver, item.dnsttResolver)
@@ -104,13 +254,9 @@ class ServerEditorActivity : AppCompatActivity() {
         setText(R.id.input_pemicu_domain, item.pemicuDomain)
         setText(R.id.input_pemicu_port, item.pemicuPort?.toString() ?: "")
         setText(R.id.input_pemicu_interval, item.pemicuInterval?.toString() ?: "15")
-        findViewById<Spinner>(R.id.spinner_network).setSelection(
-            resources.getStringArray(R.array.network_values).indexOf(item.network).coerceAtLeast(0)
-        )
-        findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_tls).isChecked = item.tls
-        findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_insecure).isChecked = item.insecure
-        findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_ssh_insecure).isChecked = item.sshInsecure
     }
+
+    // ---- chips / sections ----
 
     private fun bindChips() {
         val protocolChips = mapOf(
@@ -131,6 +277,12 @@ class ServerEditorActivity : AppCompatActivity() {
                     return@setOnClickListener
                 }
                 configType = type
+                if (existing == null) {
+                    val port = text(R.id.input_port)
+                    if (port.isBlank() || port == "22" || port == "443") {
+                        setText(R.id.input_port, if (type == ConfigType.SSH) "22" else "443")
+                    }
+                }
                 updateSections()
             }
         }
@@ -156,25 +308,102 @@ class ServerEditorActivity : AppCompatActivity() {
         }
     }
 
+    private fun bindFetchButton() {
+        findViewById<MaterialButton>(R.id.button_fetch_fingerprint).setOnClickListener { view ->
+            val button = view as MaterialButton
+            val address = text(R.id.input_address).trim()
+            val port = text(R.id.input_port).toIntOrNull()
+            if (address.isBlank() || port == null || port !in 1..65535) {
+                Toast.makeText(this, R.string.toast_address_required, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            button.isEnabled = false
+            CertFingerprintFetcher.fetch(address, port, text(R.id.input_sni).ifBlank { null }) { fp ->
+                runOnUiThread {
+                    button.isEnabled = true
+                    if (fp != null) {
+                        setText(R.id.input_pcs, fp)
+                        Toast.makeText(this, R.string.toast_fetch_fp_ok, Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, R.string.toast_fetch_fp_failed, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
+
     private fun updateSections() {
         val isSsh = configType == ConfigType.SSH
-        findViewById<View>(R.id.section_ssh).visibility = if (isSsh) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.section_proxy).visibility = if (isSsh) View.GONE else View.VISIBLE
+        show(R.id.section_ssh, isSsh)
+        show(R.id.section_proxy, !isSsh)
         // UUID only for VMess/VLESS; password only for Trojan/SS.
-        findViewById<View>(R.id.layout_uuid).visibility =
-            if (configType == ConfigType.VMESS || configType == ConfigType.VLESS) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.layout_password_proxy).visibility =
-            if (configType == ConfigType.TROJAN || configType == ConfigType.SHADOWSOCKS) View.VISIBLE else View.GONE
+        show(
+            R.id.layout_uuid,
+            configType == ConfigType.VMESS || configType == ConfigType.VLESS,
+        )
+        show(R.id.layout_vmess_security, configType == ConfigType.VMESS)
+        show(R.id.layout_flow, configType == ConfigType.VLESS)
+        show(R.id.layout_encryption, configType == ConfigType.VLESS)
+        show(
+            R.id.layout_password_proxy,
+            configType == ConfigType.TROJAN || configType == ConfigType.SHADOWSOCKS,
+        )
+        show(R.id.layout_ss_security, configType == ConfigType.SHADOWSOCKS)
         updateSshSections()
         updateXraySections()
+        if (!isSsh) {
+            updateNetworkSections()
+            updateTlsSections()
+        }
+    }
+
+    private fun updateNetworkSections() {
+        val network = dropdownValue(R.id.input_network).ifBlank { "tcp" }
+        val headOptions = if (network == "kcp") KCP_HEAD_TYPES else TCP_HEAD_TYPES
+        val currentHead = dropdownValue(R.id.input_header_type)
+        bindDropdown(R.id.input_header_type, headOptions, selected = currentHead)
+        show(R.id.layout_header_type, network == "tcp" || network == "kcp")
+        show(R.id.layout_grpc_mode, network == "grpc")
+        show(R.id.layout_xhttp_mode, network == "xhttp")
+        // Host label per network (v2rayNG).
+        val hostLayout = findViewById<TextInputLayout>(R.id.layout_host)
+        hostLayout.hint = getString(
+            when (network) {
+                "tcp", "httpupgrade", "xhttp", "h2" -> R.string.editor_host_http
+                "ws" -> R.string.editor_host_ws
+                "grpc" -> R.string.editor_host_grpc
+                else -> R.string.editor_host_sni
+            }
+        )
+        // Path: hidden for KCP (seed is used instead); label per network.
+        show(R.id.layout_path, network != "kcp")
+        val pathLayout = findViewById<TextInputLayout>(R.id.layout_path)
+        pathLayout.hint = getString(
+            when (network) {
+                "ws" -> R.string.editor_path_ws
+                "httpupgrade" -> R.string.editor_path_httpupgrade
+                "xhttp" -> R.string.editor_path_xhttp
+                "h2" -> R.string.editor_path_h2
+                "grpc" -> R.string.editor_path_grpc
+                else -> R.string.editor_path
+            }
+        )
+        show(R.id.layout_xhttp_extra, network == "xhttp")
+        show(R.id.section_kcp, network == "kcp")
+        show(R.id.layout_browser_dialer, network == "ws" || network == "xhttp")
+    }
+
+    private fun updateTlsSections() {
+        val security = dropdownValue(R.id.input_stream_security)
+        show(R.id.section_tls_fields, security == "tls" || security == "reality")
+        show(R.id.section_tls_only, security == "tls")
+        show(R.id.section_reality, security == "reality")
     }
 
     private fun updateSshSections() {
         val showPayload = chip(R.id.chip_ssh_payload).isChecked || chip(R.id.chip_ssh_enhanced).isChecked
-        findViewById<View>(R.id.section_ssh_payload).visibility =
-            if (showPayload) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.section_ssh_tls).visibility =
-            if (chip(R.id.chip_ssh_tls).isChecked) View.VISIBLE else View.GONE
+        show(R.id.section_ssh_payload, showPayload)
+        show(R.id.section_ssh_tls, chip(R.id.chip_ssh_tls).isChecked)
         // SSH SlowDNS chip shares the DNSTT fields with the Xray chip.
         if (chip(R.id.chip_ssh_slowdns).isChecked) {
             chip(R.id.chip_slowdns).isChecked = true
@@ -184,12 +413,9 @@ class ServerEditorActivity : AppCompatActivity() {
 
     private fun updateXraySections() {
         val slowdns = chip(R.id.chip_slowdns).isChecked || chip(R.id.chip_ssh_slowdns).isChecked
-        findViewById<View>(R.id.section_dnstt).visibility =
-            if (slowdns) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.section_onering).visibility =
-            if (chip(R.id.chip_onering).isChecked) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.section_pemicu).visibility =
-            if (chip(R.id.chip_pemicu).isChecked) View.VISIBLE else View.GONE
+        show(R.id.section_dnstt, slowdns)
+        show(R.id.section_onering, chip(R.id.chip_onering).isChecked)
+        show(R.id.section_pemicu, chip(R.id.chip_pemicu).isChecked)
     }
 
     // Menu inflated here (see MainActivity): `app:menu` in the layout
@@ -198,6 +424,8 @@ class ServerEditorActivity : AppCompatActivity() {
     // Without this the save checkmark never appears.
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.editor_toolbar, menu)
+        // v2rayNG shows delete only when editing an existing server.
+        menu.findItem(R.id.action_delete)?.isVisible = existing != null
         return true
     }
 
@@ -211,10 +439,40 @@ class ServerEditorActivity : AppCompatActivity() {
             save()
             return true
         }
+        if (item.itemId == R.id.action_delete) {
+            deleteCurrent()
+            return true
+        }
         return false
     }
 
+    /** Delete the server being edited (v2rayNG parity; same confirm
+     *  rule as the main list's row delete). */
+    private fun deleteCurrent() {
+        val item = existing ?: return
+        val doDelete = {
+            store.remove(item.guid)
+            finish()
+        }
+        if (SettingsStore(this).confirmRemove) {
+            AlertDialog.Builder(this)
+                .setMessage(R.string.confirm_delete_server)
+                .setPositiveButton(R.string.action_delete) { _, _ -> doDelete() }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        } else {
+            doDelete()
+        }
+    }
+
+    private fun isValidJson(raw: String): Boolean =
+        runCatching { JsonParser.parseString(raw); true }.getOrDefault(false)
+
     private fun save() {
+        if (text(R.id.input_remarks).isBlank()) {
+            Toast.makeText(this, R.string.toast_remarks_required, Toast.LENGTH_SHORT).show()
+            return
+        }
         val address = text(R.id.input_address).trim()
         if (address.isBlank()) {
             Toast.makeText(this, R.string.toast_address_required, Toast.LENGTH_SHORT).show()
@@ -224,6 +482,53 @@ class ServerEditorActivity : AppCompatActivity() {
         if (port == null || port !in 1..65535) {
             Toast.makeText(this, R.string.toast_port_invalid, Toast.LENGTH_SHORT).show()
             return
+        }
+        val isSsh = configType == ConfigType.SSH
+        if (isSsh) {
+            if (text(R.id.input_password).isBlank() && text(R.id.input_private_key).isBlank()) {
+                Toast.makeText(this, R.string.toast_ssh_auth_required, Toast.LENGTH_SHORT).show()
+                return
+            }
+        } else {
+            when (configType) {
+                ConfigType.VMESS, ConfigType.VLESS -> {
+                    if (text(R.id.input_uuid).isBlank()) {
+                        Toast.makeText(this, R.string.toast_uuid_required, Toast.LENGTH_SHORT).show()
+                        return
+                    }
+                }
+                ConfigType.TROJAN, ConfigType.SHADOWSOCKS -> {
+                    if (text(R.id.input_password_proxy).isBlank()) {
+                        Toast.makeText(this, R.string.toast_password_required, Toast.LENGTH_SHORT).show()
+                        return
+                    }
+                }
+                else -> Unit
+            }
+            if (configType == ConfigType.TROJAN && dropdownValue(R.id.input_stream_security).isBlank()) {
+                Toast.makeText(this, R.string.toast_tls_required, Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (text(R.id.input_final_mask).isNotBlank() &&
+                !isValidJson(text(R.id.input_final_mask))
+            ) {
+                Toast.makeText(
+                    this,
+                    getString(R.string.toast_invalid_json, "finalMask"),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                return
+            }
+            if (text(R.id.input_xhttp_extra).isNotBlank() &&
+                !isValidJson(text(R.id.input_xhttp_extra))
+            ) {
+                Toast.makeText(
+                    this,
+                    getString(R.string.toast_invalid_json, "xhttpExtra"),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                return
+            }
         }
         val usePayload = chip(R.id.chip_ssh_payload).isChecked || chip(R.id.chip_ssh_enhanced).isChecked
         if (usePayload && text(R.id.input_ssh_payload).isBlank()) {
@@ -236,10 +541,13 @@ class ServerEditorActivity : AppCompatActivity() {
             return
         }
 
-        val networkValues = resources.getStringArray(R.array.network_values)
-        val network = networkValues.getOrElse(
-            findViewById<Spinner>(R.id.spinner_network).selectedItemPosition
-        ) { "tcp" }
+        val network = dropdownValue(R.id.input_network).ifBlank { "tcp" }
+        val streamSecurity = dropdownValue(R.id.input_stream_security)
+        val hostText = text(R.id.input_host)
+        val pathText = text(R.id.input_path)
+        val isGrpc = network == "grpc"
+        val isKcp = network == "kcp"
+        val isXhttp = network == "xhttp"
 
         val item = (existing ?: ProfileItem()).copy(
             remarks = text(R.id.input_remarks),
@@ -248,8 +556,7 @@ class ServerEditorActivity : AppCompatActivity() {
             address = address,
             port = port,
             username = text(R.id.input_username),
-            password = if (configType == ConfigType.SSH) text(R.id.input_password)
-            else text(R.id.input_password_proxy),
+            password = if (isSsh) text(R.id.input_password) else text(R.id.input_password_proxy),
             privateKey = text(R.id.input_private_key),
             sshUsePayload = chip(R.id.chip_ssh_payload).isChecked,
             sshPayload = text(R.id.input_ssh_payload),
@@ -257,19 +564,55 @@ class ServerEditorActivity : AppCompatActivity() {
             sshUseEnhanced = chip(R.id.chip_ssh_enhanced).isChecked,
             sshUseTls = chip(R.id.chip_ssh_tls).isChecked,
             sshSni = text(R.id.input_ssh_sni),
-            sshInsecure = findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_ssh_insecure).isChecked,
+            sshSniVersion = dropdownValue(R.id.input_ssh_sni_version).ifBlank { "default" },
+            sshInsecure = switch(R.id.switch_ssh_insecure).isChecked,
             sshUseSlowdns = chip(R.id.chip_ssh_slowdns).isChecked,
             uuid = text(R.id.input_uuid),
-            method = text(R.id.input_method),
+            security = dropdownValue(R.id.input_vmess_security).ifBlank { "auto" },
+            method = when (configType) {
+                ConfigType.SHADOWSOCKS -> dropdownValue(R.id.input_ss_security).ifBlank { "aes-256-gcm" }
+                ConfigType.VLESS -> text(R.id.input_encryption).ifBlank { "none" }
+                else -> existing?.method ?: ""
+            },
+            encryption = if (configType == ConfigType.VLESS) {
+                text(R.id.input_encryption).ifBlank { "none" }
+            } else {
+                existing?.encryption ?: "none"
+            },
+            flow = dropdownValue(R.id.input_flow),
             network = network,
-            host = text(R.id.input_host),
-            path = text(R.id.input_path),
-            tls = findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_tls).isChecked,
+            headerType = dropdownValue(R.id.input_header_type).ifBlank { "none" },
+            mode = if (isGrpc) dropdownValue(R.id.input_grpc_mode) else "",
+            xhttpMode = if (isXhttp) dropdownValue(R.id.input_xhttp_mode) else "",
+            host = hostText,
+            path = if (isKcp) text(R.id.input_seed) else pathText,
+            authority = if (isGrpc) hostText else "",
+            serviceName = if (isGrpc) pathText else "",
+            xhttpExtra = if (isXhttp) text(R.id.input_xhttp_extra) else "",
+            seed = if (isKcp) text(R.id.input_seed) else "",
+            kcpMtu = if (isKcp) text(R.id.input_kcp_mtu) else "",
+            kcpTti = if (isKcp) text(R.id.input_kcp_tti) else "",
+            finalMask = text(R.id.input_final_mask),
+            browserDialerMode = if (network == "ws" || isXhttp) {
+                dropdownValue(R.id.input_browser_dialer)
+            } else {
+                ""
+            },
+            streamSecurity = streamSecurity,
+            tls = streamSecurity == "tls" || streamSecurity == "reality",
             sni = text(R.id.input_sni),
-            fingerprint = text(R.id.input_fingerprint),
-            alpn = text(R.id.input_alpn),
-            insecure = findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_insecure).isChecked,
+            fingerprint = dropdownValue(R.id.input_fingerprint),
+            alpn = dropdownValue(R.id.input_alpn),
+            insecure = switch(R.id.switch_insecure).isChecked,
+            echConfigList = text(R.id.input_ech),
+            verifyPeerCertByName = text(R.id.input_vcn),
+            pinnedCA256 = text(R.id.input_pcs),
+            realityPublicKey = text(R.id.input_reality_pbk),
+            realityShortId = text(R.id.input_reality_sid),
+            realitySpiderX = text(R.id.input_reality_spx),
+            realityMldsa65Verify = text(R.id.input_reality_pqv),
             dnsttEnabled = slowdns,
+            dnsttRecordType = dropdownValue(R.id.input_dnstt_type).ifBlank { "txt" },
             dnsttNS = text(R.id.input_dnstt_ns),
             dnsttPubkey = text(R.id.input_dnstt_pubkey),
             dnsttResolver = text(R.id.input_dnstt_resolver),

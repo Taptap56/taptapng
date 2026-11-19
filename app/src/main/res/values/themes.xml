@@ -26,6 +26,24 @@
         <item name="textAppearanceBodyMedium">@style/TextAppearance.TaptapX.BodyMedium</item>
         <item name="textAppearanceBodySmall">@style/TextAppearance.TaptapX.BodySmall</item>
         <item name="textAppearanceTitleLarge">@style/TextAppearance.TaptapX.TitleLarge</item>
+        <!-- dynamicColorThemeOverlay (v1.0.5): Theme.MaterialComponents
+             (M2) does NOT define this attribute — only M3 themes do —
+             but TaptapXApp registers DynamicColors.applyToActivitiesIfAvailable
+             (dynamic_color default ON, SDK 31+). Material 1.13.0 resolves
+             the overlay from this attribute and calls
+             theme.applyStyle(id, true) WITHOUT a zero check, so the
+             undefined attribute resolved to resource ID 0 and EVERY
+             activity creation logged one "Invalid resource ID 0x00000000"
+             (proven from the shipped v1.0.4 APK: aapt2 dump shows the
+             attribute never assigned anywhere; dexdump of the shipped
+             DynamicColors callback shows getResourceId(0, 0) followed
+             by applyStyle(v7, true) with no zero guard). Defining it
+             here with an intentionally EMPTY overlay makes applyStyle a
+             no-op: the error disappears and the fixed v2rayNG palette is
+             untouched. Do NOT point this at
+             ThemeOverlay.Material3.DynamicColors — that would recolor
+             the app with wallpaper-derived Material You colors. -->
+        <item name="dynamicColorThemeOverlay">@style/ThemeOverlay.TaptapX.DynamicColors</item>
     </style>
 
     <!-- M3 typography tokens for the M2 theme (see above). Colors use
@@ -45,5 +63,13 @@
     <style name="TextAppearance.TaptapX.TitleLarge" parent="TextAppearance.AppCompat.Headline">
         <item name="android:textSize">22sp</item>
         <item name="android:textColor">?attr/colorOnSurface</item>
+    </style>
+
+    <!-- Intentionally EMPTY overlay for dynamicColorThemeOverlay (see
+         above): DynamicColors applies this to every activity theme at
+         creation. Empty = no color changes, only the missing-attribute
+         error goes away. parent="" means no parent on purpose — any
+         parent with items would leak its attributes into the theme. -->
+    <style name="ThemeOverlay.TaptapX.DynamicColors" parent="">
     </style>
 </resources>

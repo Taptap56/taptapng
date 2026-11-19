@@ -41,10 +41,38 @@ data class ProfileItem(
     var host: String = "",
     var path: String = "",
     var tls: Boolean = false,
+    // Stream security (v2rayNG "TLS" dropdown): "", "tls" or "reality".
+    // `tls` above stays synced (true when tls/reality) for the M2 engine.
+    var streamSecurity: String = "",
     var sni: String = "",
     var fingerprint: String = "",
     var alpn: String = "",
     var insecure: Boolean = false,
+    // v2rayNG extras (M2 engine may ignore them; they are stored so
+    // v2rayNG <-> TaptapX copy round-trips). Missing in old JSON ->
+    // Gson uses the defaults below (see ProfileItemDefaultsTest).
+    var finalMask: String = "",
+    var browserDialerMode: String = "", // "", "OkHttp", "WebView" (WS/XHTTP only)
+    var echConfigList: String = "",
+    var verifyPeerCertByName: String = "",
+    var pinnedCA256: String = "", // certificate fingerprint (SHA-256)
+    var realityPublicKey: String = "",
+    var realityShortId: String = "",
+    var realitySpiderX: String = "",
+    var realityMldsa65Verify: String = "",
+    var headerType: String = "none", // TCP/KCP "head type"
+    var mode: String = "", // gRPC mode: "gun" / "multi"
+    var xhttpMode: String = "", // "auto" / "packet-up" / "stream-up" / "stream-one"
+    var authority: String = "", // gRPC authority (host field for gRPC)
+    var serviceName: String = "", // gRPC serviceName (path field for gRPC)
+    var xhttpExtra: String = "", // raw JSON { XHTTPObject }
+    var seed: String = "", // KCP seed (path field for KCP)
+    var kcpMtu: String = "",
+    var kcpTti: String = "",
+    var flow: String = "", // VLESS flow
+    var encryption: String = "none", // VLESS encryption ("none"); SS uses `method`
+    // SSH extras
+    var sshSniVersion: String = "default", // default/tls1/tls1.1/tls1.2/tls1.3
     // SlowDNS / DNSTT (Xray method)
     var dnsttEnabled: Boolean = false,
     var dnsttNS: String = "",

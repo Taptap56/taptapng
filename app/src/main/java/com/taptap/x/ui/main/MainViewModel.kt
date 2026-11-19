@@ -202,7 +202,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val results = LinkedHashMap<String, Long>()
             for (item in items) {
                 val ms = if (realPing) {
-                    ServerTester.testRealPing(item.address)
+                    // v1.0.5: the (host, port) overload falls back to a
+                    // TCP connect on the entry's own port — the
+                    // host-only isReachable never answers on a
+                    // non-root phone (ICMP needs raw sockets).
+                    ServerTester.testRealPing(item.address, item.port)
                 } else {
                     ServerTester.testTcp(item.address, item.port)
                 }

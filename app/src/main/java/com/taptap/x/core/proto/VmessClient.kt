@@ -61,6 +61,14 @@ class VmessClient(private val item: ProfileItem) : ProxyClient {
             val s = SocketProxyStream(transport.socket, bodyIn, bodyOut)
             stream = s
             return s
+        } catch (e: java.net.SocketTimeoutException) {
+            // v1.0.5: tag the VMess stage — the dial got through
+            // TCP/TLS/WS but the server never answered the VMess
+            // header. The type stays a timeout, so
+            // TunForwarder.dialFailureReason still maps it, now
+            // with the stage tag in the message.
+            transport.close()
+            throw java.net.SocketTimeoutException("VMess gagal: ${e.message}")
         } catch (e: Exception) {
             transport.close()
             throw e

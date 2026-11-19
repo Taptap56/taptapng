@@ -249,7 +249,9 @@ class LinkParserTest {
         assertEquals(first.address, back.address)
         assertEquals(first.port, back.port)
         assertEquals(first.uuid, back.uuid)
-        assertEquals(5, back.alterId)
+        // v1.0.5: aid export is always "0" (alterId deprecated), so a
+        // non-zero aid from an imported link does NOT survive export.
+        assertEquals(0, back.alterId)
         assertEquals("aes-128-gcm", back.security)
         assertEquals(first.network, back.network)
         assertEquals(first.host, back.host)
@@ -261,24 +263,26 @@ class LinkParserTest {
     }
 
     @Test
-    fun `vmess json round trip preserves pemicu and dnstt`() {
+    fun `vmess json round trip preserves dnstt and drops pemicu`() {
         val json = """{"v":"2","ps":"Ext","add":"1.2.3.4","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"0","scy":"auto","net":"ws","type":"none","host":"","path":"/","tls":"tls","sni":"","dnstt_ns":"ns.example.com","dnstt_pubkey":"PUBKEY","dnstt_resolver":"8.8.8.8","pemicu_domain":"support.zoom.us","pemicu_port":"443","pemicu_interval":"15"}"""
         val first = LinkParser.parse(
             "vmess://" + Base64Util.encodeUrlSafe(json.toByteArray(Charsets.UTF_8))
         )!!
         assertTrue(first.dnsttEnabled)
-        assertTrue(first.pemicuEnabled)
-        val back = LinkParser.parse(LinkParser.toUri(first)!!)
+        // v1.0.5: pemicu is NOT a link key (v2rayNG has none), so the
+        // pemicu_* keys in an imported link are ignored, not stored.
+        assertFalse(first.pemicuEnabled)
+        assertEquals("", first.pemicuDomain)
+        val exported = LinkParser.toUri(first)!!
+        assertFalse(exported.contains("pemicu"), exported)
+        val back = LinkParser.parse(exported)
         assertNotNull(back)
         back!!
         assertTrue(back.dnsttEnabled)
         assertEquals("ns.example.com", back.dnsttNS)
         assertEquals("PUBKEY", back.dnsttPubkey)
         assertEquals("8.8.8.8", back.dnsttResolver)
-        assertTrue(back.pemicuEnabled)
-        assertEquals("support.zoom.us", back.pemicuDomain)
-        assertEquals(443, back.pemicuPort)
-        assertEquals(15, back.pemicuInterval)
+        assertFalse(back.pemicuEnabled)
     }
 
     @Test
@@ -294,7 +298,7 @@ class LinkParserTest {
     }
 
     @Test
-    fun `vless round trip preserves dnstt pemicu onering`() {
+    fun `vless round trip preserves dnstt onering and drops pemicu`() {
         val first = LinkParser.parse(
             "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@leaseweb4.svrkencang.web.id:443" +
                 "?encryption=none&security=tls&sni=onering%3Asupport.zoom.us%3Alive.iflix.com" +
@@ -305,7 +309,10 @@ class LinkParserTest {
         assertTrue(first.oneringEnabled)
         assertEquals("support.zoom.us", first.sni)
         assertEquals("live.iflix.com", first.oneringBug)
-        val back = LinkParser.parse(LinkParser.toUri(first)!!)
+        assertFalse(first.pemicuEnabled)
+        val exported = LinkParser.toUri(first)!!
+        assertFalse(exported.contains("pemicu"), exported)
+        val back = LinkParser.parse(exported)
         assertNotNull(back)
         back!!
         assertEquals(first.address, back.address)
@@ -319,10 +326,7 @@ class LinkParserTest {
         assertEquals("live.iflix.com", back.oneringBug)
         assertTrue(back.dnsttEnabled)
         assertEquals("ns.example.com", back.dnsttNS)
-        assertTrue(back.pemicuEnabled)
-        assertEquals("chat.sociomile.com", back.pemicuDomain)
-        assertEquals(443, back.pemicuPort)
-        assertEquals(15, back.pemicuInterval)
+        assertFalse(back.pemicuEnabled)
     }
 
     @Test
@@ -344,7 +348,7 @@ class LinkParserTest {
     }
 
     @Test
-    fun `ss sip002 round trip preserves dnstt pemicu`() {
+    fun `ss sip002 export has no query string`() {
         val userInfo = Base64Util.encodeUrlSafe("aes-256-gcm:pass123".toByteArray(Charsets.UTF_8))
         val first = LinkParser.parse(
             "ss://$userInfo@ss.example.com:8388" +
@@ -352,20 +356,21 @@ class LinkParserTest {
                 "&pemicu_domain=d.example&pemicu_port=443&pemicu_interval=30#SS-RT"
         )!!
         assertTrue(first.dnsttEnabled)
-        assertTrue(first.pemicuEnabled)
-        val back = LinkParser.parse(LinkParser.toUri(first)!!)
+        assertFalse(first.pemicuEnabled)
+        // v1.0.5: v2rayNG reads no SS query params, so export writes
+        // none — extensions must not silently vanish on the other side.
+        val exported = LinkParser.toUri(first)!!
+        assertFalse(exported.contains("?"), exported)
+        assertFalse(exported.contains("dnstt"), exported)
+        assertFalse(exported.contains("pemicu"), exported)
+        val back = LinkParser.parse(exported)
         assertNotNull(back)
         back!!
         assertEquals("aes-256-gcm", back.method)
         assertEquals("pass123", back.password)
         assertEquals("ss.example.com", back.address)
         assertEquals(8388, back.port)
-        assertTrue(back.dnsttEnabled)
-        assertEquals("ns.example.com", back.dnsttNS)
-        assertTrue(back.pemicuEnabled)
-        assertEquals("d.example", back.pemicuDomain)
-        assertEquals(443, back.pemicuPort)
-        assertEquals(30, back.pemicuInterval)
+        assertFalse(back.dnsttEnabled)
     }
 
     @Test
@@ -413,5 +418,212 @@ class LinkParserTest {
         }
         assertTrue(exported.contains("\"add\":\"1.2.3.4\""))
         assertTrue(exported.contains("\"sni\":\"s.example\""))
+    }
+
+    // ---- v1.0.5: new v2rayNG fields ----
+
+    @Test
+    fun `vmess json new keys round trip incl reality`() {
+        val json = """{"v":"2","ps":"New","add":"1.2.3.4","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"0","scy":"auto","net":"tcp","type":"http","host":"h.example","path":"","tls":"reality","sni":"s.example","fp":"chrome","alpn":"","fm":"{\"a\":1}","vcn":"verify.example","pcs":"aabbcc","ech":"ech-list","pbk":"PUB","sid":"short","spx":"spider","pqv":"pqv-val"}"""
+        val first = LinkParser.parse(
+            "vmess://" + Base64Util.encodeUrlSafe(json.toByteArray(Charsets.UTF_8))
+        )!!
+        assertEquals("reality", first.streamSecurity)
+        assertTrue(first.tls)
+        assertEquals("http", first.headerType)
+        assertEquals("{\"a\":1}", first.finalMask)
+        assertEquals("verify.example", first.verifyPeerCertByName)
+        assertEquals("aabbcc", first.pinnedCA256)
+        assertEquals("ech-list", first.echConfigList)
+        assertEquals("PUB", first.realityPublicKey)
+        assertEquals("short", first.realityShortId)
+        assertEquals("spider", first.realitySpiderX)
+        assertEquals("pqv-val", first.realityMldsa65Verify)
+        val back = LinkParser.parse(LinkParser.toUri(first)!!)!!
+        assertEquals("reality", back.streamSecurity)
+        assertTrue(back.tls)
+        assertEquals("http", back.headerType)
+        assertEquals("{\"a\":1}", back.finalMask)
+        assertEquals("verify.example", back.verifyPeerCertByName)
+        assertEquals("aabbcc", back.pinnedCA256)
+        assertEquals("ech-list", back.echConfigList)
+        assertEquals("PUB", back.realityPublicKey)
+        assertEquals("short", back.realityShortId)
+        assertEquals("spider", back.realitySpiderX)
+        assertEquals("pqv-val", back.realityMldsa65Verify)
+    }
+
+    @Test
+    fun `vmess json empty new keys are omitted from export`() {
+        val item = ProfileItem(
+            configType = ConfigType.VMESS, remarks = "Min", address = "1.2.3.4",
+            port = 443, uuid = "11111111-2222-3333-4444-555555555555",
+        )
+        val exported = Base64Util.decodeToString(
+            LinkParser.toUri(item)!!.removePrefix("vmess://")
+        )!!
+        for (key in listOf("fm", "vcn", "pcs", "ech", "pbk", "sid", "spx", "pqv")) {
+            assertFalse(exported.contains("\"$key\":"), "unexpected $key in $exported")
+        }
+        // Standard keys are still always present.
+        assertTrue(exported.contains("\"tls\":\"\""))
+        assertTrue(exported.contains("\"aid\":\"0\""))
+    }
+
+    @Test
+    fun `vmess json kcp path is seed and grpc type path host remap`() {
+        val kcpJson = """{"v":"2","ps":"KCP","add":"1.2.3.4","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"0","scy":"auto","net":"kcp","type":"srtp","host":"","path":"myseed","tls":"","sni":"","fp":"","alpn":""}"""
+        val kcp = LinkParser.parse(
+            "vmess://" + Base64Util.encodeUrlSafe(kcpJson.toByteArray(Charsets.UTF_8))
+        )!!
+        assertEquals("srtp", kcp.headerType)
+        assertEquals("myseed", kcp.seed)
+        val kcpBack = LinkParser.parse(LinkParser.toUri(kcp)!!)!!
+        assertEquals("myseed", kcpBack.seed)
+        assertEquals("srtp", kcpBack.headerType)
+
+        val grpcJson = """{"v":"2","ps":"GRPC","add":"1.2.3.4","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"0","scy":"auto","net":"grpc","type":"multi","host":"auth.example","path":"SvcName","tls":"tls","sni":"s.example","fp":"","alpn":""}"""
+        val grpc = LinkParser.parse(
+            "vmess://" + Base64Util.encodeUrlSafe(grpcJson.toByteArray(Charsets.UTF_8))
+        )!!
+        assertEquals("multi", grpc.mode)
+        assertEquals("SvcName", grpc.serviceName)
+        assertEquals("auth.example", grpc.authority)
+        val grpcBack = LinkParser.parse(LinkParser.toUri(grpc)!!)!!
+        assertEquals("multi", grpcBack.mode)
+        assertEquals("SvcName", grpcBack.serviceName)
+        assertEquals("auth.example", grpcBack.authority)
+    }
+
+    @Test
+    fun `vless std form new keys round trip incl flow and insecure pair`() {
+        val first = LinkParser.parse(
+            "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@a.example:443" +
+                "?encryption=none&security=tls&sni=s.example&type=ws&host=h.example&path=%2Fp" +
+                "&fp=chrome&alpn=h2&flow=xtls-rprx-vision&fm=%7B%22a%22%3A1%7D" +
+                "&headerType=http&ech=ech1&vcn=v.example&pcs=ff00&insecure=1#VLESS-New"
+        )!!
+        assertEquals("tls", first.streamSecurity)
+        assertTrue(first.tls)
+        assertTrue(first.insecure)
+        assertEquals("xtls-rprx-vision", first.flow)
+        assertEquals("{\"a\":1}", first.finalMask)
+        assertEquals("http", first.headerType)
+        assertEquals("ech1", first.echConfigList)
+        assertEquals("v.example", first.verifyPeerCertByName)
+        assertEquals("ff00", first.pinnedCA256)
+        val exported = LinkParser.toUri(first)!!
+        // security is always written; insecure is written as both keys.
+        assertTrue(exported.contains("security=tls"), exported)
+        assertTrue(exported.contains("insecure=1"), exported)
+        assertTrue(exported.contains("allowInsecure=1"), exported)
+        assertTrue(exported.contains("flow=xtls-rprx-vision"), exported)
+        assertTrue(exported.contains("headerType=http"), exported)
+        val back = LinkParser.parse(exported)!!
+        assertEquals("tls", back.streamSecurity)
+        assertTrue(back.insecure)
+        assertEquals("xtls-rprx-vision", back.flow)
+        assertEquals("{\"a\":1}", back.finalMask)
+        assertEquals("http", back.headerType)
+        assertEquals("ech1", back.echConfigList)
+    }
+
+    @Test
+    fun `std form security none or other value means no stream security`() {
+        val vless = LinkParser.parse(
+            "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@a.example:443" +
+                "?encryption=none&security=none&type=tcp#Plain"
+        )!!
+        assertEquals("", vless.streamSecurity)
+        assertFalse(vless.tls)
+        // Export writes security=none back.
+        assertTrue(LinkParser.toUri(vless)!!.contains("security=none"))
+        val trojan = LinkParser.parse(
+            "trojan://pw@a.example:443?security=none&type=tcp#TrojanPlain"
+        )!!
+        assertEquals("", trojan.streamSecurity)
+        assertFalse(trojan.tls)
+    }
+
+    @Test
+    fun `trojan without security defaults to tls`() {
+        val item = LinkParser.parse("trojan://pw@a.example:443?type=ws&path=%2F#T")!!
+        assertEquals("tls", item.streamSecurity)
+        assertTrue(item.tls)
+        assertTrue(LinkParser.toUri(item)!!.contains("security=tls"))
+    }
+
+    @Test
+    fun `vless grpc and kcp keys round trip`() {
+        val grpc = LinkParser.parse(
+            "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@a.example:443" +
+                "?encryption=none&security=tls&type=grpc&mode=multi" +
+                "&authority=auth.example&serviceName=Svc#G"
+        )!!
+        assertEquals("grpc", grpc.network)
+        assertEquals("multi", grpc.mode)
+        assertEquals("auth.example", grpc.authority)
+        assertEquals("Svc", grpc.serviceName)
+        val grpcBack = LinkParser.parse(LinkParser.toUri(grpc)!!)!!
+        assertEquals("multi", grpcBack.mode)
+        assertEquals("auth.example", grpcBack.authority)
+        assertEquals("Svc", grpcBack.serviceName)
+
+        val kcp = LinkParser.parse(
+            "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@a.example:443" +
+                "?encryption=none&security=none&type=kcp&seed=s1&mtu=1350&tti=50&headerType=srtp#K"
+        )!!
+        assertEquals("s1", kcp.seed)
+        assertEquals("1350", kcp.kcpMtu)
+        assertEquals("50", kcp.kcpTti)
+        assertEquals("srtp", kcp.headerType)
+        val kcpBack = LinkParser.parse(LinkParser.toUri(kcp)!!)!!
+        assertEquals("s1", kcpBack.seed)
+        assertEquals("1350", kcpBack.kcpMtu)
+        assertEquals("50", kcpBack.kcpTti)
+    }
+
+    @Test
+    fun `ssh sni version round trips and pemicu never in ssh link`() {
+        val ssh = ProfileItem(
+            configType = ConfigType.SSH, remarks = "SSH", address = "ssh.example",
+            port = 22, username = "u", password = "p",
+            sshUseTls = true, sshSni = "s.example", sshSniVersion = "tls1.2",
+            sshInsecure = true, pemicuEnabled = true, pemicuDomain = "chat.sociomile.com",
+        )
+        val exported = LinkParser.toUri(ssh)!!
+        assertTrue(exported.contains("sni_version=tls1.2"), exported)
+        assertTrue(exported.contains("insecure=1"), exported)
+        assertFalse(exported.contains("pemicu"), exported)
+        val back = LinkParser.parse(exported)!!
+        assertEquals("tls1.2", back.sshSniVersion)
+        assertTrue(back.sshUseTls)
+        assertTrue(back.sshInsecure)
+        assertFalse(back.pemicuEnabled)
+    }
+
+    @Test
+    fun `pemicu never appears in any exported link`() {
+        val base = ProfileItem(
+            remarks = "P", address = "1.2.3.4", port = 443,
+            uuid = "11111111-2222-3333-4444-555555555555",
+            password = "pw", method = "aes-256-gcm",
+            pemicuEnabled = true, pemicuDomain = "chat.sociomile.com",
+            pemicuPort = 443, pemicuInterval = 15,
+        )
+        for (type in ConfigType.entries) {
+            val item = base.copy(configType = type)
+            val uri = LinkParser.toUri(item)!!
+            assertFalse(uri.contains("pemicu"), "$type exported pemicu: $uri")
+        }
+    }
+
+    @Test
+    fun `allow_insecure alias is read as insecure`() {
+        val item = LinkParser.parse(
+            "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@a.example:443" +
+                "?encryption=none&security=tls&allow_insecure=1&type=tcp#AI"
+        )!!
+        assertTrue(item.insecure)
     }
 }

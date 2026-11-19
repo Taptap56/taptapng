@@ -13,12 +13,12 @@ import java.net.URI
  *
  * Supported: vmess:// (base64-JSON + std query form), vless://,
  * trojan://, ss:// (SIP002 + legacy), ssh:// (with the DNSTT /
- * methods / pemicu query parameters).
+ * methods query parameters).
  *
  * TaptapX extensions carried in the query string (round-tripped by
  * [toUri]): dnstt_ns / dnstt_pubkey / dnstt_resolver /
- * dnstt_record_type, onering via sni=onering:<real>:<bug>,
- * pemicu_domain / pemicu_port / pemicu_interval.
+ * dnstt_record_type, onering via sni=onering:<real>:<bug>.
+ * Pemicu is NOT carried in links (v2rayNG has no pemicu_* keys).
  */
 object LinkParser {
 
@@ -78,7 +78,10 @@ object LinkParser {
         item.port = if (uri.port > 0) uri.port else 443
         item.remarks = percentDecode(uri.rawFragment ?: "").ifEmpty { "none" }
         applyCommonQuery(item, q)
-        item.security = q["security"] ?: "auto"
+        // std-form "security" is the stream security (tls/reality/none);
+        // the VMess cipher only comes from a cipher value.
+        val cipher = q["security"]
+        item.security = if (cipher != null && cipher in VMESS_CIPHERS) cipher else "auto"
         return item
     }
 
@@ -99,13 +102,44 @@ object LinkParser {
         item.network = net.ifBlank { "tcp" }
         item.host = obj.str("host") ?: ""
         item.path = obj.str("path") ?: ""
+        item.headerType = obj.str("type")?.ifBlank { "none" } ?: "none"
+        // v2rayNG JSON mapping: KCP carries the seed in "path",
+        // gRPC carries mode in "type", serviceName in "path",
+        // authority in "host".
+        if (item.network == "kcp") {
+            item.seed = item.path
+        }
+        if (item.network == "grpc") {
+            item.mode = item.headerType
+            item.serviceName = item.path
+            item.authority = item.host
+        }
         when (obj.str("tls")) {
-            "tls", "reality" -> item.tls = true
+            "tls" -> {
+                item.tls = true
+                item.streamSecurity = "tls"
+            }
+            "reality" -> {
+                item.tls = true
+                item.streamSecurity = "reality"
+            }
+            else -> {
+                item.tls = false
+                item.streamSecurity = ""
+            }
         }
         val sni = obj.str("sni") ?: ""
         applyOneringSni(item, sni)
         item.fingerprint = obj.str("fp") ?: ""
         item.alpn = obj.str("alpn") ?: ""
+        item.finalMask = obj.str("fm") ?: ""
+        item.verifyPeerCertByName = obj.str("vcn") ?: ""
+        item.pinnedCA256 = obj.str("pcs") ?: ""
+        item.echConfigList = obj.str("ech") ?: ""
+        item.realityPublicKey = obj.str("pbk") ?: ""
+        item.realityShortId = obj.str("sid") ?: ""
+        item.realitySpiderX = obj.str("spx") ?: ""
+        item.realityMldsa65Verify = obj.str("pqv") ?: ""
         applyExtensionJson(item, obj)
         return item
     }
@@ -121,13 +155,8 @@ object LinkParser {
         if (item.dnsttNS.isNotBlank() && item.dnsttPubkey.isNotBlank()) {
             item.dnsttEnabled = true
         }
-        val pemicuDomain = obj.str("pemicu_domain") ?: ""
-        if (pemicuDomain.isNotBlank()) {
-            item.pemicuEnabled = true
-            item.pemicuDomain = pemicuDomain
-            item.pemicuPort = obj.str("pemicu_port")?.toIntOrNull()
-            item.pemicuInterval = obj.str("pemicu_interval")?.toIntOrNull()
-        }
+        // Pemicu deliberately NOT carried in links: v2rayNG has no
+        // pemicu_* keys, so a shared link must never contain them.
     }
 
     // ---- VLESS / Trojan ----
@@ -141,7 +170,8 @@ object LinkParser {
         item.address = uri.host ?: return null
         item.port = if (uri.port > 0) uri.port else 443
         item.remarks = percentDecode(uri.rawFragment ?: "").ifEmpty { "none" }
-        item.method = q["encryption"] ?: "none"
+        item.encryption = q["encryption"] ?: "none"
+        item.method = item.encryption // legacy mirror (older builds read method)
         applyCommonQuery(item, q)
         return item
     }
@@ -157,9 +187,14 @@ object LinkParser {
         if (uri.rawQuery.isNullOrEmpty()) {
             item.network = "tcp"
             item.tls = true
+            item.streamSecurity = "tls"
         } else {
             applyCommonQuery(item, q)
-            item.tls = q["security"] != "none"
+            // Trojan defaults to TLS when the link carries no security.
+            if (!q.containsKey("security")) {
+                item.tls = true
+                item.streamSecurity = "tls"
+            }
         }
         return item
     }
@@ -250,6 +285,7 @@ object LinkParser {
         applyExtensionQuery(item, q)
         if (item.dnsttEnabled) item.sshUseSlowdns = true
         item.privateKey = q["private_key"] ?: ""
+        item.sshSniVersion = q["sni_version"] ?: "default"
         item.sshPayload = q["payload"] ?: ""
         item.sshRemoteProxy = q["remote_proxy"] ?: ""
         item.sshSni = q["sni"] ?: ""
@@ -278,15 +314,33 @@ object LinkParser {
         item.network = q["type"] ?: "tcp"
         item.host = q["host"] ?: ""
         item.path = q["path"] ?: ""
+        // Stream security: only "tls"/"reality" survive, anything else
+        // (incl. "none" or a missing key) means no stream security.
         val security = q["security"]
-        item.tls = security == "tls" || security == "reality"
-        if (security != null && security != "tls" && security != "reality") {
-            item.tls = false
-        }
-        item.insecure = q["insecure"] == "1" || q["allowInsecure"] == "1"
+        item.streamSecurity = if (security == "tls" || security == "reality") security else ""
+        item.tls = item.streamSecurity.isNotBlank()
+        item.insecure = q["insecure"] == "1" || q["allowInsecure"] == "1" ||
+            q["allow_insecure"] == "1"
         applyOneringSni(item, q["sni"] ?: "")
         item.fingerprint = q["fp"] ?: ""
         item.alpn = q["alpn"] ?: ""
+        item.echConfigList = q["ech"] ?: ""
+        item.verifyPeerCertByName = q["vcn"] ?: ""
+        item.pinnedCA256 = q["pcs"] ?: ""
+        item.realityPublicKey = q["pbk"] ?: ""
+        item.realityShortId = q["sid"] ?: ""
+        item.realitySpiderX = q["spx"] ?: ""
+        item.realityMldsa65Verify = q["pqv"] ?: ""
+        item.finalMask = q["fm"] ?: ""
+        item.flow = q["flow"] ?: ""
+        item.headerType = q["headerType"]?.ifBlank { "none" } ?: "none"
+        item.mode = q["mode"] ?: ""
+        item.xhttpExtra = q["extra"] ?: ""
+        item.seed = q["seed"] ?: ""
+        item.authority = q["authority"] ?: ""
+        item.serviceName = q["serviceName"] ?: ""
+        item.kcpMtu = q["mtu"] ?: ""
+        item.kcpTti = q["tti"] ?: ""
         applyExtensionQuery(item, q)
     }
 
@@ -302,13 +356,8 @@ object LinkParser {
         if (item.dnsttNS.isNotBlank() && item.dnsttPubkey.isNotBlank()) {
             item.dnsttEnabled = true
         }
-        val pemicuDomain = q["pemicu_domain"] ?: ""
-        if (pemicuDomain.isNotBlank()) {
-            item.pemicuEnabled = true
-            item.pemicuDomain = pemicuDomain
-            item.pemicuPort = q["pemicu_port"]?.toIntOrNull()
-            item.pemicuInterval = q["pemicu_interval"]?.toIntOrNull()
-        }
+        // Pemicu deliberately NOT carried in links: v2rayNG has no
+        // pemicu_* keys, so a shared link must never contain them.
     }
 
     /** sni=onering:<real>:<bug> splits into real SNI + Onering on. */
@@ -341,10 +390,14 @@ object LinkParser {
         ConfigType.SSH -> toSshUri(item)
     }
 
+    /** VMess cipher values (the editor's Security dropdown). */
+    private val VMESS_CIPHERS = setOf("chacha20-poly1305", "aes-128-gcm", "auto", "none", "zero")
+
     private fun commonQuery(item: ProfileItem): LinkedHashMap<String, String> {
         val q = LinkedHashMap<String, String>()
         if (item.network.isNotBlank()) q["type"] = item.network
-        if (item.tls) q["security"] = "tls"
+        // Stream security is always written; empty means "none".
+        q["security"] = item.streamSecurity.ifBlank { "none" }
         if (item.sni.isNotBlank()) {
             q["sni"] = if (item.oneringEnabled && item.oneringBug.isNotBlank()) {
                 "onering:${item.sni}:${item.oneringBug}"
@@ -354,17 +407,38 @@ object LinkParser {
         }
         if (item.fingerprint.isNotBlank()) q["fp"] = item.fingerprint
         if (item.alpn.isNotBlank()) q["alpn"] = item.alpn
+        if (item.echConfigList.isNotBlank()) q["ech"] = item.echConfigList
+        if (item.verifyPeerCertByName.isNotBlank()) q["vcn"] = item.verifyPeerCertByName
+        if (item.pinnedCA256.isNotBlank()) q["pcs"] = item.pinnedCA256
+        if (item.realityPublicKey.isNotBlank()) q["pbk"] = item.realityPublicKey
+        if (item.realityShortId.isNotBlank()) q["sid"] = item.realityShortId
+        if (item.realitySpiderX.isNotBlank()) q["spx"] = item.realitySpiderX
+        if (item.realityMldsa65Verify.isNotBlank()) q["pqv"] = item.realityMldsa65Verify
         if (item.host.isNotBlank()) q["host"] = item.host
         if (item.path.isNotBlank()) q["path"] = item.path
-        if (item.insecure) q["allowInsecure"] = "1"
-        if (item.dnsttNS.isNotBlank()) q["dnstt_ns"] = item.dnsttNS
-        if (item.dnsttPubkey.isNotBlank()) q["dnstt_pubkey"] = item.dnsttPubkey
-        if (item.dnsttResolver.isNotBlank()) q["dnstt_resolver"] = item.dnsttResolver
-        if (item.dnsttNS.isNotBlank()) q["dnstt_record_type"] = item.dnsttRecordType
-        if (item.pemicuEnabled && item.pemicuDomain.isNotBlank()) {
-            q["pemicu_domain"] = item.pemicuDomain
-            item.pemicuPort?.let { q["pemicu_port"] = it.toString() }
-            item.pemicuInterval?.let { q["pemicu_interval"] = it.toString() }
+        if (item.network == "grpc") {
+            if (item.mode.isNotBlank()) q["mode"] = item.mode
+            if (item.authority.isNotBlank()) q["authority"] = item.authority
+            if (item.serviceName.isNotBlank()) q["serviceName"] = item.serviceName
+        }
+        if (item.network == "xhttp" && item.xhttpExtra.isNotBlank()) q["extra"] = item.xhttpExtra
+        if (item.network == "kcp") {
+            if (item.seed.isNotBlank()) q["seed"] = item.seed
+            if (item.kcpMtu.isNotBlank()) q["mtu"] = item.kcpMtu
+            if (item.kcpTti.isNotBlank()) q["tti"] = item.kcpTti
+        }
+        q["headerType"] = item.headerType.ifBlank { "none" }
+        if (item.finalMask.isNotBlank()) q["fm"] = item.finalMask
+        if (item.streamSecurity == "tls") {
+            // Both keys, same value (v2rayNG reads either).
+            q["insecure"] = if (item.insecure) "1" else "0"
+            q["allowInsecure"] = if (item.insecure) "1" else "0"
+        }
+        if (item.dnsttEnabled) {
+            if (item.dnsttNS.isNotBlank()) q["dnstt_ns"] = item.dnsttNS
+            if (item.dnsttPubkey.isNotBlank()) q["dnstt_pubkey"] = item.dnsttPubkey
+            if (item.dnsttResolver.isNotBlank()) q["dnstt_resolver"] = item.dnsttResolver
+            q["dnstt_record_type"] = item.dnsttRecordType.ifBlank { "null" }
         }
         return q
     }
@@ -373,6 +447,23 @@ object LinkParser {
         q.entries.joinToString("&") { "${it.key}=${encodeURIComponent(it.value)}" }
 
     private fun toVmessUri(item: ProfileItem): String {
+        // v2rayNG JSON mapping (inverse of parseVmessJson): KCP carries
+        // the seed in "path", gRPC carries mode in "type", serviceName
+        // in "path", authority in "host". aid is always "0" (alterId is
+        // deprecated in v2rayNG exports). New keys are only written when
+        // set, so an empty field stays out of the link entirely.
+        val net = item.network.ifBlank { "tcp" }
+        val jsonType = when (net) {
+            "grpc" -> item.mode.ifBlank { "none" }
+            "tcp", "kcp" -> item.headerType.ifBlank { "none" }
+            else -> "none"
+        }
+        val jsonHost = if (net == "grpc") item.authority.ifBlank { item.host } else item.host
+        val jsonPath = when (net) {
+            "kcp" -> item.seed
+            "grpc" -> item.serviceName.ifBlank { item.path }
+            else -> item.path
+        }
         val json = buildString {
             append("{")
             append("\"v\":\"2\",")
@@ -380,13 +471,13 @@ object LinkParser {
             append("\"add\":${jsonStr(item.address)},")
             append("\"port\":${jsonStr(item.port.toString())},")
             append("\"id\":${jsonStr(item.uuid)},")
-            append("\"aid\":\"${item.alterId}\",")
+            append("\"aid\":\"0\",")
             append("\"scy\":${jsonStr(item.security.ifBlank { "auto" })},")
-            append("\"net\":${jsonStr(item.network.ifBlank { "tcp" })},")
-            append("\"type\":\"none\",")
-            append("\"host\":${jsonStr(item.host)},")
-            append("\"path\":${jsonStr(item.path)},")
-            append("\"tls\":${jsonStr(if (item.tls) "tls" else "")},")
+            append("\"net\":${jsonStr(net)},")
+            append("\"type\":${jsonStr(jsonType)},")
+            append("\"host\":${jsonStr(jsonHost)},")
+            append("\"path\":${jsonStr(jsonPath)},")
+            append("\"tls\":${jsonStr(item.streamSecurity)},")
             val sni = if (item.oneringEnabled && item.oneringBug.isNotBlank()) {
                 "onering:${item.sni}:${item.oneringBug}"
             } else {
@@ -395,14 +486,19 @@ object LinkParser {
             append("\"sni\":${jsonStr(sni)},")
             append("\"fp\":${jsonStr(item.fingerprint)},")
             append("\"alpn\":${jsonStr(item.alpn)}")
-            if (item.dnsttNS.isNotBlank()) append(",\"dnstt_ns\":${jsonStr(item.dnsttNS)}")
-            if (item.dnsttPubkey.isNotBlank()) append(",\"dnstt_pubkey\":${jsonStr(item.dnsttPubkey)}")
-            if (item.dnsttResolver.isNotBlank()) append(",\"dnstt_resolver\":${jsonStr(item.dnsttResolver)}")
-            if (item.dnsttNS.isNotBlank()) append(",\"dnstt_record_type\":${jsonStr(item.dnsttRecordType)}")
-            if (item.pemicuEnabled && item.pemicuDomain.isNotBlank()) {
-                append(",\"pemicu_domain\":${jsonStr(item.pemicuDomain)}")
-                item.pemicuPort?.let { append(",\"pemicu_port\":${jsonStr(it.toString())}") }
-                item.pemicuInterval?.let { append(",\"pemicu_interval\":${jsonStr(it.toString())}") }
+            if (item.finalMask.isNotBlank()) append(",\"fm\":${jsonStr(item.finalMask)}")
+            if (item.verifyPeerCertByName.isNotBlank()) append(",\"vcn\":${jsonStr(item.verifyPeerCertByName)}")
+            if (item.pinnedCA256.isNotBlank()) append(",\"pcs\":${jsonStr(item.pinnedCA256)}")
+            if (item.echConfigList.isNotBlank()) append(",\"ech\":${jsonStr(item.echConfigList)}")
+            if (item.realityPublicKey.isNotBlank()) append(",\"pbk\":${jsonStr(item.realityPublicKey)}")
+            if (item.realityShortId.isNotBlank()) append(",\"sid\":${jsonStr(item.realityShortId)}")
+            if (item.realitySpiderX.isNotBlank()) append(",\"spx\":${jsonStr(item.realitySpiderX)}")
+            if (item.realityMldsa65Verify.isNotBlank()) append(",\"pqv\":${jsonStr(item.realityMldsa65Verify)}")
+            if (item.dnsttEnabled) {
+                if (item.dnsttNS.isNotBlank()) append(",\"dnstt_ns\":${jsonStr(item.dnsttNS)}")
+                if (item.dnsttPubkey.isNotBlank()) append(",\"dnstt_pubkey\":${jsonStr(item.dnsttPubkey)}")
+                if (item.dnsttResolver.isNotBlank()) append(",\"dnstt_resolver\":${jsonStr(item.dnsttResolver)}")
+                append(",\"dnstt_record_type\":${jsonStr(item.dnsttRecordType.ifBlank { "null" })}")
             }
             append("}")
         }
@@ -411,7 +507,8 @@ object LinkParser {
 
     private fun toVlessUri(item: ProfileItem): String {
         val q = commonQuery(item)
-        q["encryption"] = item.method.ifBlank { "none" }
+        q["encryption"] = item.encryption.ifBlank { item.method.ifBlank { "none" } }
+        if (item.flow.isNotBlank()) q["flow"] = item.flow
         return "vless://${encodeURIComponent(item.uuid)}@${item.address}:${item.port}" +
             "?${encodeQuery(q)}#${encodeURIComponent(item.remarks)}"
     }
@@ -426,21 +523,10 @@ object LinkParser {
         val userInfo = Base64Util.encodeUrlSafe(
             "${item.method}:${item.password}".toByteArray(Charsets.UTF_8)
         )
-        // SIP002 query form (/?key=value): v2rayNG ignores unknown
-        // query params, so TaptapX extensions survive our own round
-        // trip and are dropped (harmlessly) on the v2rayNG side.
-        val ext = LinkedHashMap<String, String>()
-        if (item.dnsttNS.isNotBlank()) ext["dnstt_ns"] = item.dnsttNS
-        if (item.dnsttPubkey.isNotBlank()) ext["dnstt_pubkey"] = item.dnsttPubkey
-        if (item.dnsttResolver.isNotBlank()) ext["dnstt_resolver"] = item.dnsttResolver
-        if (item.dnsttNS.isNotBlank()) ext["dnstt_record_type"] = item.dnsttRecordType
-        if (item.pemicuEnabled && item.pemicuDomain.isNotBlank()) {
-            ext["pemicu_domain"] = item.pemicuDomain
-            item.pemicuPort?.let { ext["pemicu_port"] = it.toString() }
-            item.pemicuInterval?.let { ext["pemicu_interval"] = it.toString() }
-        }
-        val query = if (ext.isEmpty()) "" else "/?${encodeQuery(ext)}"
-        return "ss://$userInfo@${item.address}:${item.port}$query#${encodeURIComponent(item.remarks)}"
+        // No query string: v2rayNG does not read any SS query params,
+        // so extensions here would be silently dropped on import
+        // (a copy trap) — the plain SIP002 form is the whole link.
+        return "ss://$userInfo@${item.address}:${item.port}#${encodeURIComponent(item.remarks)}"
     }
 
     private fun toSshUri(item: ProfileItem): String {
@@ -454,17 +540,15 @@ object LinkParser {
         if (item.sshPayload.isNotBlank()) q["payload"] = item.sshPayload
         if (item.sshRemoteProxy.isNotBlank()) q["remote_proxy"] = item.sshRemoteProxy
         if (item.sshSni.isNotBlank()) q["sni"] = item.sshSni
+        if (item.sshSniVersion.isNotBlank() && item.sshSniVersion != "default") {
+            q["sni_version"] = item.sshSniVersion
+        }
         if (item.sshInsecure) q["insecure"] = "1"
         if (item.privateKey.isNotBlank()) q["private_key"] = item.privateKey
         if (item.dnsttNS.isNotBlank()) q["dnstt_ns"] = item.dnsttNS
         if (item.dnsttPubkey.isNotBlank()) q["dnstt_pubkey"] = item.dnsttPubkey
         if (item.dnsttResolver.isNotBlank()) q["dnstt_resolver"] = item.dnsttResolver
         if (item.dnsttNS.isNotBlank()) q["dnstt_record_type"] = item.dnsttRecordType
-        if (item.pemicuEnabled && item.pemicuDomain.isNotBlank()) {
-            q["pemicu_domain"] = item.pemicuDomain
-            item.pemicuPort?.let { q["pemicu_port"] = it.toString() }
-            item.pemicuInterval?.let { q["pemicu_interval"] = it.toString() }
-        }
         val userInfo = buildString {
             append(encodeURIComponent(item.username))
             if (item.password.isNotEmpty()) append(":${encodeURIComponent(item.password)}")

@@ -50,6 +50,27 @@ class TunForwarderDialFailureTest {
     }
 
     @Test
+    fun `dial failure reason keeps stage tags on timeouts`() {
+        // v1.0.5: Transport/VmessClient tag the stage in the message
+        // ("TCP gagal: ...") — the status must show WHERE the dial
+        // died instead of a bare "timeout".
+        assertEquals(
+            "TCP gagal: Read timed out",
+            TunForwarder.dialFailureReason(SocketTimeoutException("TCP gagal: Read timed out")),
+        )
+        assertEquals(
+            "VMess gagal: Read timed out",
+            TunForwarder.dialFailureReason(SocketTimeoutException("VMess gagal: Read timed out")),
+        )
+        // A raw timeout without our tag keeps the plain word.
+        assertEquals(
+            "timeout",
+            TunForwarder.dialFailureReason(SocketTimeoutException("Read timed out")),
+        )
+        assertEquals("timeout", TunForwarder.dialFailureReason(SocketTimeoutException()))
+    }
+
+    @Test
     fun `timed out dial reports Konek gagal instead of staying silent`() {
         val statuses = Collections.synchronizedList(mutableListOf<String>())
         val tunInRead = PipedInputStream()

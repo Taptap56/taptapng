@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings titles + subtitles for the collapsible Settings screen
+     (v1.0.5). Kept in this file so settings_strings.xml owns the whole
+     screen; strings.xml is owned by another agent. Titles mirror
+     v2rayNG; items M2 cannot apply carry the "not supported" note. -->
+<resources>
+    <string name="set_section_ui">UI settings</string>
+    <string name="set_section_vpn">VPN settings</string>
+    <string name="set_section_core">Core settings</string>
+    <string name="set_section_mux">Mux settings</string>
+    <string name="set_section_fragment">Fragment settings</string>
+    <string name="set_section_observatory">Observatory settings</string>
+    <string name="set_section_advanced">Advanced settings</string>
+    <string name="set_section_mode">Mode settings</string>
+
+    <string name="set_not_supported_m2">Belum didukung di M2</string>
+    <string name="set_on">On</string>
+    <string name="set_off">Off</string>
+    <string name="set_not_set">Not set</string>
+
+    <!-- UI -->
+    <string name="set_speed_title">Enable speed display</string>
+    <string name="set_speed_sub">Show current speeds in the notification</string>
+    <string name="set_confirm_remove_title">Delete config confirmation</string>
+    <string name="set_confirm_remove_sub">Ask for confirmation before deleting a server</string>
+    <string name="set_double_column_title">Use two-column layout</string>
+    <string name="set_double_column_sub">Show the server list in two columns</string>
+    <string name="set_group_all_title">Show an All group tab</string>
+    <string name="set_group_all_sub">Show an \"All\" tab above the group tabs</string>
+    <string name="set_dynamic_color_title">Enable dynamic color</string>
+    <string name="set_dynamic_color_sub">Only works on Android 12+</string>
+    <string name="set_language_title">Language</string>
+    <string name="set_language_sub">App language</string>
+    <string name="set_ui_mode_title">UI mode settings</string>
+    <string name="set_ui_mode_sub">Light, dark, or follow system</string>
+
+    <!-- VPN -->
+    <string name="set_ipv6_title">Enable IPv6</string>
+    <string name="set_ipv6_sub">Allow IPv6 traffic through the VPN</string>
+    <string name="set_prefer_ipv6_title">Prefer IPv6</string>
+    <string name="set_prefer_ipv6_sub">Prefer IPv6 when both are available</string>
+    <string name="set_local_dns_title">Enable local DNS</string>
+    <string name="set_local_dns_sub">Resolve DNS locally instead of through the VPN DNS</string>
+    <string name="set_fake_dns_title">Enable FakeDNS</string>
+    <string name="set_fake_dns_sub">Only available when local DNS is on</string>
+    <string name="set_vpn_dns_title">VPN DNS</string>
+    <string name="set_vpn_dns_sub">DNS server used inside the VPN (only when local DNS is off)</string>
+    <string name="set_append_http_proxy_title">Add HTTP proxy to VPN</string>
+    <string name="set_append_http_proxy_sub">Also route the HTTP proxy through the VPN</string>
+    <string name="set_bypass_lan_title">Bypass LAN in VPN mode</string>
+    <string name="set_bypass_lan_sub">Skip the VPN for LAN addresses</string>
+    <string name="set_interface_address_title">VPN interface address</string>
+    <string name="set_interface_address_sub">0 = 10.10.14.x</string>
+    <string name="set_mtu_title">VPN MTU</string>
+    <string name="set_mtu_sub">MTU of the TUN interface</string>
+    <string name="set_hev_tun_title">Use Hev TUN</string>
+    <string name="set_hev_tun_sub">Use the Hev TUN engine for the VPN interface</string>
+    <string name="set_hev_log_title">Hev TUN log level</string>
+    <string name="set_hev_log_sub">Log level of the Hev TUN engine</string>
+    <string name="set_hev_timeout_title">Hev TUN read/write timeout</string>
+    <string name="set_hev_timeout_sub">Read timeout, write timeout in seconds</string>
+
+    <!-- Core -->
+    <string name="set_sniffing_title">Enable sniffing</string>
+    <string name="set_sniffing_sub">Sniff traffic to route by domain</string>
+    <string name="set_route_only_title">Enable routeOnly</string>
+    <string name="set_route_only_sub">Only route traffic that matches a rule</string>
+    <string name="set_local_proxy_title">Enable local proxy</string>
+    <string name="set_local_proxy_sub">Serve a local SOCKS proxy (forced on while Hev TUN is on)</string>
+    <string name="set_proxy_sharing_title">Allow connections from the LAN</string>
+    <string name="set_proxy_sharing_sub">Let other devices on the LAN use the local proxy</string>
+    <string name="set_dynamic_port_title">Enable dynamic local proxy port</string>
+    <string name="set_dynamic_port_sub">Pick a random local proxy port on each start</string>
+    <string name="set_socks_port_title">Local proxy port</string>
+    <string name="set_socks_port_sub">Port of the local SOCKS proxy</string>
+    <string name="set_socks_user_title">Local proxy username</string>
+    <string name="set_socks_user_sub">Username for the local SOCKS proxy</string>
+    <string name="set_socks_pass_title">Local proxy password</string>
+    <string name="set_socks_pass_sub">Password for the local SOCKS proxy</string>
+    <string name="set_socks_udp_title">SOCKS5 UDP</string>
+    <string name="set_socks_udp_sub">Allow UDP through the local SOCKS proxy</string>
+    <string name="set_remote_dns_title">Remote DNS</string>
+    <string name="set_remote_dns_sub">DNS used for proxied domains</string>
+    <string name="set_direct_dns_title">Direct DNS</string>
+    <string name="set_direct_dns_sub">DNS used for direct domains</string>
+    <string name="set_dns_hosts_title">DNS host mappings</string>
+    <string name="set_dns_hosts_sub">Custom domain to IP mappings, one per line</string>
+    <string name="set_log_level_title">Log level</string>
+    <string name="set_log_level_sub">Core log verbosity</string>
+    <string name="set_resolve_title">Outbound domain resolution</string>
+    <string name="set_resolve_sub">How outbound domains are resolved (0 = IP if available, 1 = resolve, 2 = resolve if IP not available)</string>
+
+    <!-- Mux -->
+    <string name="set_mux_title">Enable Mux</string>
+    <string name="set_mux_sub">Multiplex several connections over one</string>
+    <string name="set_mux_conn_title">TCP connections</string>
+    <string name="set_mux_conn_sub">Max multiplexed TCP connections</string>
+    <string name="set_mux_xudp_title">XUDP connections</string>
+    <string name="set_mux_xudp_sub">Max multiplexed UDP connections</string>
+    <string name="set_mux_quic_title">Handling of QUIC in mux tunnel</string>
+    <string name="set_mux_quic_sub">What to do with QUIC inside the mux tunnel</string>
+
+    <!-- Fragment -->
+    <string name="set_fragment_title">Enable Fragment</string>
+    <string name="set_fragment_sub">Split packets to evade detection</string>
+    <string name="set_fragment_packets_title">Fragment packets</string>
+    <string name="set_fragment_packets_sub">Which packets to fragment (e.g. tlshello)</string>
+    <string name="set_fragment_length_title">Fragment length</string>
+    <string name="set_fragment_length_sub">Fragment size range, e.g. 50-100</string>
+    <string name="set_fragment_interval_title">Fragment interval</string>
+    <string name="set_fragment_interval_sub">Delay between fragments in ms, e.g. 10-20</string>
+    <string name="set_fragment_split_title">Fragment max split</string>
+    <string name="set_fragment_split_sub">Maximum number of fragments per packet</string>
+
+    <!-- Observatory -->
+    <string name="set_obs_ping_title">leastPing interval</string>
+    <string name="set_obs_ping_sub">How often the fastest outbound is probed</string>
+    <string name="set_obs_load_title">leastLoad interval</string>
+    <string name="set_obs_load_sub">How often outbound load is probed</string>
+    <string name="set_obs_method_title">leastLoad HTTP method</string>
+    <string name="set_obs_method_sub">HTTP method used for load probing</string>
+    <string name="set_obs_sampling_title">leastLoad sampling</string>
+    <string name="set_obs_sampling_sub">Number of samples per load probe</string>
+    <string name="set_obs_timeout_title">leastLoad timeout</string>
+    <string name="set_obs_timeout_sub">Timeout per load probe</string>
+
+    <!-- Advanced -->
+    <string name="set_boot_title">Connect after device boot</string>
+    <string name="set_boot_sub">Reconnect automatically when the device boots</string>
+    <string name="set_sys_vpn_title">System VPN settings</string>
+    <string name="set_sys_vpn_sub">Open the system VPN settings</string>
+    <string name="set_delay_url_title">Real delay test URL</string>
+    <string name="set_delay_url_sub">URL fetched for the real-delay test</string>
+    <string name="set_concurrency_title">Concurrent real-delay tests</string>
+    <string name="set_concurrency_sub">How many delay tests run at the same time</string>
+    <string name="set_ip_api_title">Current connection info test URL</string>
+    <string name="set_ip_api_sub">URL used to show the current connection info</string>
+
+    <!-- Mode -->
+    <string name="set_mode_title">Mode</string>
+    <string name="set_mode_sub">How traffic is captured (VPN mode only in M2)</string>
+    <string name="set_root_mode_title">Enable root mode</string>
+    <string name="set_root_mode_sub">Run without the VPN service, using root instead</string>
+    <string name="set_lan_sharing_title">Share VPN with LAN / tethered devices</string>
+    <string name="set_lan_sharing_sub">Let tethered devices use this VPN</string>
+</resources>

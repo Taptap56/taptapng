@@ -66,9 +66,20 @@ class TunForwarder(
          * Short human-readable reason for a dial failure, for the
          * status bar. Timeouts (the closed-window case) get a plain
          * "timeout" instead of a long exception message.
+         * v1.0.5: when Transport/VmessClient tagged the stage in the
+         * message ("TCP gagal: ..."), the tag is shown instead — it
+         * says WHERE the dial died. A raw timeout without our tag
+         * keeps the plain word.
          */
+        private val STAGE_TAGS = listOf(
+            "DNS gagal", "TCP gagal", "TLS gagal", "WS gagal", "VMess gagal",
+        )
+
         fun dialFailureReason(e: Exception): String = when (e) {
-            is java.net.SocketTimeoutException -> "timeout"
+            is java.net.SocketTimeoutException -> {
+                val msg = e.message?.take(40)?.ifBlank { null }
+                if (msg != null && STAGE_TAGS.any { msg.startsWith(it) }) msg else "timeout"
+            }
             is javax.net.ssl.SSLException -> "TLS gagal"
             is java.net.ConnectException -> "TCP gagal"
             else -> e.message?.take(40)?.ifBlank { null } ?: "gagal"
@@ -348,7 +359,13 @@ class TunForwarder(
             try {
                 val sock = DatagramSocket()
                 try {
-                    protectUdp(sock)
+                    // Bila protect GAGAL, query JANGAN dikirim: tanpa
+                    // protect query masuk lagi ke TUN, forwarder
+                    // melihatnya sebagai query baru, dan begitu
+                    // seterusnya — loop thread tak berujung. Sebelumnya
+                    // return value protectUdp diabaikan. Drop diam-diam;
+                    // aplikasi akan retry sendiri.
+                    if (!protectUdp(sock)) return@thread
                     sock.soTimeout = 5000
                     val server = InetAddress.getByName(dnsServer)
                     sock.send(DatagramPacket(query, query.size, server, 53))

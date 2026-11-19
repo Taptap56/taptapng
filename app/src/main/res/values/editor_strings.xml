@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Strings for the v2rayNG-faithful server editor (v1.0.5).
+     Kept separate from strings.xml so the editor's labels/defaults
+     can evolve without touching the shared strings. -->
+<resources>
+    <string name="editor_section_network">Network</string>
+    <string name="editor_section_stream_security">Stream Security</string>
+    <string name="editor_network">Network</string>
+    <string name="editor_stream_security">TLS</string>
+    <string name="editor_vmess_security">Security</string>
+    <string name="editor_flow">Flow</string>
+    <string name="editor_encryption">Encryption</string>
+    <string name="editor_ss_security">Security</string>
+    <string name="editor_header_type">Head type</string>
+    <string name="editor_grpc_mode">gRPC mode</string>
+    <string name="editor_xhttp_mode">XHTTP Mode</string>
+    <string name="editor_browser_dialer">Enable Browser Dialer</string>
+    <string name="editor_host_http">http host</string>
+    <string name="editor_host_ws">ws host</string>
+    <string name="editor_host_grpc">gRPC Authority</string>
+    <string name="editor_host_sni">Host (SNI) (optional)</string>
+    <string name="editor_path">Path</string>
+    <string name="editor_path_ws">ws path</string>
+    <string name="editor_path_httpupgrade">httpupgrade path</string>
+    <string name="editor_path_xhttp">xhttp path</string>
+    <string name="editor_path_h2">h2 path</string>
+    <string name="editor_path_grpc">gRPC serviceName</string>
+    <string name="editor_xhttp_extra">XHTTP Extra raw JSON, format: { XHTTPObject }</string>
+    <string name="editor_final_mask">finalMask raw JSON, format: { FinalMaskObject }</string>
+    <string name="editor_kcp_seed">kcp seed</string>
+    <string name="editor_kcp_mtu">mKCP MTU (optional, default 1350)</string>
+    <string name="editor_kcp_tti">mKCP TTI (optional, default 50 ms)</string>
+    <string name="editor_ech">echConfigList</string>
+    <string name="editor_vcn">Verify peer certificate by name</string>
+    <string name="editor_pcs">Certificate fingerprint (SHA-256)</string>
+    <string name="editor_fetch_fingerprint">Fetch certificate fingerprint</string>
+    <string name="editor_reality_pbk">PublicKey</string>
+    <string name="editor_reality_sid">ShortId</string>
+    <string name="editor_reality_spx">SpiderX</string>
+    <string name="editor_reality_pqv">mldsa65Verify</string>
+    <string name="editor_dnstt_type">DNSTT type</string>
+    <string name="editor_ssh_sni_version">SNI version</string>
+
+    <string name="hint_xhttp_extra">{ \"key\": \"value\" }</string>
+    <string name="hint_final_mask">{ \"key\": \"value\" }</string>
+    <string name="hint_dnstt_resolver">1.1.1.1:53</string>
+    <string name="hint_ssh_payload">Placeholders: [host] and [port]</string>
+
+    <string name="toast_remarks_required">Remarks is required</string>
+    <string name="toast_uuid_required">UUID is required</string>
+    <string name="toast_password_required">Password is required</string>
+    <string name="toast_tls_required">TLS security is required for Trojan</string>
+    <string name="toast_invalid_json">Invalid JSON in %1$s</string>
+    <string name="toast_ssh_auth_required">Password or private key is required</string>
+    <string name="toast_fetch_fp_ok">Certificate fingerprint fetched</string>
+    <string name="toast_fetch_fp_failed">Failed to fetch certificate fingerprint</string>
+</resources>

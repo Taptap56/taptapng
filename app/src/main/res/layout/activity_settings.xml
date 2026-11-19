@@ -15,8 +15,10 @@
         app:navigationIcon="@drawable/ic_arrow_back_24dp"
         app:title="@string/settings_title" />
 
-    <FrameLayout
-        android:id="@+id/settings_container"
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/settings_list"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:clipToPadding="false"
+        android:paddingBottom="16dp" />
 </LinearLayout>

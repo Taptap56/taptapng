@@ -61,4 +61,60 @@ class ServerTesterTest {
             }
         }
     }
+
+    @Test
+    fun `tcp test fails fast on unresolvable host`() {
+        // v1.0.5: host yang tidak bisa di-resolve harus kembali -1
+        // dengan cepat, bukan menggantung di resolver sistem tanpa
+        // timeout (gejala v1.0.4: delay test "Timeout" selamanya).
+        val start = System.nanoTime()
+        assertEquals(-1, ServerTester.testTcp("tidak-ada.invalid", 443, timeoutMs = 500))
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        assertTrue(elapsedMs < 10_000, "testTcp menggantung $elapsedMs ms")
+    }
+
+    @Test
+    fun `real ping overload falls back to TCP connect on localhost`() {
+        // Overload baru: ICMP dulu, bila gagal TCP connect ke port
+        // entry. Di localhost ICMP biasanya menjawab duluan — tes ini
+        // memastikan overload mengembalikan angka, bukan -1.
+        ServerSocket(0).use { server ->
+            val port = server.localPort
+            val ms = ServerTester.testRealPing("127.0.0.1", port)
+            assertTrue(ms >= 0, "expected >= 0 ms, got $ms")
+        }
+    }
+
+    @Test
+    fun `tcpConnectMs succeeds to localhost listener and fails on closed port`() {
+        // Fallback TCP-nya sendiri, diuji langsung: sukses ke listener,
+        // -1 ke port tertutup (ICMP localhost selalu menjawab, jadi
+        // jalur ini tidak bisa diuji lewat overload di localhost).
+        ServerSocket(0).use { server ->
+            val port = server.localPort
+            val ok = ServerTester.tcpConnectMs(
+                java.net.InetAddress.getByName("127.0.0.1"), port, 1000,
+            )
+            assertTrue(ok >= 0, "expected >= 0 ms, got $ok")
+            val closed = ServerTester.tcpConnectMs(
+                java.net.InetAddress.getByName("127.0.0.1"), 1, 1000,
+            )
+            assertEquals(-1, closed)
+        }
+    }
+
+    @Test
+    fun `real ping overload fails for unreachable host`() {
+        // 192.0.2.1 (TEST-NET-1) tidak bisa dijangkau: ICMP gagal dan
+        // TCP connect gagal → -1, tetap cepat.
+        val start = System.nanoTime()
+        assertEquals(-1, ServerTester.testRealPing("192.0.2.1", 443, timeoutMs = 500))
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        assertTrue(elapsedMs < 10_000, "testRealPing menggantung $elapsedMs ms")
+    }
+
+    @Test
+    fun `real ping overload fails for unresolvable host`() {
+        assertEquals(-1, ServerTester.testRealPing("tidak-ada.invalid", 443, timeoutMs = 500))
+    }
 }

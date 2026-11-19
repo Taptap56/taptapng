@@ -75,6 +75,22 @@ class MainToolbarTest {
     }
 
     @Test
+    fun `editor toolbar menu defines delete for existing servers`() {
+        val xml = read("app/src/main/res/menu/editor_toolbar.xml")
+        assertTrue(xml.contains("android:id=\"@+id/action_delete\""), "delete item missing")
+        assertTrue(xml.contains("android:icon=\"@drawable/ic_delete_24dp\""), "delete icon missing")
+        val src = read("app/src/main/java/com/taptap/x/ui/server/ServerEditorActivity.kt")
+        assertTrue(
+            src.contains("menu.findItem(R.id.action_delete)?.isVisible = existing != null"),
+            "delete must only show when editing an existing server",
+        )
+        assertTrue(
+            src.contains("R.id.action_delete"),
+            "editor must handle the delete menu item",
+        )
+    }
+
+    @Test
     fun `toolbar icons are white not black`() {
         // Night toolbar surface is #FF1C1B1F (near-black); a black
         // fill would be invisible on it. Search was already white;

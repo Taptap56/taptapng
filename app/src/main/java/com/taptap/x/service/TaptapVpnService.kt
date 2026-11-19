@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.taptap.x.R
+import com.taptap.x.core.DnsResolver
 import com.taptap.x.core.proto.ProxyClientFactory
 import com.taptap.x.core.proto.Transport
 import com.taptap.x.data.ConfigType
@@ -115,9 +116,14 @@ class TaptapVpnService : VpnService() {
         // DNS server comes from Settings (remote DNS), default 8.8.8.8.
         // Only an IP literal is accepted here — a hostname would need
         // DNS to resolve, which itself goes through the tunnel.
-        val dns = SettingsStore(this).remoteDns.trim()
+        val settings = SettingsStore(this)
+        val dns = settings.remoteDns.trim()
             .takeIf { it.isNotBlank() && isIpLiteral(it) }
             ?: "8.8.8.8"
+        // MTU comes from Settings (v2rayNG default 1500); out-of-range
+        // values fall back to 1500 instead of breaking establish().
+        val mtu = settings.vpnMtu.trim().toIntOrNull()
+            ?.takeIf { it in 576..9000 } ?: 1500
 
         // Dial sockets must bypass our own TUN, or they loop forever.
         Transport.protectSocket = { socket -> protect(socket) }
@@ -125,6 +131,10 @@ class TaptapVpnService : VpnService() {
         // run while the VPN is up dials through the tunnel and
         // reports a false "Timeout" (see ServerTester).
         com.taptap.x.core.ServerTester.protectSocket = { socket -> protect(socket) }
+        // Same for the direct DNS resolver (v1.0.5): without this,
+        // DnsResolver queries go through the TUN and loop in the
+        // forwarder's DNS relay instead of reaching 8.8.8.8.
+        DnsResolver.protectUdp = { socket -> protect(socket) }
 
         val builder = Builder()
             .setSession("TaptapX")
@@ -132,7 +142,7 @@ class TaptapVpnService : VpnService() {
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
             .addDnsServer(dns)
-            .setMtu(1500)
+            .setMtu(mtu)
         val fd = builder.establish()
             ?: throw IllegalStateException("Gagal establish TUN (izin VPN ditolak?)")
         tunFd = fd
@@ -154,6 +164,7 @@ class TaptapVpnService : VpnService() {
             tunFd = null
             Transport.protectSocket = null
             com.taptap.x.core.ServerTester.protectSocket = null
+            DnsResolver.protectUdp = null
             throw e
         }
         startForegroundNotification(item.displayName())
@@ -169,6 +180,7 @@ class TaptapVpnService : VpnService() {
         tunFd = null
         Transport.protectSocket = null
         com.taptap.x.core.ServerTester.protectSocket = null
+        DnsResolver.protectUdp = null
         isRunning = false
         statusMessage = "Stopped"
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
