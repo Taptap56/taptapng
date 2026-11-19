@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- v1.0.4: app:iconTint makes the save checkmark theme-adaptive
+     (the white fill from v1.0.3 would be invisible in light mode). -->
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
         android:id="@+id/action_save"
         android:icon="@drawable/ic_action_done"
         android:title="@string/action_save"
+        app:iconTint="?attr/colorOnSurface"
         app:showAsAction="always" />
 </menu>

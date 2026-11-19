@@ -49,6 +49,33 @@ class TaptapVpnService : VpnService() {
         @Volatile
         var statusMessage: String = ""
             private set
+
+        /**
+         * Profiles that cannot ride the TUN in this version. Start
+         * must fail with a clear status instead of blackholing
+         * traffic or hanging on "Connecting..." forever. v1.0.4:
+         * Onering entries need the M4 engine (the 0xff00 extension
+         * is not built yet) and SlowDNS entries need M3 — in M2 both
+         * would dial as plain VMess and hang on TLS when the window
+         * is closed, with no honest status.
+         */
+        fun requireStartable(item: ProfileItem) {
+            if (item.configType == ConfigType.SSH) {
+                throw IllegalStateException(
+                    "Entry SSH belum bisa lewat TUN di v1.0.2 — pilih entry VMess/VLESS/Trojan/SS",
+                )
+            }
+            if (item.oneringEnabled) {
+                throw IllegalStateException(
+                    "Entry Onering belum didukung di v1.0.4 (butuh M4) — pilih entry VMess biasa",
+                )
+            }
+            if (item.dnsttEnabled) {
+                throw IllegalStateException(
+                    "Entry SlowDNS belum didukung di v1.0.4 (butuh M3) — pilih entry VMess biasa",
+                )
+            }
+        }
     }
 
     private var tunFd: ParcelFileDescriptor? = null
@@ -80,11 +107,7 @@ class TaptapVpnService : VpnService() {
         val item: ProfileItem = store.find(store.selectedGuid ?: "")
             ?: store.profiles.firstOrNull()
             ?: throw IllegalStateException("Tidak ada server — tambah dulu lewat +")
-        if (item.configType == ConfigType.SSH) {
-            throw IllegalStateException(
-                "Entry SSH belum bisa lewat TUN di v1.0.2 — pilih entry VMess/VLESS/Trojan/SS",
-            )
-        }
+        requireStartable(item)
         // Create the client BEFORE touching the TUN so a bad profile
         // fails fast instead of blackholing all traffic.
         val client = ProxyClientFactory.create(item)
@@ -98,6 +121,10 @@ class TaptapVpnService : VpnService() {
 
         // Dial sockets must bypass our own TUN, or they loop forever.
         Transport.protectSocket = { socket -> protect(socket) }
+        // Same for delay-test sockets (v1.0.4): without this, a test
+        // run while the VPN is up dials through the tunnel and
+        // reports a false "Timeout" (see ServerTester).
+        com.taptap.x.core.ServerTester.protectSocket = { socket -> protect(socket) }
 
         val builder = Builder()
             .setSession("TaptapX")
@@ -126,6 +153,7 @@ class TaptapVpnService : VpnService() {
             runCatching { fd.close() }
             tunFd = null
             Transport.protectSocket = null
+            com.taptap.x.core.ServerTester.protectSocket = null
             throw e
         }
         startForegroundNotification(item.displayName())
@@ -140,6 +168,7 @@ class TaptapVpnService : VpnService() {
         runCatching { tunFd?.close() }
         tunFd = null
         Transport.protectSocket = null
+        com.taptap.x.core.ServerTester.protectSocket = null
         isRunning = false
         statusMessage = "Stopped"
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }

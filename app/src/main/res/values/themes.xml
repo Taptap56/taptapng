@@ -14,5 +14,36 @@
         <item name="colorOnSurfaceVariant">@color/onSurfaceVariant</item>
         <item name="android:textColorPrimary">@color/onSurface</item>
         <item name="android:textColorSecondary">@color/onSurfaceVariant</item>
+        <!-- M3 typography (v1.0.4): the layouts + androidx.preference
+             1.2.1 use textAppearanceBodyLarge/Medium/Small and
+             textAppearanceTitleLarge, but Theme.MaterialComponents
+             (M2) does NOT define them — they resolved to resource ID
+             0, so every TextView using them logged "Invalid resource
+             ID 0x00000000" (the Settings flood) and fell back to the
+             small default size. Defining them here (M3-standard sizes
+             + theme-adaptive colors) fixes both. -->
+        <item name="textAppearanceBodyLarge">@style/TextAppearance.TaptapX.BodyLarge</item>
+        <item name="textAppearanceBodyMedium">@style/TextAppearance.TaptapX.BodyMedium</item>
+        <item name="textAppearanceBodySmall">@style/TextAppearance.TaptapX.BodySmall</item>
+        <item name="textAppearanceTitleLarge">@style/TextAppearance.TaptapX.TitleLarge</item>
+    </style>
+
+    <!-- M3 typography tokens for the M2 theme (see above). Colors use
+         ?attr/colorOnSurface(Variant) so they adapt to light/dark. -->
+    <style name="TextAppearance.TaptapX.BodyLarge" parent="TextAppearance.AppCompat.Body1">
+        <item name="android:textSize">16sp</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
+    </style>
+    <style name="TextAppearance.TaptapX.BodyMedium" parent="TextAppearance.AppCompat.Body2">
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
+    </style>
+    <style name="TextAppearance.TaptapX.BodySmall" parent="TextAppearance.AppCompat.Caption">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
+    </style>
+    <style name="TextAppearance.TaptapX.TitleLarge" parent="TextAppearance.AppCompat.Headline">
+        <item name="android:textSize">22sp</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
     </style>
 </resources>

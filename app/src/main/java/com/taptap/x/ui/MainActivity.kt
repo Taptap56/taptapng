@@ -51,6 +51,7 @@ import com.taptap.x.ui.main.ServerAdapter
 import com.taptap.x.ui.scanner.ScannerActivity
 import com.taptap.x.ui.server.ServerEditorActivity
 import com.taptap.x.ui.settings.SettingsActivity
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -248,6 +249,17 @@ class MainActivity : AppCompatActivity() {
                 }
                 launch {
                     viewModel.selectedGroup.collect { group -> selectTab(group) }
+                }
+                // v1.0.4: the service status changes AFTER the 1.5 s
+                // post-start sync (dial failures surface ~10 s in,
+                // "Connected" on first successful dial) — poll it so
+                // the bottom bar shows "Konek gagal (...)" instead of
+                // "Connecting..." forever. Cheap: two volatile reads.
+                launch {
+                    while (true) {
+                        delay(2000)
+                        syncServiceState()
+                    }
                 }
             }
         }

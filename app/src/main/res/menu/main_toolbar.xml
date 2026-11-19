@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- v1.0.4: app:iconTint makes the icons theme-adaptive (light on the
+     dark toolbar, dark on a light toolbar) instead of relying on the
+     vector fill alone — the white fills from v1.0.3 would be invisible
+     in light mode. -->
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
@@ -6,15 +10,18 @@
         android:icon="@drawable/ic_search_24dp"
         android:title="@string/menu_search"
         app:actionViewClass="androidx.appcompat.widget.SearchView"
+        app:iconTint="?attr/colorOnSurface"
         app:showAsAction="ifRoom|collapseActionView" />
     <item
         android:id="@+id/action_add"
         android:icon="@drawable/ic_add_24dp"
         android:title="@string/acc_add"
+        app:iconTint="?attr/colorOnSurface"
         app:showAsAction="always" />
     <item
         android:id="@+id/action_more"
         android:icon="@drawable/ic_more_vert_24dp"
         android:title="@string/menu_more"
+        app:iconTint="?attr/colorOnSurface"
         app:showAsAction="always" />
 </menu>

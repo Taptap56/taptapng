@@ -1,19 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- v1.0.4: app:iconTint — refresh/copy/delete were black-filled
+     vectors on the dark toolbar (invisible); tint them with the
+     theme-adaptive onSurface color like the main toolbar icons. -->
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
         android:id="@+id/action_refresh"
         android:icon="@drawable/ic_refresh_24dp"
         android:title="@string/action_refresh"
+        app:iconTint="?attr/colorOnSurface"
         app:showAsAction="ifRoom" />
     <item
         android:id="@+id/action_copy"
         android:icon="@drawable/ic_copy"
         android:title="@string/action_copy"
+        app:iconTint="?attr/colorOnSurface"
         app:showAsAction="ifRoom" />
     <item
         android:id="@+id/action_clear"
         android:icon="@drawable/ic_delete_24dp"
         android:title="@string/action_clear"
+        app:iconTint="?attr/colorOnSurface"
         app:showAsAction="ifRoom" />
 </menu>

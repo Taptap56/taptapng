@@ -78,7 +78,10 @@ class ServerAdapter(
         val context = holder.itemView.context
 
         holder.remarks.text = item.displayName()
-        holder.remarks.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
+        // v1.0.4: v2rayNG bolds EVERY row's remarks, not only the
+        // selected one — the old selected-only bold left unselected
+        // rows thin and hard to read.
+        holder.remarks.setTypeface(null, Typeface.BOLD)
         holder.accentBar.visibility = if (selected) View.VISIBLE else View.INVISIBLE
         holder.statistics.text = "${item.address}:${item.port}"
         holder.typeDesc.text = item.typeDescription()

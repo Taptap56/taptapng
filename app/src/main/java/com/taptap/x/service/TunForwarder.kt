@@ -56,6 +56,24 @@ class TunForwarder(
     private val running = AtomicBoolean(false)
     private var readerThread: Thread? = null
     @Volatile private var firstDialReported = false
+    // First dial failure is reported immediately; later ones at most
+    // once per 10 s, so a closed window does not spam the status.
+    @Volatile private var firstFailureReported = false
+    @Volatile private var lastFailureReportMs = 0L
+
+    companion object {
+        /**
+         * Short human-readable reason for a dial failure, for the
+         * status bar. Timeouts (the closed-window case) get a plain
+         * "timeout" instead of a long exception message.
+         */
+        fun dialFailureReason(e: Exception): String = when (e) {
+            is java.net.SocketTimeoutException -> "timeout"
+            is javax.net.ssl.SSLException -> "TLS gagal"
+            is java.net.ConnectException -> "TCP gagal"
+            else -> e.message?.take(40)?.ifBlank { null } ?: "gagal"
+        }
+    }
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -202,8 +220,11 @@ class TunForwarder(
                 TcpPacket.ipToString(key.dstIp),
                 key.dstPort,
             )
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             sessions.remove(key)
+            // v1.0.4: report the failure instead of silently RST-ing
+            // every dial while the status stays "Connecting..." forever.
+            reportDialFailure(e)
             // Refuse the connection: RST|ACK.
             val rst = TcpPacket.buildTcp(
                 key.dstIp, key.srcIp, key.dstPort, key.srcPort,
@@ -225,6 +246,15 @@ class TunForwarder(
             onStatus("Connected")
         }
         thread(name = "tun-relay-${key.dstPort}", isDaemon = true) { relay(session) }
+    }
+
+    /** First failure at once, then at most once per 10 s (see fields). */
+    private fun reportDialFailure(e: Exception) {
+        val now = System.currentTimeMillis()
+        if (firstFailureReported && now - lastFailureReportMs < 10_000) return
+        firstFailureReported = true
+        lastFailureReportMs = now
+        onStatus("Konek gagal (${dialFailureReason(e)})")
     }
 
     private fun relay(session: TcpSession) {
