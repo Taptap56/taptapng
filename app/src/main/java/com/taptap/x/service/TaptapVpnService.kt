@@ -101,11 +101,6 @@ class TaptapVpnService : VpnService() {
          * selected first (which is how the Onering entry got dialled
          * in v1.0.5 despite the guard).
          */
-        sealed class PreparedStart {
-            data class Rejected(val message: String) : PreparedStart()
-            data class Ready(val client: ProxyClient, val label: String) : PreparedStart()
-        }
-
         fun prepareStart(item: ProfileItem): PreparedStart {
             try {
                 requireStartable(item)
@@ -118,6 +113,12 @@ class TaptapVpnService : VpnService() {
                 PreparedStart.Rejected(e.message ?: "Profil tidak valid: $e")
             }
         }
+    }
+
+    /** Result of [prepareStart]: rejected with a message, or ready to dial. */
+    sealed class PreparedStart {
+        data class Rejected(val message: String) : PreparedStart()
+        data class Ready(val client: ProxyClient, val label: String) : PreparedStart()
     }
 
     private var tunFd: ParcelFileDescriptor? = null
