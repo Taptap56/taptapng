@@ -1,8 +1,8 @@
 package com.taptap.x
 
 import com.taptap.x.core.DialLog
-import com.taptap.x.service.ProxyClient
-import com.taptap.x.service.ProxyStream
+import com.taptap.x.core.proto.ProxyClient
+import com.taptap.x.core.proto.ProxyStream
 import com.taptap.x.service.TcpPacket
 import com.taptap.x.service.TunForwarder
 import java.io.ByteArrayOutputStream
@@ -26,8 +26,8 @@ import org.junit.jupiter.api.Test
  */
 class TunForwarderInstrumentTest {
 
-    private val clientIp = TcpPacket.ipFromString("10.10.14.2")
-    private val serverIp = TcpPacket.ipFromString("93.184.216.34")
+    private val clientIp = TcpPacket.ipFromBytes(10, 10, 14, 2)
+    private val serverIp = TcpPacket.ipFromBytes(93, 184, 216, 34)
 
     private class BlockingStream : ProxyStream {
         private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
