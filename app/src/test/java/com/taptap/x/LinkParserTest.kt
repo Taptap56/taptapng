@@ -3,6 +3,7 @@ package com.taptap.x
 import com.taptap.x.core.Base64Util
 import com.taptap.x.core.LinkParser
 import com.taptap.x.data.ConfigType
+import com.taptap.x.data.ProfileItem
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -611,7 +612,7 @@ class LinkParserTest {
             pemicuEnabled = true, pemicuDomain = "chat.sociomile.com",
             pemicuPort = 443, pemicuInterval = 15,
         )
-        for (type in ConfigType.entries) {
+        for (type in ConfigType.values()) {
             val item = base.copy(configType = type)
             val uri = LinkParser.toUri(item)!!
             assertFalse(uri.contains("pemicu"), "$type exported pemicu: $uri")
