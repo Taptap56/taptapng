@@ -171,11 +171,21 @@ class TunForwarderInstrumentTest {
         assertTrue(waitFor(what = "FORWARDER mulai") {
             DialLog.lines().drop(before).any { it.contains("FORWARDER mulai") }
         })
+        // Feed one packet at a time and wait for its line: a
+        // PipedInputStream read() can coalesce packets written
+        // back-to-back into one read, and handlePacket only parses
+        // the first packet of each read.
         h.feed(syn())
+        assertTrue(waitFor(what = "TUN TCP line") {
+            DialLog.lines().drop(before).any { it.contains("TUN TCP") }
+        })
         h.feed(udpDnsQuery())
+        assertTrue(waitFor(what = "TUN UDP line") {
+            DialLog.lines().drop(before).any { it.contains("TUN UDP") }
+        })
         h.feed(icmpEchoRequest())
-        assertTrue(waitFor(what = "3 TUN lines") {
-            DialLog.lines().drop(before).count { it.contains("TUN TCP") || it.contains("TUN UDP") || it.contains("TUN ICMP") } >= 3
+        assertTrue(waitFor(what = "TUN ICMP line") {
+            DialLog.lines().drop(before).any { it.contains("TUN ICMP") }
         })
         val lines = DialLog.lines().drop(before).joinToString("\n")
         assertTrue(lines.contains("TUN TCP 10.10.14.2:12345 -> 93.184.216.34:443 (#1)"))
