@@ -18,6 +18,18 @@
 -keep class com.jcraft.jsch.** { *; }
 -keep class com.github.mwiede.jsch.** { *; }
 
+# JSch optional dependencies (not bundled, not needed on Android —
+# JSch falls back to its own logger/crypto when they are absent).
+# Without these, R8 fails on "missing class" for: SLF4J, Log4j2,
+# BouncyCastle (optional ciphers), JNA (Windows Pageant agent),
+# JGSS (GSSAPI auth), junixsocket (AF_UNIX agent forwarding).
+-dontwarn org.slf4j.**
+-dontwarn org.apache.logging.log4j.**
+-dontwarn org.bouncycastle.**
+-dontwarn com.sun.jna.**
+-dontwarn org.ietf.jgss.**
+-dontwarn org.newsclub.net.unix.**
+
 # ZXing: readers/writers are instantiated by name.
 -keep class com.google.zxing.** { *; }
 
