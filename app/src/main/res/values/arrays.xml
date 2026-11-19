@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="language_entries">
+        <item>System default</item>
+        <item>English</item>
+        <item>Bahasa Indonesia</item>
+    </string-array>
+    <string-array name="language_values">
+        <item>auto</item>
+        <item>en</item>
+        <item>id</item>
+    </string-array>
+
+    <string-array name="ui_mode_night_entries">
+        <item>System default</item>
+        <item>Light</item>
+        <item>Dark</item>
+    </string-array>
+    <string-array name="ui_mode_night_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="vpn_bypass_lan_entries">
+        <item>Off</item>
+        <item>Bypass LAN</item>
+        <item>Bypass mainland China</item>
+    </string-array>
+    <string-array name="vpn_bypass_lan_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="core_loglevel_entries">
+        <item>debug</item>
+        <item>info</item>
+        <item>warning</item>
+        <item>error</item>
+        <item>none</item>
+    </string-array>
+    <string-array name="core_loglevel_values">
+        <item>debug</item>
+        <item>info</item>
+        <item>warning</item>
+        <item>error</item>
+        <item>none</item>
+    </string-array>
+
+    <string-array name="network_entries">
+        <item>tcp</item>
+        <item>ws</item>
+        <item>grpc</item>
+        <item>http</item>
+        <item>kcp</item>
+        <item>quic</item>
+    </string-array>
+    <string-array name="network_values">
+        <item>tcp</item>
+        <item>ws</item>
+        <item>grpc</item>
+        <item>http</item>
+        <item>kcp</item>
+        <item>quic</item>
+    </string-array>
+</resources>

@@ -2,33 +2,98 @@
 <resources>
     <string name="app_name">TaptapX</string>
 
+    <string name="title_server">Config</string>
     <string name="menu_settings">Settings</string>
     <string name="menu_log">Log</string>
     <string name="menu_about">About</string>
     <string name="menu_open">Open menu</string>
     <string name="menu_add_server">Add server</string>
+    <string name="menu_search">Search</string>
+    <string name="menu_more">More</string>
+    <string name="acc_back">Back</string>
+    <string name="acc_add">Add</string>
+    <string name="acc_more">More</string>
+    <string name="acc_edit">Edit</string>
+    <string name="acc_delete">Delete</string>
+    <string name="acc_share">Share</string>
+    <string name="acc_selected_server">Selected server</string>
 
     <string name="action_start">Start</string>
     <string name="action_stop">Stop</string>
     <string name="action_save">Save</string>
     <string name="action_cancel">Cancel</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_test">Test</string>
+    <string name="action_share">Share</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_clear">Clear</string>
 
     <string name="status_running">Running</string>
     <string name="status_stopped">Stopped</string>
     <string name="empty_servers">No servers yet. Tap + to add one.</string>
 
+    <!-- Import menu (v2rayNG labels). -->
+    <string name="import_qrcode">Import from QR code</string>
+    <string name="import_clipboard">Import from Clipboard</string>
+    <string name="import_file">Import from a local file</string>
+    <string name="import_manually_vmess">Add [VMess]</string>
+    <string name="import_manually_vless">Add [VLESS]</string>
+    <string name="import_manually_ss">Add [Shadowsocks]</string>
+    <string name="import_manually_ssh">Add [SSH]</string>
+    <string name="import_manually_trojan">Add [Trojan]</string>
+
+    <!-- More menu (v2rayNG labels). -->
+    <string name="more_restart">Restart service</string>
+    <string name="more_delete_all">Delete configs</string>
+    <string name="more_delete_duplicate">Delete duplicate configs</string>
+    <string name="more_delete_invalid">Delete invalid configs</string>
+    <string name="more_export_all">Export configs to file</string>
+    <string name="more_locate_selected">Find selected configuration</string>
+    <string name="more_sort_by_test">Sort by test results</string>
+    <string name="more_test_all">Test TCP delays (TCPing)</string>
+    <string name="more_test_all_real">Test real delays</string>
+    <string name="more_update_sub">Update subscription</string>
+
+    <!-- Drawer (v2rayNG labels). -->
+    <string name="drawer_subscriptions">Subscription settings</string>
+    <string name="drawer_per_app_proxy">Per-App Proxy</string>
+    <string name="drawer_routing">Routing settings</string>
+    <string name="drawer_user_assets">User assets</string>
+    <string name="drawer_promotion">Promotion</string>
+    <string name="drawer_check_update">Check for update</string>
+    <string name="drawer_backup_restore">Backup &amp; restore</string>
+
+    <!-- Editor. -->
     <string name="editor_add">Add server</string>
     <string name="editor_edit">Edit server</string>
 
     <string name="field_remarks">Remarks</string>
+    <string name="field_group">Group (empty = Default)</string>
     <string name="field_protocol">Protocol</string>
     <string name="field_address">Address</string>
     <string name="field_port">Port</string>
     <string name="field_username">Username</string>
     <string name="field_password">Password</string>
+    <string name="field_private_key">Private key</string>
     <string name="field_uuid">UUID</string>
+    <string name="field_method">Method / Encryption</string>
+    <string name="field_security">Security</string>
+    <string name="field_network">Network</string>
     <string name="field_ws_host">WS Host</string>
     <string name="field_ws_path">WS Path</string>
+    <string name="field_tls">TLS</string>
+    <string name="field_sni">SNI</string>
+    <string name="field_fingerprint">Fingerprint</string>
+    <string name="field_alpn">ALPN</string>
+    <string name="field_insecure">Allow insecure</string>
+
+    <string name="section_ssh_method">SSH method</string>
+    <string name="field_ssh_payload">Payload</string>
+    <string name="field_ssh_remote_proxy">Remote proxy (user:pass@host:port)</string>
+    <string name="field_ssh_sni">SNI</string>
+    <string name="hint_ssh_payload">Example: GET / HTTP/1.1[crlf]Host: example.com[crlf][crlf]</string>
 
     <string name="section_xray_method">Xray method</string>
 
@@ -42,6 +107,82 @@
     <string name="field_pemicu_port">Port pemicu (kosong = 443)</string>
     <string name="field_pemicu_interval">Interval pemicu (detik)</string>
 
-    <string name="settings_phase1">Settings land in a later milestone (Phase 1 skeleton).</string>
-    <string name="log_phase1">Live log streaming lands in a later milestone (Phase 1 skeleton).</string>
+    <!-- Share dialog. -->
+    <string name="share_qrcode">Share QR code</string>
+    <string name="share_clipboard">Share to clipboard</string>
+    <string name="share_full_content">Share full content</string>
+
+    <!-- Confirm dialogs. -->
+    <string name="confirm_delete_server">Delete this server?</string>
+    <string name="confirm_delete_all">Delete ALL servers?</string>
+    <string name="confirm_delete_group">Delete group \"%1$s\" and all its servers?</string>
+    <string name="confirm_delete_duplicate">Delete duplicate servers?</string>
+    <string name="confirm_delete_invalid">Delete invalid servers (empty address)?</string>
+
+    <!-- Toasts. -->
+    <string name="toast_imported">Imported %1$d config(s)</string>
+    <string name="toast_import_none">No config found in clipboard</string>
+    <string name="toast_import_failed">Import failed: %1$s</string>
+    <string name="toast_copied">Copied to clipboard</string>
+    <string name="toast_deleted">Deleted</string>
+    <string name="toast_not_available">Not available in TaptapX yet</string>
+    <string name="toast_no_server_selected">No server selected</string>
+    <string name="toast_vpn_denied">VPN permission denied</string>
+    <string name="toast_address_required">Address is required</string>
+    <string name="toast_port_invalid">Port must be 1-65535</string>
+    <string name="toast_payload_required">Payload is required when the Payload chip is on</string>
+    <string name="toast_slowdns_required">SlowDNS needs NS + public key</string>
+    <string name="toast_testing">Testing…</string>
+    <string name="toast_exported">Exported to file</string>
+    <string name="toast_qr_no_camera">Camera permission is required to scan QR codes</string>
+    <string name="toast_qr_invalid">QR code is not a server config</string>
+
+    <!-- Settings. -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_ui">UI settings</string>
+    <string name="settings_vpn">VPN settings</string>
+    <string name="settings_local_proxy">Local proxy settings</string>
+    <string name="settings_dns">DNS settings</string>
+    <string name="settings_advanced">Advanced</string>
+
+    <string name="pref_speed_enabled">Show speed in status bar</string>
+    <string name="pref_confirm_remove">Confirm before deleting a server</string>
+    <string name="pref_double_column">Double column display</string>
+    <string name="pref_dynamic_color">Dynamic color (Android 12+)</string>
+    <string name="pref_language">Language</string>
+    <string name="pref_ui_mode_night">Theme</string>
+    <string name="pref_ipv6_enabled">Enable IPv6</string>
+    <string name="pref_prefer_ipv6">Prefer IPv6</string>
+    <string name="pref_local_dns_enabled">Enable local DNS</string>
+    <string name="pref_fake_dns_enabled">Enable FakeDNS</string>
+    <string name="pref_vpn_dns">VPN DNS</string>
+    <string name="pref_vpn_bypass_lan">Bypass LAN</string>
+    <string name="pref_vpn_mtu">VPN MTU</string>
+    <string name="pref_enable_local_proxy">Enable local proxy (SOCKS)</string>
+    <string name="pref_socks_port">SOCKS port</string>
+    <string name="pref_dynamic_socks_port">Dynamic SOCKS port</string>
+    <string name="pref_socks_username">SOCKS username</string>
+    <string name="pref_socks_password">SOCKS password</string>
+    <string name="pref_socks_enable_udp">Enable SOCKS UDP</string>
+    <string name="pref_proxy_sharing">Proxy sharing (LAN)</string>
+    <string name="pref_remote_dns">Remote DNS</string>
+    <string name="pref_domestic_dns">Domestic DNS</string>
+    <string name="pref_dns_hosts">DNS hosts</string>
+    <string name="pref_core_loglevel">Log level</string>
+    <string name="pref_is_booted">Auto-start on boot</string>
+    <string name="pref_delay_test_url">Delay test URL</string>
+    <string name="pref_real_ping_concurrency">Real ping concurrency</string>
+    <string name="pref_ip_api_url">IP API URL</string>
+
+    <!-- Log. -->
+    <string name="log_title">Log</string>
+    <string name="log_empty">No log lines yet.</string>
+
+    <!-- Scanner. -->
+    <string name="scanner_title">Scan QR code</string>
+    <string name="scanner_hint">Point the camera at a server QR code</string>
+
+    <!-- About. -->
+    <string name="about_title">About</string>
+    <string name="about_text">TaptapX %1$s\n\nv2rayNG-style UI, rebuilt with Android Views.\nProtocols run in-app (SSH via JSch, no xray-core bundled).</string>
 </resources>

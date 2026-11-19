@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings, mirroring v2rayNG SettingsActivity groups that apply to
+     TaptapX. Keys match SettingsStore; the fragment sets the shared
+     preferences name to "taptapx_settings" so both read one store.
+     Core-only groups (mux, fragment, observatory, HEV tunnel) are
+     omitted: TaptapX has no xray-core yet. -->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+        android:title="@string/settings_ui">
+
+        <SwitchPreferenceCompat
+            android:key="speed_enabled"
+            android:title="@string/pref_speed_enabled"
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
+            android:key="confirm_remove"
+            android:title="@string/pref_confirm_remove"
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
+            android:key="double_column_display"
+            android:title="@string/pref_double_column"
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
+            android:key="dynamic_color"
+            android:title="@string/pref_dynamic_color"
+            android:defaultValue="true" />
+
+        <ListPreference
+            android:key="language"
+            android:title="@string/pref_language"
+            android:entries="@array/language_entries"
+            android:entryValues="@array/language_values"
+            android:defaultValue="auto" />
+
+        <ListPreference
+            android:key="ui_mode_night"
+            android:title="@string/pref_ui_mode_night"
+            android:entries="@array/ui_mode_night_entries"
+            android:entryValues="@array/ui_mode_night_values"
+            android:defaultValue="0" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/settings_vpn">
+
+        <SwitchPreferenceCompat
+            android:key="ipv6_enabled"
+            android:title="@string/pref_ipv6_enabled"
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
+            android:key="prefer_ipv6"
+            android:title="@string/pref_prefer_ipv6"
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
+            android:key="local_dns_enabled"
+            android:title="@string/pref_local_dns_enabled"
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
+            android:key="fake_dns_enabled"
+            android:title="@string/pref_fake_dns_enabled"
+            android:dependency="local_dns_enabled"
+            android:defaultValue="false" />
+
+        <EditTextPreference
+            android:key="vpn_dns"
+            android:title="@string/pref_vpn_dns"
+            android:defaultValue="" />
+
+        <ListPreference
+            android:key="vpn_bypass_lan"
+            android:title="@string/pref_vpn_bypass_lan"
+            android:entries="@array/vpn_bypass_lan_entries"
+            android:entryValues="@array/vpn_bypass_lan_values"
+            android:defaultValue="0" />
+
+        <EditTextPreference
+            android:key="vpn_mtu"
+            android:title="@string/pref_vpn_mtu"
+            android:inputType="number"
+            android:defaultValue="" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/settings_local_proxy">
+
+        <SwitchPreferenceCompat
+            android:key="enable_local_proxy"
+            android:title="@string/pref_enable_local_proxy"
+            android:defaultValue="true" />
+
+        <EditTextPreference
+            android:key="socks_port"
+            android:title="@string/pref_socks_port"
+            android:inputType="number"
+            android:defaultValue="" />
+
+        <SwitchPreferenceCompat
+            android:key="dynamic_socks_port"
+            android:title="@string/pref_dynamic_socks_port"
+            android:defaultValue="false" />
+
+        <EditTextPreference
+            android:key="socks_username"
+            android:title="@string/pref_socks_username"
+            android:defaultValue="" />
+
+        <EditTextPreference
+            android:key="socks_password"
+            android:title="@string/pref_socks_password"
+            android:inputType="textPassword"
+            android:defaultValue="" />
+
+        <SwitchPreferenceCompat
+            android:key="socks_enable_udp"
+            android:title="@string/pref_socks_enable_udp"
+            android:defaultValue="true" />
+
+        <SwitchPreferenceCompat
+            android:key="proxy_sharing"
+            android:title="@string/pref_proxy_sharing"
+            android:defaultValue="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/settings_dns">
+
+        <EditTextPreference
+            android:key="remote_dns"
+            android:title="@string/pref_remote_dns"
+            android:defaultValue="" />
+
+        <EditTextPreference
+            android:key="domestic_dns"
+            android:title="@string/pref_domestic_dns"
+            android:defaultValue="" />
+
+        <EditTextPreference
+            android:key="dns_hosts"
+            android:title="@string/pref_dns_hosts"
+            android:defaultValue="" />
+
+        <ListPreference
+            android:key="core_loglevel"
+            android:title="@string/pref_core_loglevel"
+            android:entries="@array/core_loglevel_entries"
+            android:entryValues="@array/core_loglevel_values"
+            android:defaultValue="warning" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/settings_advanced">
+
+        <SwitchPreferenceCompat
+            android:key="is_booted"
+            android:title="@string/pref_is_booted"
+            android:defaultValue="false" />
+
+        <EditTextPreference
+            android:key="delay_test_url"
+            android:title="@string/pref_delay_test_url"
+            android:defaultValue="" />
+
+        <EditTextPreference
+            android:key="real_ping_concurrency"
+            android:title="@string/pref_real_ping_concurrency"
+            android:inputType="number"
+            android:defaultValue="16" />
+
+        <EditTextPreference
+            android:key="ip_api_url"
+            android:title="@string/pref_ip_api_url"
+            android:defaultValue="" />
+    </PreferenceCategory>
+
+</PreferenceScreen>

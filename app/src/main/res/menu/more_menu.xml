@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/more_restart"
+        android:title="@string/more_restart" />
+    <item
+        android:id="@+id/more_delete_all"
+        android:title="@string/more_delete_all" />
+    <item
+        android:id="@+id/more_delete_duplicate"
+        android:title="@string/more_delete_duplicate" />
+    <item
+        android:id="@+id/more_delete_invalid"
+        android:title="@string/more_delete_invalid" />
+    <item
+        android:id="@+id/more_export_all"
+        android:title="@string/more_export_all" />
+    <item
+        android:id="@+id/more_locate_selected"
+        android:title="@string/more_locate_selected" />
+    <item
+        android:id="@+id/more_sort_by_test"
+        android:title="@string/more_sort_by_test" />
+    <item
+        android:id="@+id/more_test_all"
+        android:title="@string/more_test_all" />
+    <item
+        android:id="@+id/more_test_all_real"
+        android:title="@string/more_test_all_real" />
+    <item
+        android:id="@+id/more_update_sub"
+        android:title="@string/more_update_sub" />
+</menu>

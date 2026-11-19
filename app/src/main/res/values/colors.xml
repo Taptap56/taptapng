@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v2rayNG palette, 1:1 (light). -->
+    <color name="colorPrimary">#FF000000</color>
+    <color name="colorPrimaryDark">#FF000000</color>
+    <color name="colorAccent">#FFF97910</color>
+    <color name="colorSecondary">#FFF97910</color>
+    <color name="colorTertiary">#FF009966</color>
+    <color name="colorPing">#FF009966</color>
+    <color name="colorPingRed">#FFFF0099</color>
+    <color name="colorConfigType">#FFF97910</color>
+    <color name="colorFabActive">#FFF97910</color>
+    <color name="colorFabInactive">#FF9C9C9C</color>
+    <color name="windowBackground">#FFFFFFFF</color>
+    <color name="surface">#FFFFFFFF</color>
+    <color name="onSurface">#FF1C1B1F</color>
+    <color name="onSurfaceVariant">#FF49454F</color>
+    <color name="divider">#FFE0E0E0</color>
+</resources>

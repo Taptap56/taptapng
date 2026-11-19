@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Drawer items, same order as v2rayNG MainDrawer. -->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <group android:id="@+id/drawer_primary">
+        <item
+            android:id="@+id/nav_subscriptions"
+            android:icon="@drawable/ic_subscriptions_24dp"
+            android:title="@string/drawer_subscriptions" />
+        <item
+            android:id="@+id/nav_per_app_proxy"
+            android:icon="@drawable/ic_per_apps_24dp"
+            android:title="@string/drawer_per_app_proxy" />
+        <item
+            android:id="@+id/nav_routing"
+            android:icon="@drawable/ic_routing_24dp"
+            android:title="@string/drawer_routing" />
+        <item
+            android:id="@+id/nav_user_assets"
+            android:icon="@drawable/ic_file_24dp"
+            android:title="@string/drawer_user_assets" />
+        <item
+            android:id="@+id/nav_settings"
+            android:icon="@drawable/ic_settings_24dp"
+            android:title="@string/menu_settings" />
+    </group>
+    <group android:id="@+id/drawer_secondary">
+        <item
+            android:id="@+id/nav_promotion"
+            android:icon="@drawable/ic_promotion_24dp"
+            android:title="@string/drawer_promotion" />
+        <item
+            android:id="@+id/nav_logcat"
+            android:icon="@drawable/ic_logcat_24dp"
+            android:title="@string/menu_log" />
+        <item
+            android:id="@+id/nav_check_update"
+            android:icon="@drawable/ic_check_update_24dp"
+            android:title="@string/drawer_check_update" />
+        <item
+            android:id="@+id/nav_backup_restore"
+            android:icon="@drawable/ic_restore_24dp"
+            android:title="@string/drawer_backup_restore" />
+        <item
+            android:id="@+id/nav_about"
+            android:icon="@drawable/ic_about_24dp"
+            android:title="@string/menu_about" />
+    </group>
+</menu>

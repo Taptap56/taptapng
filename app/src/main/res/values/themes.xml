@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Activity window theme; the Compose MaterialTheme (TaptapXTheme)
-         provides the actual colors. NoActionBar because Compose draws
-         its own TopAppBar (same as v2rayNG). -->
-    <style name="Theme.TaptapX" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
+    <!-- Views theme mirroring v2rayNG: black primary, orange secondary
+         (#f97910), green tertiary (#009966). Material Components
+         DayNight so the stored theme mode (system/light/dark) applies. -->
+    <style name="Theme.TaptapX" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorSecondary">@color/colorSecondary</item>
+        <item name="colorAccent">@color/colorAccent</item>
+        <item name="android:windowBackground">@color/windowBackground</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/onSurface</item>
+        <item name="colorOnSurfaceVariant">@color/onSurfaceVariant</item>
+        <item name="android:textColorPrimary">@color/onSurface</item>
+        <item name="android:textColorSecondary">@color/onSurfaceVariant</item>
     </style>
 </resources>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/import_qrcode"
+        android:title="@string/import_qrcode" />
+    <item
+        android:id="@+id/import_clipboard"
+        android:title="@string/import_clipboard" />
+    <item
+        android:id="@+id/import_file"
+        android:title="@string/import_file" />
+    <group android:id="@+id/import_manual">
+        <item
+            android:id="@+id/import_vmess"
+            android:title="@string/import_manually_vmess" />
+        <item
+            android:id="@+id/import_vless"
+            android:title="@string/import_manually_vless" />
+        <item
+            android:id="@+id/import_ss"
+            android:title="@string/import_manually_ss" />
+        <item
+            android:id="@+id/import_ssh"
+            android:title="@string/import_manually_ssh" />
+        <item
+            android:id="@+id/import_trojan"
+            android:title="@string/import_manually_trojan" />
+    </group>
+</menu>
