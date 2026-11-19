@@ -1,46 +1,60 @@
 package com.taptap.x.ui.settings
 
+import android.content.Context
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
+import androidx.appcompat.app.AppCompatActivity
+import androidx.preference.ListPreference
+import androidx.preference.PreferenceFragmentCompat
 import com.taptap.x.R
-import com.taptap.x.ui.theme.TaptapXTheme
+import com.taptap.x.TaptapXApp
+import com.taptap.x.data.SettingsStore
 
 /**
- * Settings screen (Phase 1 skeleton; mirrors v2rayNG's SettingsActivity
- * structure — the settings themselves land in later milestones).
+ * Settings screen with Views (PreferenceFragmentCompat), mirroring
+ * v2rayNG's SettingsActivity groups that apply to TaptapX: UI, VPN,
+ * local proxy, DNS, advanced. Theme + language apply immediately.
  */
-class SettingsActivity : ComponentActivity() {
+class SettingsActivity : AppCompatActivity() {
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(TaptapXApp.wrapLocale(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            TaptapXTheme {
-                SettingsScreen()
-            }
+        setContentView(R.layout.activity_settings)
+
+        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
+        toolbar.setNavigationOnClickListener { finish() }
+
+        if (savedInstanceState == null) {
+            supportFragmentManager.beginTransaction()
+                .replace(R.id.settings_container, SettingsFragment())
+                .commit()
         }
     }
-}
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SettingsScreen() {
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text(stringResource(R.string.menu_settings)) })
-        }
-    ) { innerPadding ->
-        Column(modifier = Modifier.padding(innerPadding).padding(16.dp)) {
-            Text(stringResource(R.string.settings_phase1))
+    class SettingsFragment : PreferenceFragmentCompat() {
+
+        override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
+            preferenceManager.sharedPreferencesName = SettingsStore.PREFS_NAME
+            setPreferencesFromResource(R.xml.preferences, rootKey)
+
+            findPreference<ListPreference>(SettingsStore.KEY_UI_MODE_NIGHT)
+                ?.setOnPreferenceChangeListener { _, newValue ->
+                    val store = SettingsStore(requireContext())
+                    store.uiModeNight = newValue as String
+                    store.applyThemeMode()
+                    requireActivity().recreate()
+                    true
+                }
+
+            findPreference<ListPreference>(SettingsStore.KEY_LANGUAGE)
+                ?.setOnPreferenceChangeListener { _, newValue ->
+                    SettingsStore(requireContext()).language = newValue as String
+                    requireActivity().recreate()
+                    true
+                }
         }
     }
 }

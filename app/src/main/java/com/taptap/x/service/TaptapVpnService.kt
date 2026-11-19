@@ -3,6 +3,7 @@ package com.taptap.x.service
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import com.taptap.x.data.SettingsStore
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -39,12 +40,16 @@ class TaptapVpnService : VpnService() {
 
     private fun startTunnel() {
         if (!started.compareAndSet(false, true)) return
+        // DNS server comes from Settings (remote DNS), default 8.8.8.8.
+        val dns = SettingsStore(this).remoteDns.trim()
+            .takeIf { it.isNotBlank() && (it.contains('.') || it.contains(':')) }
+            ?: "8.8.8.8"
         val builder = Builder()
             .setSession("TaptapX")
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
-            .addDnsServer("8.8.8.8")
+            .addDnsServer(dns)
             .setMtu(1500)
         tunFd = runCatching { builder.establish() }.getOrNull()
         isRunning = tunFd != null

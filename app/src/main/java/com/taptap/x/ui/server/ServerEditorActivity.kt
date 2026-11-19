@@ -1,306 +1,272 @@
 package com.taptap.x.ui.server
 
+import android.content.Context
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
+import android.view.MenuItem
+import android.view.View
+import android.widget.ArrayAdapter
+import android.widget.Spinner
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.chip.Chip
+import com.google.android.material.textfield.TextInputEditText
 import com.taptap.x.R
+import com.taptap.x.TaptapXApp
 import com.taptap.x.data.ConfigType
 import com.taptap.x.data.ProfileItem
 import com.taptap.x.data.ProfileStore
-import com.taptap.x.ui.theme.TaptapXTheme
 
 /**
- * Profile editor, mirroring v2rayNG's server editor structure:
- * remarks + protocol + address/port + auth, then the "Xray method"
- * section with the SlowDNS / Onering / Pemicu chips and their fields.
- * Phase 1: SSH is the working protocol; the Xray-method fields are
- * stored on the profile (engines land in later milestones).
+ * Profile editor with Views, mirroring v2rayNG's server activities:
+ * common fields + protocol fields + the "Xray method" chips
+ * (SlowDNS / Onering / Pemicu) + the SSH method chips (Payload /
+ * Enhanced / TLS / SlowDNS, like v2rayNG's ServerSshActivity).
+ * Save lives in the top bar (checkmark), like v2rayNG.
  */
-class ServerEditorActivity : ComponentActivity() {
+class ServerEditorActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_GUID = "guid"
+        const val EXTRA_TYPE = "type"
+    }
+
+    private lateinit var store: ProfileStore
+    private var existing: ProfileItem? = null
+    private var configType: ConfigType = ConfigType.SSH
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(TaptapXApp.wrapLocale(newBase))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val store = ProfileStore(ProfileStore.defaultFile(filesDir))
+        setContentView(R.layout.activity_server_editor)
+
+        store = ProfileStore(ProfileStore.defaultFile(filesDir))
         store.load()
         val guid = intent.getStringExtra(EXTRA_GUID)
-        val existing = guid?.let { store.find(it) }
-        setContent {
-            TaptapXTheme {
-                ServerEditorScreen(
-                    existing = existing,
-                    onSave = { item ->
-                        if (existing == null) store.add(item) else store.update(item)
-                        finish()
-                    },
-                    onCancel = { finish() },
-                )
+        existing = guid?.let { store.find(it) }
+        configType = existing?.configType
+            ?: runCatching { ConfigType.valueOf(intent.getStringExtra(EXTRA_TYPE) ?: "SSH") }
+                .getOrDefault(ConfigType.SSH)
+
+        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
+        toolbar.title = getString(if (existing == null) R.string.editor_add else R.string.editor_edit)
+        setSupportActionBar(toolbar)
+        toolbar.setNavigationOnClickListener { finish() }
+        toolbar.setOnMenuItemClickListener { item -> onToolbarMenu(item) }
+
+        val networkSpinner = findViewById<Spinner>(R.id.spinner_network)
+        networkSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            resources.getStringArray(R.array.network_entries),
+        )
+
+        fillFields()
+        bindChips()
+        updateSections()
+    }
+
+    private fun text(id: Int): String =
+        findViewById<TextInputEditText>(id).text?.toString().orEmpty()
+
+    private fun setText(id: Int, value: String) {
+        findViewById<TextInputEditText>(id).setText(value)
+    }
+
+    private fun chip(id: Int): Chip = findViewById(id)
+
+    private fun fillFields() {
+        val item = existing ?: return
+        setText(R.id.input_remarks, item.remarks)
+        setText(R.id.input_group, item.group)
+        setText(R.id.input_address, item.address)
+        setText(R.id.input_port, item.port.toString())
+        setText(R.id.input_username, item.username)
+        setText(R.id.input_password, item.password)
+        setText(R.id.input_private_key, item.privateKey)
+        setText(R.id.input_uuid, item.uuid)
+        setText(R.id.input_password_proxy, item.password)
+        setText(R.id.input_method, item.method)
+        setText(R.id.input_host, item.host)
+        setText(R.id.input_path, item.path)
+        setText(R.id.input_sni, item.sni)
+        setText(R.id.input_fingerprint, item.fingerprint)
+        setText(R.id.input_alpn, item.alpn)
+        setText(R.id.input_ssh_payload, item.sshPayload)
+        setText(R.id.input_ssh_remote_proxy, item.sshRemoteProxy)
+        setText(R.id.input_ssh_sni, item.sshSni)
+        setText(R.id.input_dnstt_ns, item.dnsttNS)
+        setText(R.id.input_dnstt_pubkey, item.dnsttPubkey)
+        setText(R.id.input_dnstt_resolver, item.dnsttResolver)
+        setText(R.id.input_onering_bug, item.oneringBug)
+        setText(R.id.input_pemicu_domain, item.pemicuDomain)
+        setText(R.id.input_pemicu_port, item.pemicuPort?.toString() ?: "")
+        setText(R.id.input_pemicu_interval, item.pemicuInterval?.toString() ?: "15")
+        findViewById<Spinner>(R.id.spinner_network).setSelection(
+            resources.getStringArray(R.array.network_values).indexOf(item.network).coerceAtLeast(0)
+        )
+        findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_tls).isChecked = item.tls
+        findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_insecure).isChecked = item.insecure
+        findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_ssh_insecure).isChecked = item.sshInsecure
+    }
+
+    private fun bindChips() {
+        val protocolChips = mapOf(
+            R.id.chip_ssh to ConfigType.SSH,
+            R.id.chip_vmess to ConfigType.VMESS,
+            R.id.chip_vless to ConfigType.VLESS,
+            R.id.chip_trojan to ConfigType.TROJAN,
+            R.id.chip_ss to ConfigType.SHADOWSOCKS,
+        )
+        protocolChips.forEach { (id, type) ->
+            val c = chip(id)
+            c.isChecked = configType == type
+            c.setOnClickListener {
+                // Single-selection group: tapping the checked chip would
+                // uncheck it and leave no protocol — keep it checked.
+                if (!c.isChecked) {
+                    c.isChecked = true
+                    return@setOnClickListener
+                }
+                configType = type
+                updateSections()
             }
+        }
+        // SSH method chips toggle their field sections.
+        chip(R.id.chip_ssh_payload).setOnCheckedChangeListener { _, _ -> updateSshSections() }
+        chip(R.id.chip_ssh_enhanced).setOnCheckedChangeListener { _, _ -> updateSshSections() }
+        chip(R.id.chip_ssh_tls).setOnCheckedChangeListener { _, _ -> updateSshSections() }
+        chip(R.id.chip_ssh_slowdns).setOnCheckedChangeListener { _, _ -> updateSshSections() }
+        // Xray method chips toggle their field sections.
+        chip(R.id.chip_slowdns).setOnCheckedChangeListener { _, _ -> updateXraySections() }
+        chip(R.id.chip_onering).setOnCheckedChangeListener { _, _ -> updateXraySections() }
+        chip(R.id.chip_pemicu).setOnCheckedChangeListener { _, _ -> updateXraySections() }
+
+        // Restore chip states from the existing profile.
+        existing?.let { item ->
+            chip(R.id.chip_ssh_payload).isChecked = item.sshUsePayload
+            chip(R.id.chip_ssh_enhanced).isChecked = item.sshUseEnhanced
+            chip(R.id.chip_ssh_tls).isChecked = item.sshUseTls
+            chip(R.id.chip_ssh_slowdns).isChecked = item.sshUseSlowdns
+            chip(R.id.chip_slowdns).isChecked = item.dnsttEnabled
+            chip(R.id.chip_onering).isChecked = item.oneringEnabled
+            chip(R.id.chip_pemicu).isChecked = item.pemicuEnabled
         }
     }
-}
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ServerEditorScreen(
-    existing: ProfileItem?,
-    onSave: (ProfileItem) -> Unit,
-    onCancel: () -> Unit,
-) {
-    var remarks by remember { mutableStateOf(existing?.remarks ?: "") }
-    var configType by remember { mutableStateOf(existing?.configType ?: ConfigType.SSH) }
-    var address by remember { mutableStateOf(existing?.address ?: "") }
-    var port by remember { mutableStateOf(existing?.port?.toString() ?: "22") }
-    var username by remember { mutableStateOf(existing?.username ?: "") }
-    var password by remember { mutableStateOf(existing?.password ?: "") }
-    var uuid by remember { mutableStateOf(existing?.uuid ?: "") }
-    var network by remember { mutableStateOf(existing?.network ?: "tcp") }
-    var host by remember { mutableStateOf(existing?.host ?: "") }
-    var path by remember { mutableStateOf(existing?.path ?: "") }
-    var tls by remember { mutableStateOf(existing?.tls ?: false) }
-    var sni by remember { mutableStateOf(existing?.sni ?: "") }
-    // Xray method
-    var dnsttEnabled by remember { mutableStateOf(existing?.dnsttEnabled ?: false) }
-    var dnsttNS by remember { mutableStateOf(existing?.dnsttNS ?: "") }
-    var dnsttPubkey by remember { mutableStateOf(existing?.dnsttPubkey ?: "") }
-    var dnsttResolver by remember { mutableStateOf(existing?.dnsttResolver ?: "") }
-    var oneringEnabled by remember { mutableStateOf(existing?.oneringEnabled ?: false) }
-    var oneringBug by remember { mutableStateOf(existing?.oneringBug ?: "") }
-    var pemicuEnabled by remember { mutableStateOf(existing?.pemicuEnabled ?: false) }
-    var pemicuDomain by remember { mutableStateOf(existing?.pemicuDomain ?: "") }
-    var pemicuPort by remember { mutableStateOf(existing?.pemicuPort?.toString() ?: "") }
-    var pemicuInterval by remember { mutableStateOf(existing?.pemicuInterval?.toString() ?: "15") }
+    private fun updateSections() {
+        val isSsh = configType == ConfigType.SSH
+        findViewById<View>(R.id.section_ssh).visibility = if (isSsh) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.section_proxy).visibility = if (isSsh) View.GONE else View.VISIBLE
+        // UUID only for VMess/VLESS; password only for Trojan/SS.
+        findViewById<View>(R.id.layout_uuid).visibility =
+            if (configType == ConfigType.VMESS || configType == ConfigType.VLESS) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.layout_password_proxy).visibility =
+            if (configType == ConfigType.TROJAN || configType == ConfigType.SHADOWSOCKS) View.VISIBLE else View.GONE
+        updateSshSections()
+        updateXraySections()
+    }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = {
-                Text(
-                    if (existing == null) stringResource(R.string.editor_add)
-                    else stringResource(R.string.editor_edit)
-                )
-            })
+    private fun updateSshSections() {
+        val showPayload = chip(R.id.chip_ssh_payload).isChecked || chip(R.id.chip_ssh_enhanced).isChecked
+        findViewById<View>(R.id.section_ssh_payload).visibility =
+            if (showPayload) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.section_ssh_tls).visibility =
+            if (chip(R.id.chip_ssh_tls).isChecked) View.VISIBLE else View.GONE
+        // SSH SlowDNS chip shares the DNSTT fields with the Xray chip.
+        if (chip(R.id.chip_ssh_slowdns).isChecked) {
+            chip(R.id.chip_slowdns).isChecked = true
         }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            OutlinedTextField(
-                value = remarks,
-                onValueChange = { remarks = it },
-                label = { Text(stringResource(R.string.field_remarks)) },
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(stringResource(R.string.field_protocol))
-            Row {
-                ConfigType.entries.forEach { type ->
-                    FilterChip(
-                        selected = configType == type,
-                        onClick = { configType = type },
-                        label = { Text(type.name) },
-                        modifier = Modifier.padding(end = 4.dp)
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = address,
-                onValueChange = { address = it },
-                label = { Text(stringResource(R.string.field_address)) },
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = port,
-                onValueChange = { port = it },
-                label = { Text(stringResource(R.string.field_port)) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            if (configType == ConfigType.SSH) {
-                OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
-                    label = { Text(stringResource(R.string.field_username)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text(stringResource(R.string.field_password)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            } else {
-                OutlinedTextField(
-                    value = uuid,
-                    onValueChange = { uuid = it },
-                    label = { Text(stringResource(R.string.field_uuid)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = host,
-                    onValueChange = { host = it },
-                    label = { Text(stringResource(R.string.field_ws_host)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = path,
-                    onValueChange = { path = it },
-                    label = { Text(stringResource(R.string.field_ws_path)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            // Xray method section (mirrors v2rayNG's XrayMethodFields).
-            Text(stringResource(R.string.section_xray_method))
-            Spacer(modifier = Modifier.height(8.dp))
-            FilterChip(
-                selected = dnsttEnabled,
-                onClick = { dnsttEnabled = !dnsttEnabled },
-                label = { Text("SlowDNS") },
-                modifier = Modifier.padding(end = 4.dp)
-            )
-            FilterChip(
-                selected = oneringEnabled,
-                onClick = { oneringEnabled = !oneringEnabled },
-                label = { Text("Onering") },
-                modifier = Modifier.padding(end = 4.dp)
-            )
-            FilterChip(
-                selected = pemicuEnabled,
-                onClick = { pemicuEnabled = !pemicuEnabled },
-                label = { Text("Pemicu") },
-                modifier = Modifier.padding(end = 4.dp)
-            )
-            if (dnsttEnabled) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = dnsttNS,
-                    onValueChange = { dnsttNS = it },
-                    label = { Text(stringResource(R.string.field_dnstt_ns)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = dnsttPubkey,
-                    onValueChange = { dnsttPubkey = it },
-                    label = { Text(stringResource(R.string.field_dnstt_pubkey)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = dnsttResolver,
-                    onValueChange = { dnsttResolver = it },
-                    label = { Text(stringResource(R.string.field_dnstt_resolver)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            if (oneringEnabled) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = oneringBug,
-                    onValueChange = { oneringBug = it },
-                    label = { Text(stringResource(R.string.field_onering_bug)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            if (pemicuEnabled) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = pemicuDomain,
-                    onValueChange = { pemicuDomain = it },
-                    label = { Text(stringResource(R.string.field_pemicu_domain)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = pemicuPort,
-                    onValueChange = { pemicuPort = it },
-                    label = { Text(stringResource(R.string.field_pemicu_port)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = pemicuInterval,
-                    onValueChange = { pemicuInterval = it },
-                    label = { Text(stringResource(R.string.field_pemicu_interval)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            Row {
-                Button(onClick = {
-                    val item = (existing ?: ProfileItem()).copy(
-                        remarks = remarks,
-                        configType = configType,
-                        address = address,
-                        port = port.toIntOrNull() ?: 22,
-                        username = username,
-                        password = password,
-                        uuid = uuid,
-                        network = network,
-                        host = host,
-                        path = path,
-                        tls = tls,
-                        sni = sni,
-                        dnsttEnabled = dnsttEnabled,
-                        dnsttNS = dnsttNS,
-                        dnsttPubkey = dnsttPubkey,
-                        dnsttResolver = dnsttResolver,
-                        oneringEnabled = oneringEnabled,
-                        oneringBug = oneringBug,
-                        pemicuEnabled = pemicuEnabled,
-                        pemicuDomain = pemicuDomain,
-                        pemicuPort = pemicuPort.toIntOrNull(),
-                        pemicuInterval = pemicuInterval.toIntOrNull(),
-                    )
-                    onSave(item)
-                }) {
-                    Text(stringResource(R.string.action_save))
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                Button(onClick = onCancel) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
+        updateXraySections()
+    }
+
+    private fun updateXraySections() {
+        val slowdns = chip(R.id.chip_slowdns).isChecked || chip(R.id.chip_ssh_slowdns).isChecked
+        findViewById<View>(R.id.section_dnstt).visibility =
+            if (slowdns) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.section_onering).visibility =
+            if (chip(R.id.chip_onering).isChecked) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.section_pemicu).visibility =
+            if (chip(R.id.chip_pemicu).isChecked) View.VISIBLE else View.GONE
+    }
+
+    private fun onToolbarMenu(item: MenuItem): Boolean {
+        if (item.itemId == R.id.action_save) {
+            save()
+            return true
         }
+        return false
+    }
+
+    private fun save() {
+        val address = text(R.id.input_address).trim()
+        if (address.isBlank()) {
+            Toast.makeText(this, R.string.toast_address_required, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val port = text(R.id.input_port).toIntOrNull()
+        if (port == null || port !in 1..65535) {
+            Toast.makeText(this, R.string.toast_port_invalid, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val usePayload = chip(R.id.chip_ssh_payload).isChecked || chip(R.id.chip_ssh_enhanced).isChecked
+        if (usePayload && text(R.id.input_ssh_payload).isBlank()) {
+            Toast.makeText(this, R.string.toast_payload_required, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val slowdns = chip(R.id.chip_slowdns).isChecked || chip(R.id.chip_ssh_slowdns).isChecked
+        if (slowdns && (text(R.id.input_dnstt_ns).isBlank() || text(R.id.input_dnstt_pubkey).isBlank())) {
+            Toast.makeText(this, R.string.toast_slowdns_required, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val networkValues = resources.getStringArray(R.array.network_values)
+        val network = networkValues.getOrElse(
+            findViewById<Spinner>(R.id.spinner_network).selectedItemPosition
+        ) { "tcp" }
+
+        val item = (existing ?: ProfileItem()).copy(
+            remarks = text(R.id.input_remarks),
+            group = text(R.id.input_group).trim(),
+            configType = configType,
+            address = address,
+            port = port,
+            username = text(R.id.input_username),
+            password = if (configType == ConfigType.SSH) text(R.id.input_password)
+            else text(R.id.input_password_proxy),
+            privateKey = text(R.id.input_private_key),
+            sshUsePayload = chip(R.id.chip_ssh_payload).isChecked,
+            sshPayload = text(R.id.input_ssh_payload),
+            sshRemoteProxy = text(R.id.input_ssh_remote_proxy),
+            sshUseEnhanced = chip(R.id.chip_ssh_enhanced).isChecked,
+            sshUseTls = chip(R.id.chip_ssh_tls).isChecked,
+            sshSni = text(R.id.input_ssh_sni),
+            sshInsecure = findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_ssh_insecure).isChecked,
+            sshUseSlowdns = chip(R.id.chip_ssh_slowdns).isChecked,
+            uuid = text(R.id.input_uuid),
+            method = text(R.id.input_method),
+            network = network,
+            host = text(R.id.input_host),
+            path = text(R.id.input_path),
+            tls = findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_tls).isChecked,
+            sni = text(R.id.input_sni),
+            fingerprint = text(R.id.input_fingerprint),
+            alpn = text(R.id.input_alpn),
+            insecure = findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switch_insecure).isChecked,
+            dnsttEnabled = slowdns,
+            dnsttNS = text(R.id.input_dnstt_ns),
+            dnsttPubkey = text(R.id.input_dnstt_pubkey),
+            dnsttResolver = text(R.id.input_dnstt_resolver),
+            oneringEnabled = chip(R.id.chip_onering).isChecked,
+            oneringBug = text(R.id.input_onering_bug),
+            pemicuEnabled = chip(R.id.chip_pemicu).isChecked,
+            pemicuDomain = text(R.id.input_pemicu_domain),
+            pemicuPort = text(R.id.input_pemicu_port).toIntOrNull(),
+            pemicuInterval = text(R.id.input_pemicu_interval).toIntOrNull(),
+        )
+        if (existing == null) store.add(item) else store.update(item)
+        finish()
     }
 }
