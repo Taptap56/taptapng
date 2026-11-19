@@ -44,7 +44,6 @@
     <string name="hint_xhttp_extra">{ \"key\": \"value\" }</string>
     <string name="hint_final_mask">{ \"key\": \"value\" }</string>
     <string name="hint_dnstt_resolver">1.1.1.1:53</string>
-    <string name="hint_ssh_payload">Placeholders: [host] and [port]</string>
 
     <string name="toast_remarks_required">Remarks is required</string>
     <string name="toast_uuid_required">UUID is required</string>
