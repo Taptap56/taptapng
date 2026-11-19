@@ -53,7 +53,9 @@ class TunForwarderDialFailureTest {
             return object : ProxyStream {
                 override val input: InputStream = input
                 override val output: OutputStream = ByteArrayOutputStream()
-                override fun close() = runCatching { input.close() }
+                override fun close() {
+                    runCatching { input.close() }
+                }
             }
         }
 
