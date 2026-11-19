@@ -14,6 +14,7 @@ import com.taptap.x.core.DnsResolver
 import com.taptap.x.core.ServerTester
 import com.taptap.x.core.TunnelState
 import com.taptap.x.core.proto.DialWatchdog
+import com.taptap.x.core.proto.ProbeBody
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyClientFactory
 import com.taptap.x.core.proto.Transport
@@ -278,9 +279,13 @@ class TaptapVpnService : VpnService() {
     /**
      * Full protocol dial against the entry itself, under the
      * watchdog (fix A). Target = the entry itself: the server
-     * connects to its own port, which always answers — the probe
-     * verifies the transport ladder + the protocol handshake
-     * (including the UUID), not the target.
+     * connects to its own port — but a TLS server there sends
+     * nothing until spoken to, and the xray-core server only
+     * flushes its response header once data flows from the target
+     * (v1.0.8, fix B: without [ProbeBody] the probe deadlocks into
+     * a 10 s VMess read timeout). The probe body makes the target
+     * answer, which unblocks the flush and proves the handshake
+     * (including the UUID) end to end.
      */
     private fun probeDial(client: ProxyClient, item: ProfileItem, label: String) {
         val watchdog = DialWatchdog()
@@ -289,7 +294,7 @@ class TaptapVpnService : VpnService() {
         try {
             watchdog.start()
             DialLog.log("PROBE", "dial $label")
-            val stream = client.dial(item.address, item.port)
+            val stream = client.dial(item.address, item.port, ProbeBody.forEntry(item))
             runCatching { stream.close() }
             DialLog.log("PROBE", "$label ok")
         } catch (e: Exception) {

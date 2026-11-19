@@ -6,11 +6,14 @@ import com.taptap.x.data.ProfileItem
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 
 /**
  * End-to-end VMess over a loopback fake server. The fake server
@@ -217,6 +220,133 @@ class VmessClientTest {
             network = "tcp",
         )
         assertThrows(Exception::class.java) {
+            VmessClient(item).dial("example.com", 443)
+        }
+        serverThread.join(5_000)
+    }
+
+    // v1.0.8, fix B: the real xray-core server does NOT send its
+    // response header right after the request header — it buffers
+    // the header and only flushes it once data flows from the
+    // dispatch target (transferResponse reads link.Reader first).
+    // The probe targets the entry itself (a TLS server that speaks
+    // only when spoken to), so a probe with no body deadlocks into
+    // a 10 s read timeout — the phone symptom in taptapx-5.txt.
+    // These tests use an xray-like fake server: it waits for the
+    // first body chunk BEFORE answering.
+
+    @Test
+    fun `probe dial succeeds against xray-like server that waits for the first body chunk`() {
+        val server = ServerSocket(0)
+        val port = server.localPort
+        val probeBody = ProbeBody.clientHello("example.com")
+        var serverError: Throwable? = null
+        var firstChunk: ByteArray? = null
+        val serverThread = Thread {
+            val socket = server.accept()
+            socket.soTimeout = 5_000
+            try {
+                val input = socket.getInputStream()
+                val output = socket.getOutputStream()
+                val opened = VmessCrypto.openRequestHeader(VmessCrypto.cmdKey(uuid), input)
+                val session = VmessSession(
+                    requestBytes = ByteArray(0),
+                    bodyKey = opened.header.bodyKey,
+                    bodyIV = opened.header.bodyIV,
+                    responseBodyKey = Crypto.sha256(opened.header.bodyKey).copyOfRange(0, 16),
+                    responseBodyIV = Crypto.sha256(opened.header.bodyIV).copyOfRange(0, 16),
+                    responseV = opened.header.responseV,
+                    security = VmessSecurity.AES_128_GCM,
+                )
+                val reqNonce = VmessCrypto.ChunkNonce(session.bodyIV)
+                val reqMask = Shake128(session.bodyIV)
+                // xray-like: no response header until the first body
+                // chunk arrives (the target's answer unblocks it).
+                firstChunk = readChunk(
+                    input, session.bodyKey, reqNonce, reqMask, VmessSecurity.AES_128_GCM,
+                )
+                output.write(VmessCrypto.sealResponseHeader(session, session.responseV))
+                output.flush()
+                // The probe closes the stream: empty termination chunk.
+                val term = readChunk(
+                    input, session.bodyKey, reqNonce, reqMask, VmessSecurity.AES_128_GCM,
+                )
+                assertEquals(0, term.size)
+            } catch (e: Throwable) {
+                serverError = e
+            } finally {
+                runCatching { socket.close() }
+                runCatching { server.close() }
+            }
+        }
+        serverThread.start()
+        val item = ProfileItem(
+            configType = ConfigType.VMESS,
+            address = "::1", port = port,
+            uuid = uuid, security = "aes-128-gcm",
+            network = "tcp",
+        )
+        val client = VmessClient(item)
+        // On v1.0.7 dial() takes no probe body at all, so this call
+        // does not even compile there; here it must complete.
+        val stream = client.dial("example.com", 443, probeBody)
+        runCatching { stream.close() }
+        client.close()
+        serverThread.join(5_000)
+        assertTrue(!serverThread.isAlive, "fake server thread must finish")
+        serverError?.let { throw AssertionError("Fake server gagal", it) }
+        assertArrayEquals(probeBody, firstChunk)
+    }
+
+    @Test
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
+    fun `dial without probe body times out against xray-like server`() {
+        val server = ServerSocket(0)
+        val port = server.localPort
+        val serverThread = Thread {
+            val socket = server.accept()
+            socket.soTimeout = 15_000
+            try {
+                val input = socket.getInputStream()
+                val output = socket.getOutputStream()
+                val opened = VmessCrypto.openRequestHeader(VmessCrypto.cmdKey(uuid), input)
+                val session = VmessSession(
+                    requestBytes = ByteArray(0),
+                    bodyKey = opened.header.bodyKey,
+                    bodyIV = opened.header.bodyIV,
+                    responseBodyKey = Crypto.sha256(opened.header.bodyKey).copyOfRange(0, 16),
+                    responseBodyIV = Crypto.sha256(opened.header.bodyIV).copyOfRange(0, 16),
+                    responseV = opened.header.responseV,
+                    security = VmessSecurity.AES_128_GCM,
+                )
+                val reqNonce = VmessCrypto.ChunkNonce(session.bodyIV)
+                val reqMask = Shake128(session.bodyIV)
+                // Waits for the first body chunk — a dial with no
+                // probe body never sends one.
+                readChunk(
+                    input, session.bodyKey, reqNonce, reqMask, VmessSecurity.AES_128_GCM,
+                )
+                output.write(VmessCrypto.sealResponseHeader(session, session.responseV))
+                output.flush()
+            } catch (_: Throwable) {
+                // Expected: the client times out first (~10 s) and
+                // closes the transport (EOF), or the server's own
+                // 15 s read timeout fires.
+            } finally {
+                runCatching { socket.close() }
+                runCatching { server.close() }
+            }
+        }
+        serverThread.start()
+        val item = ProfileItem(
+            configType = ConfigType.VMESS,
+            address = "::1", port = port,
+            uuid = uuid, security = "aes-128-gcm",
+            network = "tcp",
+        )
+        // No probe body: must fail reading the response header
+        // (~10 s), exactly like the phone (taptapx-5.txt).
+        assertThrows(SocketTimeoutException::class.java) {
             VmessClient(item).dial("example.com", 443)
         }
         serverThread.join(5_000)

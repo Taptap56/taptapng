@@ -51,17 +51,30 @@ class VmessClient(private val item: ProfileItem) : ProxyClient {
     // first session whenever two apps dialled at once).
     private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
-    override fun dial(targetHost: String, targetPort: Int): ProxyStream {
+    override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
         val transport = Transport.open(item)
         try {
             val session = VmessCrypto.newSession(item, targetHost, targetPort)
             transport.output.write(session.requestBytes)
             transport.output.flush()
+            // v1.0.8, fix B: the probe body goes out BEFORE the
+            // response header is read. The xray-core server only
+            // flushes its response header once data flows from the
+            // dispatch target; without a body the probe deadlocks
+            // into a 10 s read timeout. The body writer is created
+            // here (not after the handshake) so the probe chunk
+            // uses the same mask/nonce sequence as the relay that
+            // follows — one stream, one state.
+            val bodyOut = VmessBodyOutputStream(transport.output, session)
+            if (probeBody != null) {
+                bodyOut.write(probeBody)
+                bodyOut.flush()
+                DialLog.log("VMess", "probe body ${probeBody.size}B")
+            }
             // Fail fast: the server answers with its response header
             // right after dispatching; a bad UUID/header dies here.
             Transport.noteStage("VMess")
             VmessCrypto.readResponseHeader(transport.input, session)
-            val bodyOut = VmessBodyOutputStream(transport.output, session)
             val bodyIn = VmessBodyInputStream(transport.input, session)
             transport.socket.soTimeout = 0
             Transport.clearWatchdogSocket()

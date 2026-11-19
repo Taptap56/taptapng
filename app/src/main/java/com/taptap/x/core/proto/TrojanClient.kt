@@ -26,10 +26,12 @@ class TrojanClient(private val item: ProfileItem) : ProxyClient {
     // v1.0.6: see VmessClient — streams stay open independently.
     private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
-    override fun dial(targetHost: String, targetPort: Int): ProxyStream {
+    override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
         // Validate eagerly, before opening the TCP connection — like
         // VlessClient/SsClient. (Otherwise an empty password only
         // fails after a useless connect, with the wrong exception.)
+        // probeBody is ignored: Trojan has no response handshake to
+        // unblock — the stream is raw right after the header.
         require(item.password.isNotEmpty()) { "Password Trojan kosong" }
         val transport = Transport.open(item)
         try {

@@ -25,7 +25,19 @@ interface ProxyStream {
 }
 
 interface ProxyClient {
-    fun dial(targetHost: String, targetPort: Int): ProxyStream
+    /**
+     * Open one proxied byte stream to [targetHost]:[targetPort].
+     *
+     * [probeBody] (v1.0.8): bytes written right after the protocol
+     * header and BEFORE the response header is read — probe dials
+     * only. xray-core VMess/VLESS servers flush their response
+     * header only once data flows from the dispatch target, so a
+     * probe that sends no body deadlocks into a read timeout (the
+     * probe target is the entry itself, a TLS server that speaks
+     * only when spoken to). Relay dials MUST pass null: any extra
+     * bytes there would corrupt the app's first data.
+     */
+    fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray? = null): ProxyStream
     fun close()
 }
 

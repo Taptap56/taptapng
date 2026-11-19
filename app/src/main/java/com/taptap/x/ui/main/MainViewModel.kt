@@ -104,7 +104,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun select(guid: String) {
         _selectedGuid.value = guid
-        store.selectedGuid = guid
+        store.setSelectedGuid(guid)
     }
 
     fun selectedItem(): ProfileItem? =
@@ -115,6 +115,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         afterStoreChange()
         if (_selectedGuid.value == guid) {
             _selectedGuid.value = store.profiles.firstOrNull()?.guid
+            store.setSelectedGuid(_selectedGuid.value)
         }
     }
 
@@ -122,6 +123,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         store.removeGroup(group)
         afterStoreChange()
         _selectedGuid.value = store.profiles.firstOrNull()?.guid
+        store.setSelectedGuid(_selectedGuid.value)
     }
 
     /** Returns how many servers were removed. */
@@ -158,7 +160,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun removeAll() {
         store.profiles.clear()
-        store.selectedGuid = null
+        store.setSelectedGuid(null)
         store.save()
         _selectedGuid.value = null
         afterStoreChange()

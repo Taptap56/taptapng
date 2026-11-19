@@ -34,7 +34,7 @@ class TunForwarderDialFailureTest {
     private val serverIp = TcpPacket.ipFromBytes(1, 2, 3, 4)
 
     private class FailingProxy(private val error: Exception) : ProxyClient {
-        override fun dial(targetHost: String, targetPort: Int): ProxyStream {
+        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
             throw error
         }
 

@@ -31,7 +31,10 @@ class SsClient(private val item: ProfileItem) : ProxyClient {
     // v1.0.6: see VmessClient — streams stay open independently.
     private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
-    override fun dial(targetHost: String, targetPort: Int): ProxyStream {
+    override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
+        // probeBody is ignored: Shadowsocks has no response
+        // handshake to unblock — the stream is raw right after the
+        // salt + target header.
         val cipher = SsCrypto.resolveCipher(item.method)
         val transport = Transport.open(item.copy(network = "tcp", tls = false))
         try {

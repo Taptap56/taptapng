@@ -25,7 +25,7 @@ class VlessClient(private val item: ProfileItem) : ProxyClient {
     // v1.0.6: see VmessClient — streams stay open independently.
     private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
-    override fun dial(targetHost: String, targetPort: Int): ProxyStream {
+    override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
         val encryption = item.method.ifBlank { "none" }.lowercase()
         require(encryption == "none") {
             "VLESS encryption tidak didukung: $encryption (hanya none)"
@@ -35,6 +35,15 @@ class VlessClient(private val item: ProfileItem) : ProxyClient {
             val header = VlessCrypto.buildRequestHeader(item.uuid, targetHost, targetPort)
             transport.output.write(header)
             transport.output.flush()
+            // v1.0.8, fix B: same deadlock as VMess — the xray-core
+            // VLESS server only flushes its response header once
+            // data flows (EncodeResponseHeader + SetFlushNext, then
+            // dispatch). The probe body unblocks it.
+            if (probeBody != null) {
+                transport.output.write(probeBody)
+                transport.output.flush()
+                DialLog.log("VLESS", "probe body ${probeBody.size}B")
+            }
             Transport.noteStage("VLESS")
             VlessCrypto.readResponseHeader(transport.input)
             transport.socket.soTimeout = 0

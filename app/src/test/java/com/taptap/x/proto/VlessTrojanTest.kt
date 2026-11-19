@@ -108,6 +108,74 @@ class VlessTrojanTest {
     }
 
     @Test
+    fun `vless probe dial succeeds against xray-like server`() {
+        val server = ServerSocket(0)
+        val port = server.localPort
+        val probeBody = "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n"
+            .toByteArray(Charsets.UTF_8)
+        var serverError: Throwable? = null
+        var receivedProbe: ByteArray? = null
+        val serverThread = Thread {
+            val socket = server.accept()
+            socket.soTimeout = 5_000
+            try {
+                val input = socket.getInputStream()
+                val output = socket.getOutputStream()
+                val head = input.readExactBytes(19)
+                val parsed = VlessCrypto.parseRequestHeader(head + input.readExactBytes(15))
+                assertEquals("example.com", parsed.target.host)
+                assertEquals(443, parsed.target.port)
+                // xray-like: response header only flushes once data
+                // flows — wait for the probe body first.
+                receivedProbe = input.readExactBytes(probeBody.size)
+                output.write(byteArrayOf(0x00, 0x00)) // version + addon length
+                output.flush()
+                val buf = ByteArray(4)
+                var filled = 0
+                while (filled < buf.size) {
+                    val r = input.read(buf, filled, buf.size - filled)
+                    if (r == -1) break
+                    filled += r
+                }
+                assertArrayEquals("ping".toByteArray(), buf)
+                output.write("pong".toByteArray())
+                output.flush()
+            } catch (e: Throwable) {
+                serverError = e
+            } finally {
+                runCatching { socket.close() }
+                runCatching { server.close() }
+            }
+        }
+        serverThread.start()
+        val item = ProfileItem(
+            configType = ConfigType.VLESS,
+            address = "::1", port = port,
+            uuid = uuid, method = "none", network = "tcp",
+        )
+        val client = VlessClient(item)
+        val stream = client.dial("example.com", 443, probeBody)
+        try {
+            stream.output.write("ping".toByteArray())
+            stream.output.flush()
+            val buf = ByteArray(4)
+            var filled = 0
+            while (filled < buf.size) {
+                val r = stream.input.read(buf, filled, buf.size - filled)
+                if (r == -1) break
+                filled += r
+            }
+            assertArrayEquals("pong".toByteArray(), buf)
+        } finally {
+            client.close()
+        }
+        serverThread.join(5_000)
+        assertTrue(!serverThread.isAlive, "fake server thread must finish")
+        serverError?.let { throw AssertionError("Fake VLESS server gagal", it) }
+        assertArrayEquals(probeBody, receivedProbe)
+    }
+
+    @Test
     fun `vless rejects non-none encryption`() {
         val item = ProfileItem(
             configType = ConfigType.VLESS,
