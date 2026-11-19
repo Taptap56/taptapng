@@ -68,6 +68,22 @@ class ProfileStore(private val file: File) {
         save()
     }
 
+    /** Delete a whole group (and every server in it). */
+    fun removeGroup(group: String) {
+        profiles.removeAll { it.group == group }
+        if (selectedGuid != null && find(selectedGuid!!) == null) {
+            selectedGuid = profiles.firstOrNull()?.guid
+        }
+        save()
+    }
+
+    /** Distinct group names in first-use order ("" = Default). */
+    fun groups(): List<String> {
+        val seen = linkedSetOf<String>()
+        profiles.forEach { seen += it.group }
+        return seen.toList()
+    }
+
     fun find(guid: String): ProfileItem? = profiles.firstOrNull { it.guid == guid }
 
     companion object {

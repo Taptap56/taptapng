@@ -16,6 +16,7 @@ enum class ConfigType {
 data class ProfileItem(
     val guid: String = UUID.randomUUID().toString(),
     var remarks: String = "",
+    var group: String = "",
     var configType: ConfigType = ConfigType.SSH,
     var address: String = "",
     var port: Int = 22,
@@ -25,11 +26,17 @@ data class ProfileItem(
     var privateKey: String = "",
     var sshUsePayload: Boolean = false,
     var sshPayload: String = "",
+    var sshRemoteProxy: String = "",
+    var sshUseEnhanced: Boolean = false,
+    var sshUseTls: Boolean = false,
+    var sshSni: String = "",
+    var sshInsecure: Boolean = false,
     var sshUseSlowdns: Boolean = false,
     // VMess / VLESS / Trojan / Shadowsocks
     var uuid: String = "",
     var alterId: Int = 0,
     var security: String = "auto",
+    var method: String = "", // SS cipher / VLESS encryption ("none")
     var network: String = "tcp",
     var host: String = "",
     var path: String = "",
@@ -57,6 +64,21 @@ data class ProfileItem(
 ) {
     /** Display name for the server list row. */
     fun displayName(): String = remarks.ifBlank { address }
+
+    /** Group display name; the empty group is "Default" (v2rayNG). */
+    fun groupName(): String = group.ifBlank { "Default" }
+
+    /** Type + transport description for the server list row. */
+    fun typeDescription(): String {
+        val base = typeLabel()
+        if (configType == ConfigType.SSH) return base
+        val parts = mutableListOf(base)
+        if (network.isNotBlank() && network != "tcp") parts += network
+        if (tls) parts += "TLS"
+        if (dnsttEnabled) parts += "SlowDNS"
+        if (oneringEnabled) parts += "Onering"
+        return parts.joinToString(" · ")
+    }
 
     /** Protocol label for the server list row (orange, like v2rayNG). */
     fun typeLabel(): String = when (configType) {
