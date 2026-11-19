@@ -140,7 +140,7 @@ class TcpPacketTest {
     @Test
     fun `parseTcpOptions handles nop eol and unknown kinds`() {
         // EOL stops the scan; unknown kinds are skipped by length.
-        val withEol = byteArrayOf(2, 4, 0x05, 0xB4, 0, 3, 3, 7)
+        val withEol = byteArrayOf(2, 4, 0x05, 0xB4.toByte(), 0, 3, 3, 7)
         val parsed = TcpPacket.parseTcpOptions(withEol)
         assertEquals(1460, parsed.mss)
         assertEquals(null, parsed.windowScale) // after EOL: unseen
