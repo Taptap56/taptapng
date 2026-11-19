@@ -11,6 +11,7 @@ import android.graphics.Color
 import android.net.VpnService
 import android.os.Bundle
 import android.view.Gravity
+import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
@@ -144,7 +145,6 @@ class MainActivity : AppCompatActivity() {
         toolbar.setNavigationOnClickListener {
             drawerLayout.openDrawer(GravityCompat.START)
         }
-        toolbar.setOnMenuItemClickListener { item -> onToolbarMenu(item) }
 
         findViewById<NavigationView>(R.id.nav_view).setNavigationItemSelectedListener { item ->
             drawerLayout.closeDrawer(GravityCompat.START)
@@ -300,6 +300,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---- Toolbar / menus ----
+    // The menu MUST be inflated here: once the Toolbar is the support
+    // ActionBar, AppCompat owns its menu and the `app:menu` XML
+    // attribute alone does not survive — v1.0.2 shipped with an empty
+    // right side (no search / + / more) for exactly this reason. Clicks
+    // likewise arrive via onOptionsItemSelected, not via the Toolbar's
+    // own setOnMenuItemClickListener (the ActionBar wrapper replaces it).
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_toolbar, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (onToolbarMenu(item)) return true
+        return super.onOptionsItemSelected(item)
+    }
 
     private fun onToolbarMenu(item: MenuItem): Boolean {
         when (item.itemId) {

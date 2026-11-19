@@ -15,7 +15,6 @@
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
         android:background="?attr/colorSurface"
-        app:menu="@menu/editor_toolbar"
         app:navigationIcon="@drawable/ic_arrow_back_24dp" />
 
     <ScrollView

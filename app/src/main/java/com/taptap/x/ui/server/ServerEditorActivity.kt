@@ -2,6 +2,7 @@ package com.taptap.x.ui.server
 
 import android.content.Context
 import android.os.Bundle
+import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.widget.ArrayAdapter
@@ -54,7 +55,6 @@ class ServerEditorActivity : AppCompatActivity() {
         toolbar.title = getString(if (existing == null) R.string.editor_add else R.string.editor_edit)
         setSupportActionBar(toolbar)
         toolbar.setNavigationOnClickListener { finish() }
-        toolbar.setOnMenuItemClickListener { item -> onToolbarMenu(item) }
 
         val networkSpinner = findViewById<Spinner>(R.id.spinner_network)
         networkSpinner.adapter = ArrayAdapter(
@@ -190,6 +190,20 @@ class ServerEditorActivity : AppCompatActivity() {
             if (chip(R.id.chip_onering).isChecked) View.VISIBLE else View.GONE
         findViewById<View>(R.id.section_pemicu).visibility =
             if (chip(R.id.chip_pemicu).isChecked) View.VISIBLE else View.GONE
+    }
+
+    // Menu inflated here (see MainActivity): `app:menu` in the layout
+    // does not survive setSupportActionBar, and clicks arrive via
+    // onOptionsItemSelected, not the Toolbar's own click listener.
+    // Without this the save checkmark never appears.
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.editor_toolbar, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (onToolbarMenu(item)) return true
+        return super.onOptionsItemSelected(item)
     }
 
     private fun onToolbarMenu(item: MenuItem): Boolean {
