@@ -71,10 +71,16 @@ object ProbeBody {
         val exts = ByteArrayOutputStream()
         if (sni != null) {
             val name = sni.toByteArray(Charsets.UTF_8)
+            val entry = ByteArrayOutputStream()
+            entry.write(0x00) // host_name
+            entry.writeU16(name.size)
+            entry.write(name)
+            // server_name data = list length (2) + entry; the 2-byte
+            // prefix is mandatory (RFC 6066) — without it the hello
+            // is malformed and a strict server answers nothing.
             val list = ByteArrayOutputStream()
-            list.write(0x00) // host_name
-            list.writeU16(name.size)
-            list.write(name)
+            list.writeU16(entry.size())
+            list.write(entry.toByteArray())
             exts.writeU16(0x0000) // server_name
             exts.writeU16(list.size())
             exts.write(list.toByteArray())
