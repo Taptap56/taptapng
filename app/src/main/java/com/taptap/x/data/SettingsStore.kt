@@ -358,12 +358,12 @@ class SettingsStore(context: Context) {
         const val DEFAULT_DELAY_TEST_URL = ""
         const val DEFAULT_REAL_PING_CONCURRENCY = "16"
         const val DEFAULT_IP_API_URL = ""
-        const val DEFAULT_MODE = MODE_VPN
         const val DEFAULT_ENABLE_ROOT_MODE = false
         const val DEFAULT_LAN_SHARING = false
 
         /** The only mode M2 implements. */
         const val MODE_VPN = "VPN"
+        const val DEFAULT_MODE = MODE_VPN
 
         // Display defaults (v2rayNG AppConfig): shown when the stored value is blank.
         const val DISPLAY_VPN_DNS = "1.1.1.1"
