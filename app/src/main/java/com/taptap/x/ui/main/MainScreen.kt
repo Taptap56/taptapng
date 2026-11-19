@@ -29,6 +29,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.taptap.x.R
 import com.taptap.x.ui.theme.colorFabActive
@@ -65,10 +66,7 @@ fun MainScreen(
                 Text(
                     text = stringResource(R.string.app_name),
                     style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(
-                        horizontal = androidx.compose.ui.unit.dp(16f),
-                        vertical = androidx.compose.ui.unit.dp(16f)
-                    )
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
                 )
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.menu_settings)) },
@@ -128,7 +126,7 @@ fun MainScreen(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier
                             .weight(1f)
-                            .padding(horizontal = androidx.compose.ui.unit.dp(16f))
+                            .padding(horizontal = 16.dp)
                     )
                 }
             },
