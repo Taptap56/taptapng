@@ -6,6 +6,8 @@ import com.taptap.x.core.proto.ProxyStream
 import com.taptap.x.service.TcpPacket
 import com.taptap.x.service.TunForwarder
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.nio.ByteBuffer
@@ -29,27 +31,27 @@ class TunForwarderInstrumentTest {
     private val clientIp = TcpPacket.ipFromBytes(10, 10, 14, 2)
     private val serverIp = TcpPacket.ipFromBytes(93, 184, 216, 34)
 
+    /** Proxy stream whose input blocks forever (no server data). */
     private class BlockingStream : ProxyStream {
-        private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
-        override fun close(): Result<Unit> = runCatching { closed.set(true) }
-        override fun isClosed(): Boolean = closed.get()
-        override fun read(buf: ByteArray): Result<Int> = runCatching {
-            // Block forever: no server data, like a silent server.
-            while (!closed.get()) Thread.sleep(50)
-            -1
+        override val input: InputStream = PipedInputStream()
+        override val output: OutputStream = ByteArrayOutputStream()
+        override fun close() {
+            runCatching { input.close() }
         }
-
-        override fun write(buf: ByteArray): Result<Unit> = Result.success(Unit)
     }
 
     private class OkProxy : ProxyClient {
-        override fun dial(host: String, port: Int): Result<ProxyStream> =
-            Result.success(BlockingStream())
+        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream =
+            BlockingStream()
+
+        override fun close() = Unit
     }
 
     private class FailingProxy : ProxyClient {
-        override fun dial(host: String, port: Int): Result<ProxyStream> =
-            Result.failure(java.io.IOException("dial gagal"))
+        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream =
+            throw java.io.IOException("dial gagal")
+
+        override fun close() = Unit
     }
 
     /** A forwarder wired to a pipe pair; tunOut is drained into [drained]. */
