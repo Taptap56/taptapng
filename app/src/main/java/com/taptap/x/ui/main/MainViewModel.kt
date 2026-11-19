@@ -293,3 +293,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshVisible()
     }
 }
+
+/**
+ * Whether tapping [newGuid] must restart the running VPN with the
+ * newly selected server — v2rayNG's MainActivity.setSelectServer:
+ * a tap on a DIFFERENT server while the VPN runs restarts the
+ * service with it; tapping the already-selected server, or tapping
+ * while stopped, only changes the selection. Pure, so it is unit
+ * testable without an Application (v1.0.10).
+ */
+fun shouldRestartOnSelect(isRunning: Boolean, currentGuid: String?, newGuid: String): Boolean =
+    isRunning && newGuid != currentGuid

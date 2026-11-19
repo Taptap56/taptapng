@@ -93,6 +93,69 @@ class TcpPacketTest {
     }
 
     @Test
+    fun `udp checksum is real and verifies to zero`() {
+        // v1.0.10: buildUdp used to write a 0 checksum ("optional").
+        // xray-core's tun stack computes a real one (0 -> 0xffff),
+        // and the DNS reply is the first packet the app ever
+        // receives from us — it must be beyond doubt. Recomputing
+        // the checksum over a packet that already carries it must
+        // yield 0, and the field itself must not be 0.
+        val payload = byteArrayOf(0x12, 0x34, 0x00, 0x00, 0x00, 0x01)
+        val pkt = TcpPacket.buildUdp(clientIp, serverIp, 53000, 53, payload)
+        val udpLen = pkt.size - 20
+        assertEquals(0, TcpPacket.udpChecksum(clientIp, serverIp, pkt, 20, udpLen))
+        val field = ((pkt[26].toInt() and 0xFF) shl 8) or (pkt[27].toInt() and 0xFF)
+        assertTrue(field != 0, "UDP checksum field must not be 0, got $field")
+    }
+
+    @Test
+    fun `tcp options parse and build round trip`() {
+        // v1.0.10: a SYN offering MSS + SACK + window scale must
+        // survive build -> parse, so the forwarder can echo the
+        // offers in its SYN-ACK like xray-core's tun stack does.
+        // Fails on v1.0.9 code (parseTcp drops the options).
+        val options = byteArrayOf(1, 1, 4, 2, 1, 3, 3, 7) // SACK + WS 7
+        val pkt = TcpPacket.buildTcp(
+            clientIp, serverIp, 12345, 443,
+            1000L, 0L, TcpPacket.FLAG_SYN, ByteArray(0),
+            mss = 1460, options = options,
+        )
+        assertEquals(0, TcpPacket.checksum(pkt, 0, 20))
+        val tcpLen = pkt.size - 20
+        assertEquals(0, TcpPacket.tcpChecksum(clientIp, serverIp, pkt, 20, tcpLen))
+        val ip = TcpPacket.parseIp(pkt, pkt.size)
+        assertNotNull(ip)
+        val tcp = TcpPacket.parseTcp(ip!!.payload)
+        assertNotNull(tcp)
+        tcp!!
+        // Data offset 8 (32-byte TCP header: 20 + MSS 4 + SACK 4 + WS 4).
+        assertEquals(12, tcp.options.size)
+        val parsed = TcpPacket.parseTcpOptions(tcp.options)
+        assertEquals(1460, parsed.mss)
+        assertEquals(7, parsed.windowScale)
+        assertTrue(parsed.sackPermitted)
+        assertEquals(0, tcp.payload.size)
+    }
+
+    @Test
+    fun `parseTcpOptions handles nop eol and unknown kinds`() {
+        // EOL stops the scan; unknown kinds are skipped by length.
+        val withEol = byteArrayOf(2, 4, 0x05, 0xB4, 0, 3, 3, 7)
+        val parsed = TcpPacket.parseTcpOptions(withEol)
+        assertEquals(1460, parsed.mss)
+        assertEquals(null, parsed.windowScale) // after EOL: unseen
+        assertEquals(false, parsed.sackPermitted)
+        // Unknown kind 9, length 4, then a WS option.
+        val unknown = byteArrayOf(9, 4, 0xAA.toByte(), 0xBB.toByte(), 1, 3, 3, 5)
+        val parsed2 = TcpPacket.parseTcpOptions(unknown)
+        assertEquals(5, parsed2.windowScale)
+        // Truncated option stops the scan without throwing.
+        val truncated = byteArrayOf(3, 3)
+        assertEquals(null, TcpPacket.parseTcpOptions(truncated).windowScale)
+        assertEquals(null, TcpPacket.parseTcpOptions(byteArrayOf()).mss)
+    }
+
+    @Test
     fun `non ipv4 and truncated packets return null`() {
         assertNull(TcpPacket.parseIp(byteArrayOf(0x60, 0, 0, 0), 4))
         assertNull(TcpPacket.parseIp(ByteArray(10), 10))

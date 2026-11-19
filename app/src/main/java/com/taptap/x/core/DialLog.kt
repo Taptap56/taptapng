@@ -31,7 +31,14 @@ import java.util.Locale
 object DialLog {
 
     const val TAG = "TaptapX-Dial"
-    const val MAX_LINES = 200
+    /**
+     * Ring buffer size. v1.0.10: 500, up from 200 — the forwarder
+     * log now flows like v2rayNG's (a line per connection/DNS
+     * query), and 200 lines evict during one page load, so the
+     * dial stages the user needs disappear before they open the
+     * Log page. 500 lines is still ~50 KB in memory.
+     */
+    const val MAX_LINES = 500
 
     /** Set by the app to forward lines to logcat. Null = ring buffer only. */
     @Volatile

@@ -28,6 +28,19 @@ object TcpPacket {
     const val TCP_MSS = 1460
     const val TCP_WINDOW = 65535
 
+    /**
+     * Window-scale shift the forwarder echoes when the app's SYN
+     * offers window scaling, and the window field it advertises
+     * with that shift — the same numbers xray-core's tun stack
+     * uses (tcpWindowShift = 5, tcpWindow = 256 KiB, so the
+     * advertised field is 256 KiB >> 5 = 8192). v1.0.9 sent MSS
+     * only with a 65535 window and no scale: legal, but a visible
+     * difference from v2rayNG, and the small unscaled window
+     * throttles bulk transfer.
+     */
+    const val TCP_WINDOW_SHIFT = 5
+    const val TCP_WINDOW_SCALED = 8192
+
     data class IpPacket(val src: Int, val dst: Int, val protocol: Int, val payload: ByteArray)
 
     data class TcpSegment(
@@ -38,9 +51,65 @@ object TcpPacket {
         val flags: Int,
         val window: Int,
         val payload: ByteArray,
+        /** Raw TCP options (bytes 20..dataOffset); empty when none. */
+        val options: ByteArray = byteArrayOf(),
     )
 
     data class UdpDatagram(val srcPort: Int, val dstPort: Int, val payload: ByteArray)
+
+    /** What a SYN offers, parsed from its options (RFC 7323 / 2018). */
+    data class TcpOptions(
+        /** Peer's MSS (kind 2), null when absent. */
+        val mss: Int? = null,
+        /** Peer's window-scale shift (kind 3), null when absent. */
+        val windowScale: Int? = null,
+        /** Peer's SACK-permitted (kind 4). */
+        val sackPermitted: Boolean = false,
+    )
+
+    /**
+     * Parse TCP options. NOP (1) is skipped, EOL (0) stops the
+     * scan, unknown kinds are skipped by their length byte.
+     * Malformed options (length < 2, or running past the end)
+     * stop the scan instead of throwing — a bad option must not
+     * kill the reader thread.
+     */
+    fun parseTcpOptions(options: ByteArray): TcpOptions {
+        var mss: Int? = null
+        var windowScale: Int? = null
+        var sackPermitted = false
+        var i = 0
+        while (i < options.size) {
+            val kind = options[i].toInt() and 0xFF
+            when (kind) {
+                0 -> break // EOL
+                1 -> i += 1 // NOP
+                2 -> {
+                    if (i + 3 >= options.size || options[i + 1].toInt() != 4) break
+                    mss = ((options[i + 2].toInt() and 0xFF) shl 8) or
+                        (options[i + 3].toInt() and 0xFF)
+                    i += 4
+                }
+                3 -> {
+                    if (i + 2 >= options.size || options[i + 1].toInt() != 3) break
+                    windowScale = options[i + 2].toInt() and 0xFF
+                    i += 3
+                }
+                4 -> {
+                    if (i + 1 >= options.size || options[i + 1].toInt() != 2) break
+                    sackPermitted = true
+                    i += 2
+                }
+                else -> {
+                    if (i + 1 >= options.size) break
+                    val len = options[i + 1].toInt() and 0xFF
+                    if (len < 2 || i + len > options.size) break
+                    i += len
+                }
+            }
+        }
+        return TcpOptions(mss, windowScale, sackPermitted)
+    }
 
     /** Parse an IPv4 packet. Returns null for non-IPv4 / truncated input. */
     fun parseIp(packet: ByteArray, len: Int): IpPacket? {
@@ -71,8 +140,9 @@ object TcpPacket {
         if (payload.size < dataOffset) return null
         val flags = buf.get(13).toInt() and 0xFF
         val window = buf.short.toInt() and 0xFFFF
+        val options = payload.copyOfRange(20, dataOffset)
         val data = payload.copyOfRange(dataOffset, payload.size)
-        return TcpSegment(srcPort, dstPort, seq, ack, flags, window, data)
+        return TcpSegment(srcPort, dstPort, seq, ack, flags, window, data, options)
     }
 
     /** Parse a UDP datagram. Returns null for truncated input. */
@@ -87,7 +157,11 @@ object TcpPacket {
 
     /**
      * Build an IPv4 + TCP packet. [mss] > 0 adds an MSS option
-     * (SYN-ACK only); otherwise the header is the plain 20 bytes.
+     * (SYN-ACK only); [options] adds further options after it
+     * (SACK-permitted / window scale, each 4 bytes: NOP + kind +
+     * length + value) — the caller must keep the total option
+     * length a multiple of 4. [window] is the advertised window
+     * field (TCP_WINDOW unless the caller echoes a scale).
      */
     fun buildTcp(
         srcIp: Int,
@@ -99,8 +173,11 @@ object TcpPacket {
         flags: Int,
         payload: ByteArray,
         mss: Int = 0,
+        options: ByteArray = byteArrayOf(),
+        window: Int = TCP_WINDOW,
     ): ByteArray {
-        val optLen = if (mss > 0) 4 else 0
+        val mssOptLen = if (mss > 0) 4 else 0
+        val optLen = mssOptLen + options.size
         val tcpLen = 20 + optLen + payload.size
         val total = 20 + tcpLen
         val buf = ByteBuffer.allocate(total).order(ByteOrder.BIG_ENDIAN)
@@ -122,7 +199,7 @@ object TcpPacket {
         buf.putInt(ack.toInt())
         buf.put(((5 + optLen / 4) shl 4).toByte())
         buf.put(flags.toByte())
-        buf.putShort(TCP_WINDOW.toShort())
+        buf.putShort(window.toShort())
         buf.putShort(0) // checksum, filled below
         buf.putShort(0) // urgent pointer
         if (mss > 0) {
@@ -130,6 +207,7 @@ object TcpPacket {
             buf.put(4.toByte()) // MSS length
             buf.putShort(mss.toShort())
         }
+        if (options.isNotEmpty()) buf.put(options)
         buf.put(payload)
         val out = buf.array()
         // IPv4 header checksum.
@@ -163,12 +241,24 @@ object TcpPacket {
         buf.putShort(srcPort.toShort())
         buf.putShort(dstPort.toShort())
         buf.putShort(udpLen.toShort())
-        buf.putShort(0) // UDP checksum optional (0 = none)
+        buf.putShort(0) // checksum, filled below
         buf.put(payload)
         val out = buf.array()
         val ipSum = checksum(out, 0, 20)
         out[10] = (ipSum ushr 8).toByte()
         out[11] = (ipSum and 0xFF).toByte()
+        // v1.0.10: a REAL UDP checksum (pseudo-header + UDP header
+        // + payload), like xray-core's tun stack (sendUDP) — v1.0.9
+        // wrote 0 ("optional"). Zero is legal for IPv4, but a
+        // checksum of 0 means "none", and a packet that claims none
+        // is exactly the kind a strict stack drops silently — the
+        // DNS reply is the first packet the app ever receives from
+        // us, so it must be beyond doubt. A computed 0 is written
+        // as 0xffff (0 means "no checksum").
+        var udpSum = udpChecksum(srcIp, dstIp, out, 20, udpLen)
+        if (udpSum == 0) udpSum = 0xFFFF
+        out[26] = (udpSum ushr 8).toByte()
+        out[27] = (udpSum and 0xFF).toByte()
         return out
     }
 
@@ -217,6 +307,26 @@ object TcpPacket {
             i += 2
         }
         if (i < end) sum += (data[i].toInt() and 0xFF) shl 8
+        while (sum ushr 16 != 0L) sum = (sum and 0xFFFF) + (sum ushr 16)
+        return sum.toInt().inv() and 0xFFFF
+    }
+
+    /** UDP checksum: pseudo-header + UDP segment starting at [offset]. */
+    fun udpChecksum(srcIp: Int, dstIp: Int, segment: ByteArray, offset: Int, len: Int): Int {
+        var sum = 0L
+        sum += (srcIp ushr 16) and 0xFFFF
+        sum += srcIp and 0xFFFF
+        sum += (dstIp ushr 16) and 0xFFFF
+        sum += dstIp and 0xFFFF
+        sum += PROTO_UDP
+        sum += len
+        var i = offset
+        val end = offset + len
+        while (i + 1 < end) {
+            sum += ((segment[i].toInt() and 0xFF) shl 8) or (segment[i + 1].toInt() and 0xFF)
+            i += 2
+        }
+        if (i < end) sum += (segment[i].toInt() and 0xFF) shl 8
         while (sum ushr 16 != 0L) sum = (sum and 0xFFFF) + (sum ushr 16)
         return sum.toInt().inv() and 0xFFFF
     }

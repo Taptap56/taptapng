@@ -6,6 +6,7 @@ import com.taptap.x.core.proto.DialWatchdog
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyStream
 import com.taptap.x.core.proto.Transport
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.DatagramPacket
@@ -32,6 +33,14 @@ import kotlin.concurrent.thread
  * The proxy dial itself must bypass the VPN: the service sets
  * `Transport.protectSocket` before creating the client, and the DNS
  * socket is protected here via [protectUdp].
+ *
+ * v1.0.10: the forwarder LOGS its own life — v2rayNG's log flows
+ * with every connection the core handles, while this forwarder was
+ * silent except for dial attempts (and the v1.0.9 phone log proved
+ * the silence hides the real question: did ANY packet reach the
+ * TUN at all?). [start]/[stop] log, the reader counts every packet
+ * and logs the first 20 in detail, and the DNS relay logs its
+ * queries, answers and failures instead of dropping them silently.
  */
 class TunForwarder(
     private val tunIn: InputStream,
@@ -40,6 +49,8 @@ class TunForwarder(
     private val dnsServer: String,
     private val protectUdp: (DatagramSocket) -> Boolean,
     private val onStatus: (String) -> Unit,
+    /** DNS reply wait; shortened by tests so a dead relay fails fast. */
+    private val dnsTimeoutMs: Int = 5000,
 ) {
 
     private enum class State { DIALING, SYN_SENT, ESTABLISHED, CLOSED }
@@ -52,6 +63,14 @@ class TunForwarder(
         @Volatile var serverSeq: Long = isn // next byte we will send
         @Volatile var stream: ProxyStream? = null
         val closed = AtomicBoolean(false)
+        /**
+         * What the app's SYN offered (v1.0.10): the peer MSS caps
+         * our segments, and SACK / window-scale offers are echoed
+         * in the SYN-ACK like xray-core's tun stack does.
+         */
+        @Volatile var peerMss: Int = TcpPacket.TCP_MSS
+        @Volatile var wsOffered: Boolean = false
+        @Volatile var sackOffered: Boolean = false
     }
 
     private val sessions = ConcurrentHashMap<Key, TcpSession>()
@@ -64,6 +83,14 @@ class TunForwarder(
     // once per 10 s, so a closed window does not spam the status.
     @Volatile private var firstFailureReported = false
     @Volatile private var lastFailureReportMs = 0L
+    /** Packets read from the TUN since start (v1.0.10). */
+    private val packetsRead = java.util.concurrent.atomic.AtomicLong(0)
+    /** How many packets got a detail line (cap: first 20). */
+    private val loggedPackets = java.util.concurrent.atomic.AtomicInteger(0)
+    /** DNS queries seen / detail-logged / failed (v1.0.10). */
+    private val dnsQueries = java.util.concurrent.atomic.AtomicLong(0)
+    private val dnsLogged = java.util.concurrent.atomic.AtomicInteger(0)
+    private val dnsFailures = java.util.concurrent.atomic.AtomicLong(0)
 
     companion object {
         /**
@@ -92,6 +119,7 @@ class TunForwarder(
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
+        DialLog.log("FORWARDER", "mulai — baca TUN")
         readerThread = thread(name = "tun-reader", isDaemon = true) { readLoop() }
     }
 
@@ -101,6 +129,11 @@ class TunForwarder(
         runCatching { tunOut.close() }
         sessions.values.toList().forEach { closeSession(it) }
         sessions.clear()
+        DialLog.log(
+            "FORWARDER",
+            "berhenti (paket dibaca: ${packetsRead.get()}, " +
+                "DNS: ${dnsQueries.get()} query / ${dnsFailures.get()} gagal)",
+        )
     }
 
     private fun readLoop() {
@@ -108,10 +141,18 @@ class TunForwarder(
         while (running.get()) {
             val n = try {
                 tunIn.read(buf)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // A read error while still running means the reader
+                // died — log it instead of vanishing silently (a
+                // close during stop() is expected and stays quiet).
+                if (running.get()) DialLog.failure("FORWARDER baca TUN", e)
                 break
             }
-            if (n <= 0) break
+            if (n <= 0) {
+                if (running.get()) DialLog.log("FORWARDER", "baca TUN selesai (n=$n)")
+                break
+            }
+            packetsRead.incrementAndGet()
             try {
                 handlePacket(buf, n)
             } catch (_: Exception) {
@@ -120,18 +161,31 @@ class TunForwarder(
         }
     }
 
+    /** Detail line for one parsed packet (first 20 only). */
+    private fun logPacket(proto: String, srcIp: Int, srcPort: Int, dstIp: Int, dstPort: Int) {
+        if (loggedPackets.getAndIncrement() >= 20) return
+        DialLog.log(
+            "TUN",
+            "$proto ${TcpPacket.ipToString(srcIp)}:$srcPort -> " +
+                "${TcpPacket.ipToString(dstIp)}:$dstPort (#${packetsRead.get()})",
+        )
+    }
+
     private fun handlePacket(buf: ByteArray, len: Int) {
         val ip = TcpPacket.parseIp(buf, len) ?: return
         when (ip.protocol) {
             TcpPacket.PROTO_TCP -> {
                 val tcp = TcpPacket.parseTcp(ip.payload) ?: return
+                logPacket("TCP", ip.src, tcp.srcPort, ip.dst, tcp.dstPort)
                 handleTcp(ip, tcp)
             }
             TcpPacket.PROTO_UDP -> {
                 val udp = TcpPacket.parseUdp(ip.payload) ?: return
+                logPacket("UDP", ip.src, udp.srcPort, ip.dst, udp.dstPort)
                 handleUdp(ip, udp)
             }
             TcpPacket.PROTO_ICMP -> {
+                logPacket("ICMP", ip.src, 0, ip.dst, 0)
                 val reply = TcpPacket.buildIcmpEchoReply(buf, len) ?: return
                 writePacket(reply)
             }
@@ -153,6 +207,14 @@ class TunForwarder(
                 val isn = (random.nextInt().toLong() and 0xFFFFFFFFL)
                 val s = TcpSession(key, isn)
                 s.clientSeq = (tcp.seq + 1) and 0xFFFFFFFFL
+                // v1.0.10: remember what the SYN offered, like
+                // xray-core's tun stack (synchronize): the peer MSS
+                // caps our segments, and SACK / window-scale offers
+                // are echoed in the SYN-ACK.
+                val offered = TcpPacket.parseTcpOptions(tcp.options)
+                offered.mss?.let { s.peerMss = minOf(TcpPacket.TCP_MSS, it) }
+                s.wsOffered = offered.windowScale != null
+                s.sackOffered = offered.sackPermitted
                 sessions[key] = s
                 thread(name = "tun-dial-${tcp.dstPort}", isDaemon = true) { dial(s) }
             } else if (tcp.flags and TcpPacket.FLAG_ACK == 0) {
@@ -293,7 +355,8 @@ class TunForwarder(
 
     private fun relay(session: TcpSession) {
         val stream = session.stream ?: return
-        val buf = ByteArray(TcpPacket.TCP_MSS)
+        // Segments never exceed what the app's SYN offered (v1.0.10).
+        val buf = ByteArray(session.peerMss.coerceIn(1, TcpPacket.TCP_MSS))
         try {
             while (!session.closed.get()) {
                 val n = stream.input.read(buf)
@@ -318,11 +381,25 @@ class TunForwarder(
 
     private fun sendSynAck(session: TcpSession) {
         val key = session.key
+        // v1.0.10: echo what the SYN offered, like xray-core's tun
+        // stack (sendSyn) — SACK-permitted and window scale (shift
+        // 5, window 256 KiB >> 5) only when the peer offered them;
+        // otherwise the plain MSS-only SYN-ACK as before. The MSS
+        // we offer is capped at the peer's MSS.
+        val extra = ByteArrayOutputStream()
+        if (session.sackOffered) extra.write(byteArrayOf(1, 1, 4, 2))
+        if (session.wsOffered) {
+            extra.write(byteArrayOf(1, 3, 3, TcpPacket.TCP_WINDOW_SHIFT.toByte()))
+        }
+        val window = if (session.wsOffered) TcpPacket.TCP_WINDOW_SCALED else TcpPacket.TCP_WINDOW
         val pkt = TcpPacket.buildTcp(
             key.dstIp, key.srcIp, key.dstPort, key.srcPort,
             session.isn, session.clientSeq,
             TcpPacket.FLAG_SYN or TcpPacket.FLAG_ACK,
-            ByteArray(0), mss = TcpPacket.TCP_MSS,
+            ByteArray(0),
+            mss = session.peerMss,
+            options = extra.toByteArray(),
+            window = window,
         )
         writePacket(pkt)
         session.serverSeq = (session.isn + 1) and 0xFFFFFFFFL
@@ -378,6 +455,24 @@ class TunForwarder(
         val srcIp = ip.src
         val srcPort = udp.srcPort
         val dstIp = ip.dst
+        // v1.0.10: the DNS relay was completely silent — a query
+        // that died here left no trace at all, so a browser that
+        // cannot resolve looks identical to "no packets reach the
+        // TUN". Log the first few queries/answers in detail and
+        // EVERY failure with its reason (v2rayNG's log shows each
+        // connection the core handles; this is the same idea for
+        // the relay). Detail lines are capped so a page load does
+        // not flood the 500-line ring buffer.
+        val dnsNo = dnsQueries.incrementAndGet()
+        val detail = dnsLogged.get() < 5
+        if (detail) {
+            dnsLogged.incrementAndGet()
+            DialLog.log(
+                "DNS",
+                "query ${TcpPacket.ipToString(dstIp)} ${query.size}B dari " +
+                    "${TcpPacket.ipToString(srcIp)}:$srcPort (#$dnsNo)",
+            )
+        }
         thread(name = "tun-dns", isDaemon = true) {
             try {
                 val sock = DatagramSocket()
@@ -395,27 +490,52 @@ class TunForwarder(
                     // TUN naik, dan drop di sini mematikan DNS semua
                     // aplikasi).
                     val protected = protectUdp(sock)
-                    if (!protected && !TunnelState.appBypass) return@thread
-                    if (!protected) {
+                    if (!protected && !TunnelState.appBypass) {
+                        dnsFailures.incrementAndGet()
+                        DialLog.log(
+                            "DNS",
+                            "GAGAL: protect() gagal tanpa disallow — query #$dnsNo dibuang",
+                        )
+                        return@thread
+                    }
+                    if (!protected && detail) {
                         DialLog.log(
                             "PROTECT",
                             "protect() gagal — relay DNS lanjut via disallow aplikasi",
                         )
                     }
-                    sock.soTimeout = 5000
+                    sock.soTimeout = dnsTimeoutMs
                     val server = InetAddress.getByName(dnsServer)
                     sock.send(DatagramPacket(query, query.size, server, 53))
                     val buf = ByteArray(8192)
                     val resp = DatagramPacket(buf, buf.size)
-                    sock.receive(resp)
+                    try {
+                        sock.receive(resp)
+                    } catch (e: java.net.SocketTimeoutException) {
+                        dnsFailures.incrementAndGet()
+                        DialLog.failure(
+                            "DNS",
+                            java.io.IOException("timeout $dnsServer untuk query #$dnsNo"),
+                        )
+                        return@thread
+                    }
                     val respBytes = resp.data.copyOf(resp.length)
                     val pkt = TcpPacket.buildUdp(dstIp, srcIp, 53, srcPort, respBytes)
                     writePacket(pkt)
+                    if (detail) {
+                        dnsLogged.incrementAndGet()
+                        DialLog.log(
+                            "DNS",
+                            "jawab ${TcpPacket.ipToString(dstIp)} ${respBytes.size}B ke " +
+                                "${TcpPacket.ipToString(srcIp)}:$srcPort (#$dnsNo)",
+                        )
+                    }
                 } finally {
                     sock.close()
                 }
-            } catch (_: Exception) {
-                // DNS timeout/failure: the app retries or times out.
+            } catch (e: Exception) {
+                dnsFailures.incrementAndGet()
+                DialLog.failure("DNS", e)
             }
         }
     }

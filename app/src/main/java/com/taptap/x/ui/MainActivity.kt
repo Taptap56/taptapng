@@ -48,6 +48,7 @@ import com.taptap.x.service.TaptapVpnService
 import com.taptap.x.ui.log.LogActivity
 import com.taptap.x.ui.main.MainViewModel
 import com.taptap.x.ui.main.ServerAdapter
+import com.taptap.x.ui.main.shouldRestartOnSelect
 import com.taptap.x.ui.scanner.ScannerActivity
 import com.taptap.x.ui.server.ServerEditorActivity
 import com.taptap.x.ui.settings.SettingsActivity
@@ -154,7 +155,19 @@ class MainActivity : AppCompatActivity() {
         }
 
         adapter = ServerAdapter(object : ServerAdapter.Callbacks {
-            override fun onSelect(guid: String) = viewModel.select(guid)
+            override fun onSelect(guid: String) {
+                // v1.0.10: like v2rayNG, tapping a different server
+                // while the VPN runs switches the connection to it
+                // at once — the old behaviour only moved the accent
+                // bar and kept the old entry running until a manual
+                // stop/start, which is exactly the "cara pilih akun
+                // kerasa beda" the user reported.
+                val restart = shouldRestartOnSelect(
+                    viewModel.isRunning.value, viewModel.selectedGuid.value, guid,
+                )
+                viewModel.select(guid)
+                if (restart) restartService()
+            }
             override fun onShare(item: ProfileItem) = showShareDialog(item)
             override fun onEdit(item: ProfileItem) = openEditor(item.guid, null)
             override fun onDelete(item: ProfileItem) = deleteServer(item)

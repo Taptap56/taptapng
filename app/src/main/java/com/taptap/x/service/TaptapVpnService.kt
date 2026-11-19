@@ -115,6 +115,28 @@ class TaptapVpnService : VpnService() {
                 PreparedStart.Rejected(e.message ?: "Profil tidak valid: $e")
             }
         }
+
+        /**
+         * The TUN interface's IPv4 client address, from the user's
+         * interface-address setting (index into v2rayNG's
+         * VpnInterfaceAddressConfig: 0 = 10.10.14.x, 1 = 10.1.0.x,
+         * 2 = 10.0.0.x, 3 = 172.31.0.x, 4 = 172.20.0.x,
+         * 5 = 172.16.0.x, 6 = 192.168.100.x). v1.0.9 hardcoded
+         * 172.19.0.1 and ignored this setting entirely — the user
+         * could change it in Settings (like in v2rayNG) and nothing
+         * happened. The default (index 0) is v2rayNG's default,
+         * 10.10.14.1 — the old 172.19.0.1 is not in v2rayNG's list
+         * at all, and 172.19.0.0/16 is a range carriers and hotspots
+         * use, so a clash there can blackhole TUN traffic.
+         */
+        fun tunIpv4ClientAddress(index: String?): String {
+            val clients = listOf(
+                "10.10.14.1", "10.1.0.1", "10.0.0.1", "172.31.0.1",
+                "172.20.0.1", "172.16.0.1", "192.168.100.1",
+            )
+            val i = index?.trim()?.toIntOrNull() ?: 0
+            return clients.getOrElse(i) { clients[0] }
+        }
     }
 
     /** Result of [prepareStart]: rejected with a message, or ready to dial. */
@@ -238,11 +260,24 @@ class TaptapVpnService : VpnService() {
         // values fall back to 1500 instead of breaking establish().
         val mtu = settings.vpnMtu.trim().toIntOrNull()
             ?.takeIf { it in 576..9000 } ?: 1500
+        // v1.0.10: the Builder mirrors v2rayNG's CoreVpnService
+        // (configureNetworkSettings + configurePlatformFeatures):
+        // the TUN address comes from the user's interface-address
+        // setting (default 10.10.14.1, v2rayNG's default — NOT the
+        // old hardcoded 172.19.0.1); the IPv6 default route is only
+        // added when IPv6 is enabled (v2rayNG gates it on
+        // PREF_IPV6_ENABLED, default off — v1.0.9 added it always);
+        // and the VPN is marked unmetered on API 29+ (v2rayNG
+        // setMetered(false)) so Android does not throttle or defer
+        // traffic on it.
         val builder = Builder()
             .setSession("TaptapX")
-            .addAddress("172.19.0.1", 30)
+            .addAddress(tunIpv4ClientAddress(settings.vpnInterfaceAddress), 30)
             .addRoute("0.0.0.0", 0)
-            .addRoute("::", 0)
+            .apply {
+                if (settings.ipv6Enabled) addRoute("::", 0)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
+            }
             .addDnsServer(dns)
             .setMtu(mtu)
         // v1.0.9: exclude our own package from the VPN — v2rayNG's
