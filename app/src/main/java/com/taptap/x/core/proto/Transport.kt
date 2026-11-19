@@ -2,6 +2,7 @@ package com.taptap.x.core.proto
 
 import com.taptap.x.core.DialLog
 import com.taptap.x.core.DnsResolver
+import com.taptap.x.core.TunnelState
 import com.taptap.x.data.ProfileItem
 import java.io.IOException
 import java.io.InputStream
@@ -34,7 +35,10 @@ object Transport {
      * sockets bypass the TUN (VpnService.protect). Null = no
      * protection (unit tests, direct use). Returning false aborts
      * the dial — a dial that cannot bypass the VPN would loop into
-     * the tunnel forever.
+     * the tunnel forever — but ONLY while [TunnelState.up]: before
+     * establish() there is no VPN yet and protect() returns false,
+     * so a pre-TUN dial goes direct instead of failing instantly
+     * (v1.0.7: every v1.0.6 probe died here with "protect() gagal").
      */
     @Volatile
     var protectSocket: ((Socket) -> Boolean)? = null
@@ -108,8 +112,13 @@ object Transport {
             // as a stuck read (see DialWatchdog).
             wd?.arm(plain)
             val protect = protectSocket
-            if (protect != null && !protect(plain)) {
+            if (protect != null && TunnelState.up && !protect(plain)) {
                 throw IllegalStateException("protect() gagal — dial tidak bisa bypass VPN")
+            }
+            if (protect != null && !TunnelState.up) {
+                // Probe-first dial, TUN belum naik: tidak ada VPN
+                // yang perlu di-bypass, dial langsung (v1.0.7).
+                DialLog.log("PROTECT", "TUN belum naik — dial ${item.address} langsung tanpa protect")
             }
             // Tahap DNS: resolve langsung (UDP ke 8.8.8.8, bypass TUN),
             // fallback ke resolver sistem bila gagal (relay DNS mungkin

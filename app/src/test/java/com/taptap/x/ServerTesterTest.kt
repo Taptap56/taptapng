@@ -1,6 +1,7 @@
 package com.taptap.x
 
 import com.taptap.x.core.ServerTester
+import com.taptap.x.core.TunnelState
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -36,14 +37,36 @@ class ServerTesterTest {
     fun `tcp test fails fast when protect refuses the socket`() {
         // v1.0.4: when the VPN is up the service sets a protect hook
         // (VpnService.protect); a refused protect must fail fast
-        // instead of dialling through the tunnel.
+        // instead of dialling through the tunnel. v1.0.7: the refusal
+        // is only enforced while the TUN is up (TunnelState.up).
         ServerSocket(0).use { server ->
             val port = server.localPort
+            TunnelState.up = true
             ServerTester.protectSocket = { false }
             try {
                 assertEquals(-1, ServerTester.testTcp("127.0.0.1", port))
             } finally {
                 ServerTester.protectSocket = null
+                TunnelState.up = false
+            }
+        }
+    }
+
+    @Test
+    fun `tcp test ignores a refusing protect hook while the TUN is down`() {
+        // v1.0.7: during start (probe window) protect() returns false
+        // because no TUN exists yet — the test must go direct instead
+        // of reporting a false failure. Fails on v1.0.6 code (-1).
+        ServerSocket(0).use { server ->
+            val port = server.localPort
+            TunnelState.up = false
+            ServerTester.protectSocket = { false }
+            try {
+                val ms = ServerTester.testTcp("127.0.0.1", port)
+                assertTrue(ms >= 0, "expected >= 0 ms, got $ms")
+            } finally {
+                ServerTester.protectSocket = null
+                TunnelState.up = false
             }
         }
     }
@@ -109,8 +132,10 @@ class ServerTesterTest {
     fun `tcp detailed reports protect gagal when the hook refuses`() {
         // v1.0.5 showed a bare "Timeout" for this case — the phone
         // could not tell the protect hook from a dead network.
+        // v1.0.7: only enforced while the TUN is up.
         ServerSocket(0).use { server ->
             val port = server.localPort
+            TunnelState.up = true
             ServerTester.protectSocket = { false }
             try {
                 val r = ServerTester.testTcpDetailed("127.0.0.1", port)
@@ -118,6 +143,46 @@ class ServerTesterTest {
                 assertEquals("protect gagal", r.failureStage)
             } finally {
                 ServerTester.protectSocket = null
+                TunnelState.up = false
+            }
+        }
+    }
+
+    @Test
+    fun `tcp detailed ignores a refusing protect hook while the TUN is down`() {
+        // v1.0.7: same gate as testTcp — a refused hook pre-TUN must
+        // not produce a "protect gagal" stage. Fails on v1.0.6 code.
+        ServerSocket(0).use { server ->
+            val port = server.localPort
+            TunnelState.up = false
+            ServerTester.protectSocket = { false }
+            try {
+                val r = ServerTester.testTcpDetailed("127.0.0.1", port)
+                assertTrue(r.ms >= 0, "expected >= 0 ms, got ${r.ms}")
+                assertEquals(null, r.failureStage)
+            } finally {
+                ServerTester.protectSocket = null
+                TunnelState.up = false
+            }
+        }
+    }
+
+    @Test
+    fun `tcpConnectMs ignores a refusing protect hook while the TUN is down`() {
+        // v1.0.7: the tcpConnectMsDetailed fallback has its own
+        // protect check — it needs the same gate. Fails on v1.0.6.
+        ServerSocket(0).use { server ->
+            val port = server.localPort
+            TunnelState.up = false
+            ServerTester.protectSocket = { false }
+            try {
+                val ok = ServerTester.tcpConnectMs(
+                    java.net.InetAddress.getByName("127.0.0.1"), port, 1000,
+                )
+                assertTrue(ok >= 0, "expected >= 0 ms, got $ok")
+            } finally {
+                ServerTester.protectSocket = null
+                TunnelState.up = false
             }
         }
     }

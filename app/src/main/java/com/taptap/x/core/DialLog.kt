@@ -21,8 +21,12 @@ import java.util.Locale
  *
  * NEVER log credentials: [failure] includes the exception message
  * only for network exception types (our own stage tags and system
- * socket messages — neither carries a UUID, password, or key).
- * Anything else (e.g. UUID parsing) logs the class name only.
+ * socket messages — neither carries a UUID, password, or key) and
+ * for IllegalStateException (our own state errors: "protect() gagal",
+ * "Entry Onering belum didukung", "Gagal establish TUN" — audited,
+ * all throw sites are static messages with no user input). Anything
+ * else (e.g. IllegalArgumentException, which UUID parsing throws
+ * with the raw input in the message) logs the class name only.
  */
 object DialLog {
 
@@ -51,7 +55,14 @@ object DialLog {
             is java.net.ConnectException,
             is javax.net.ssl.SSLException,
             is java.io.EOFException,
-            is java.io.IOException -> "$cls: ${e.message}"
+            is java.io.IOException,
+            // v1.0.7: our own state errors carry the diagnosis
+            // ("protect() gagal — dial tidak bisa bypass VPN") — the
+            // v1.0.6 phone log only ever said "IllegalStateException",
+            // which named nothing. Deliberately NOT extended to
+            // IllegalArgumentException: UUID.fromString throws that
+            // type with the raw UUID in the message.
+            is IllegalStateException -> "$cls: ${e.message}"
             else -> cls
         }
     }

@@ -53,8 +53,13 @@ object DnsResolver {
      * Hook protect untuk socket DNS (VpnService.protect), dipasang
      * service saat VPN naik — pola yang sama dengan
      * `Transport.protectSocket`. Null = tanpa protect (unit test, atau
-     * VPN mati). Bila hook menolak (false), query TIDAK dikirim:
-     * query tanpa protect masuk lagi ke TUN dan berputar di relay.
+     * VPN mati). Bila hook menolak (false) DAN TUN sudah naik, query
+     * TIDAK dikirim: query tanpa protect masuk lagi ke TUN dan
+     * berputar di relay. Bila TUN belum naik ([TunnelState.up] false)
+     * protect tidak dipaksakan — protect() mengembalikan false sebelum
+     * establish(), jadi query langsung jalan tanpa protect (v1.0.7:
+     * kalau tidak, dial probe untuk entry ber-domain mati di DNS
+     * sebelum sempat mencoba resolver sistem).
      */
     @Volatile
     var protectUdp: ((DatagramSocket) -> Boolean)? = null
@@ -126,7 +131,7 @@ object DnsResolver {
         val socket = DatagramSocket()
         try {
             val protect = protectUdp
-            if (protect != null && !protect(socket)) {
+            if (protect != null && TunnelState.up && !protect(socket)) {
                 throw IOException("protect() gagal — query DNS tidak bisa bypass VPN")
             }
             socket.soTimeout = timeoutMs

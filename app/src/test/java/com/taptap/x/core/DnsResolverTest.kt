@@ -96,10 +96,10 @@ class DnsResolverTest {
         assertTrue(DnsResolver.parseAnswers(ByteArray(0)).isEmpty())
     }
 
-    @Test
-    fun `resolve answers from a fake local DNS server`() {
-        // Server DNS palsu: jawab setiap query dengan A 93.184.216.34,
-        // echo pertanyaan + ID dari query.
+    /** Fake DNS server: answers every query with A 93.184.216.34,
+     * echoing the question + ID from the query. Returns the socket,
+     * its stop flag, and its thread. */
+    private fun fakeDnsServer(): Triple<DatagramSocket, AtomicBoolean, Thread> {
         val server = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
         val running = AtomicBoolean(true)
         val serverThread = Thread {
@@ -135,6 +135,20 @@ class DnsResolverTest {
                 }
             }
         }.apply { isDaemon = true; start() }
+        return Triple(server, running, serverThread)
+    }
+
+    private fun stopFakeDns(server: DatagramSocket, running: AtomicBoolean, thread: Thread) {
+        running.set(false)
+        server.close()
+        thread.join(1000)
+    }
+
+    @Test
+    fun `resolve answers from a fake local DNS server`() {
+        // Server DNS palsu: jawab setiap query dengan A 93.184.216.34,
+        // echo pertanyaan + ID dari query.
+        val (server, running, serverThread) = fakeDnsServer()
         val oldServer = DnsResolver.dnsServer
         val oldPort = DnsResolver.dnsPort
         try {
@@ -145,9 +159,58 @@ class DnsResolverTest {
         } finally {
             DnsResolver.dnsServer = oldServer
             DnsResolver.dnsPort = oldPort
-            running.set(false)
-            server.close()
-            serverThread.join(1000)
+            stopFakeDns(server, running, serverThread)
+        }
+    }
+
+    @Test
+    fun `resolve ignores a refusing protect hook while the TUN is down`() {
+        // v1.0.7 (taptapx-4.txt, 2026-11-20 03:19): the probe dials
+        // before establish(), so protect() refuses — the direct DNS
+        // query must still go out. "probe.invalid" cannot be resolved
+        // by the system resolver, so only the direct query can answer
+        // it: on v1.0.6 code this throws "protect() gagal" instead.
+        val (server, running, serverThread) = fakeDnsServer()
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        TunnelState.up = false
+        DnsResolver.protectUdp = { false }
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = server.localPort
+            val addr = DnsResolver.resolve("probe.invalid", timeoutMs = 2000)
+            assertEquals("93.184.216.34", addr.hostAddress)
+        } finally {
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            DnsResolver.protectUdp = null
+            TunnelState.up = false
+            stopFakeDns(server, running, serverThread)
+        }
+    }
+
+    @Test
+    fun `resolve still fails when protect refuses while the TUN is up`() {
+        // Guard: once the TUN exists, an unprotected query would loop
+        // into the relay, so the refusal must stay fatal.
+        val (server, running, serverThread) = fakeDnsServer()
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        TunnelState.up = true
+        DnsResolver.protectUdp = { false }
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = server.localPort
+            val e = assertThrows(IOException::class.java) {
+                DnsResolver.resolve("example.com", timeoutMs = 2000)
+            }
+            assertTrue(e.message!!.contains("protect() gagal"), "pesan: ${e.message}")
+        } finally {
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            DnsResolver.protectUdp = null
+            TunnelState.up = false
+            stopFakeDns(server, running, serverThread)
         }
     }
 

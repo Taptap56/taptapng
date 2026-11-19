@@ -42,7 +42,10 @@ object ServerTester {
      * proxy (TLS to the entry, which hangs when the window is closed)
      * and always reports "Timeout" — even though a plain TCP connect
      * to the server would succeed. Protecting the socket measures the
-     * real direct TCP delay, like v2rayNG.
+     * real direct TCP delay, like v2rayNG. The refusal is only
+     * enforced while [TunnelState.up]: before establish() protect()
+     * returns false (no VPN yet), so a test run during start goes
+     * direct instead of reporting a false "protect gagal" (v1.0.7).
      */
     @Volatile
     var protectSocket: ((Socket) -> Boolean)? = null
@@ -57,9 +60,11 @@ object ServerTester {
         val start = System.nanoTime()
         return try {
             Socket().use { socket ->
-                // Bypass our own TUN when the service set the hook;
-                // a refused protect fails fast instead of nesting.
-                if (protectSocket?.invoke(socket) == false) {
+                // Bypass our own TUN when the service set the hook
+                // and the TUN is up; a refused protect fails fast
+                // instead of nesting. While the TUN is down the hook
+                // is ignored (protect() returns false pre-establish).
+                if (TunnelState.up && protectSocket?.invoke(socket) == false) {
                     return TestResult(-1, "protect gagal")
                 }
                 // Resolve dulu lewat DNS langsung (bypass TUN),
@@ -145,7 +150,7 @@ object ServerTester {
         val start = System.nanoTime()
         return try {
             Socket().use { socket ->
-                if (protectSocket?.invoke(socket) == false) {
+                if (TunnelState.up && protectSocket?.invoke(socket) == false) {
                     return TestResult(-1, "protect gagal")
                 }
                 socket.connect(InetSocketAddress(address, port), timeoutMs)

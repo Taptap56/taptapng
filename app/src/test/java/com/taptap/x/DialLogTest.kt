@@ -75,6 +75,31 @@ class DialLogTest {
     }
 
     @Test
+    fun `failure includes the message for IllegalStateException`() {
+        // v1.0.7 (taptapx-4.txt, 2026-11-20 03:19): the phone log
+        // only ever said "IllegalStateException" — the message
+        // ("protect() gagal — dial tidak bisa bypass VPN") only
+        // appeared in the status bar, so the DialLog alone could
+        // not say where the dial died. On v1.0.6 code this line
+        // carries the class name only.
+        DialLog.clear()
+        try {
+            DialLog.failure(
+                "PROBE",
+                IllegalStateException("protect() gagal — dial tidak bisa bypass VPN"),
+            )
+            val lines = DialLog.lines()
+            assertEquals(1, lines.size)
+            assertTrue(
+                lines[0].contains("protect() gagal — dial tidak bisa bypass VPN"),
+                lines[0],
+            )
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
     fun `logcat sink receives every line`() {
         DialLog.clear()
         val seen = mutableListOf<Pair<String, String>>()

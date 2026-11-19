@@ -12,6 +12,7 @@ import com.taptap.x.R
 import com.taptap.x.core.DialLog
 import com.taptap.x.core.DnsResolver
 import com.taptap.x.core.ServerTester
+import com.taptap.x.core.TunnelState
 import com.taptap.x.core.proto.DialWatchdog
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyClientFactory
@@ -245,6 +246,11 @@ class TaptapVpnService : VpnService() {
             .setMtu(mtu)
         val fd = builder.establish()
             ?: throw IllegalStateException("Gagal establish TUN (izin VPN ditolak?)")
+        // The TUN exists from here on: dial/DNS/test sockets must
+        // now be protected (TunnelState.up gates enforcement in
+        // Transport / DnsResolver / ServerTester). Before this line
+        // protect() returns false, so the probe dials direct (v1.0.7).
+        TunnelState.up = true
         tunFd = fd
         try {
             val tunIn = FileInputStream(fd.fileDescriptor)
@@ -297,7 +303,12 @@ class TaptapVpnService : VpnService() {
     }
 
     private fun installProtectHooks() {
-        // Dial sockets must bypass our own TUN, or they loop forever.
+        // Dial sockets must bypass our own TUN, or they loop forever
+        // — but only once the TUN exists. The hooks are installed
+        // before the probe, and enforcement is gated on
+        // TunnelState.up inside Transport / DnsResolver /
+        // ServerTester: pre-TUN protect() returns false, so the
+        // probe dials direct instead of failing instantly (v1.0.7).
         Transport.protectSocket = { socket -> protect(socket) }
         // Same for delay-test sockets (v1.0.4): without this, a test
         // run while the VPN is up dials through the tunnel and
@@ -315,6 +326,9 @@ class TaptapVpnService : VpnService() {
      * in-flight probe unblocks at once.
      */
     private fun teardownTunnel() {
+        // The TUN is going away: from here on there is nothing to
+        // bypass again, so protect enforcement switches off first.
+        TunnelState.up = false
         probeWatchdog?.cancel()
         probeWatchdog = null
         synchronized(tunnelLock) {
