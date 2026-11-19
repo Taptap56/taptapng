@@ -222,6 +222,9 @@ class MainActivity : AppCompatActivity() {
                     viewModel.delays.collect { adapter.delays = it }
                 }
                 launch {
+                    viewModel.delayStages.collect { adapter.delayStages = it }
+                }
+                launch {
                     viewModel.isRunning.collect { running ->
                         fab.setImageResource(
                             if (running) R.drawable.ic_stop_24dp else R.drawable.ic_play_24dp
@@ -586,7 +589,17 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, TaptapVpnService::class.java)
             .setAction(TaptapVpnService.ACTION_START)
         startService(intent)
-        viewModel.setRunning(true, getString(R.string.status_running))
+        // v1.0.6, fix B: name the entry being dialled right away —
+        // the old generic "Running" left the user guessing which
+        // entry the status belonged to, and the 2 s poll then
+        // restored the service's (possibly stale) text.
+        val item = viewModel.selectedItem()
+        val optimistic = if (item != null) {
+            "Connecting: ${com.taptap.x.service.dialLabel(item)}…"
+        } else {
+            getString(R.string.status_running)
+        }
+        viewModel.setRunning(true, optimistic)
         // The service may refuse to start (no server / SSH profile /
         // bad profile): re-read its real state shortly after.
         fab.postDelayed({ syncServiceState() }, 1500)

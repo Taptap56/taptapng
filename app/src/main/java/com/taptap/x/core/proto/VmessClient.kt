@@ -1,9 +1,11 @@
 package com.taptap.x.core.proto
 
+import com.taptap.x.core.DialLog
 import com.taptap.x.data.ProfileItem
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.AEADBadTagException
 
 /**
@@ -43,10 +45,13 @@ import javax.crypto.AEADBadTagException
  */
 class VmessClient(private val item: ProfileItem) : ProxyClient {
 
-    private var stream: ProxyStream? = null
+    // v1.0.6: every stream this client opened, so close() can close
+    // them all — but a new dial NEVER closes the previous stream
+    // (the old single `stream` field + leading close() killed the
+    // first session whenever two apps dialled at once).
+    private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
     override fun dial(targetHost: String, targetPort: Int): ProxyStream {
-        close()
         val transport = Transport.open(item)
         try {
             val session = VmessCrypto.newSession(item, targetHost, targetPort)
@@ -54,13 +59,17 @@ class VmessClient(private val item: ProfileItem) : ProxyClient {
             transport.output.flush()
             // Fail fast: the server answers with its response header
             // right after dispatching; a bad UUID/header dies here.
+            Transport.noteStage("VMess")
             VmessCrypto.readResponseHeader(transport.input, session)
             val bodyOut = VmessBodyOutputStream(transport.output, session)
             val bodyIn = VmessBodyInputStream(transport.input, session)
             transport.socket.soTimeout = 0
-            val s = SocketProxyStream(transport.socket, bodyIn, bodyOut)
-            stream = s
-            return s
+            Transport.clearWatchdogSocket()
+            DialLog.log("VMess", "handshake ok")
+            return TrackedProxyStream(
+                SocketProxyStream(transport.socket, bodyIn, bodyOut),
+                openStreams,
+            )
         } catch (e: java.net.SocketTimeoutException) {
             // v1.0.5: tag the VMess stage — the dial got through
             // TCP/TLS/WS but the server never answered the VMess
@@ -68,16 +77,21 @@ class VmessClient(private val item: ProfileItem) : ProxyClient {
             // TunForwarder.dialFailureReason still maps it, now
             // with the stage tag in the message.
             transport.close()
-            throw java.net.SocketTimeoutException("VMess gagal: ${e.message}")
+            val failure = Transport.preferWatchdogFailure(
+                java.net.SocketTimeoutException("VMess gagal: ${e.message}"),
+            )
+            DialLog.failure("VMess", failure)
+            throw failure
         } catch (e: Exception) {
             transport.close()
-            throw e
+            val failure = Transport.preferWatchdogFailure(e)
+            DialLog.failure("VMess", failure)
+            throw failure
         }
     }
 
     override fun close() {
-        runCatching { stream?.close() }
-        stream = null
+        openStreams.toList().forEach { runCatching { it.close() } }
     }
 }
 

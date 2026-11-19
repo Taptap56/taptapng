@@ -1,9 +1,11 @@
 package com.taptap.x.core.proto
 
+import com.taptap.x.core.DialLog
 import com.taptap.x.data.ProfileItem
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.AEADBadTagException
 
 /**
@@ -26,30 +28,35 @@ import javax.crypto.AEADBadTagException
  */
 class SsClient(private val item: ProfileItem) : ProxyClient {
 
-    private var stream: ProxyStream? = null
+    // v1.0.6: see VmessClient — streams stay open independently.
+    private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
     override fun dial(targetHost: String, targetPort: Int): ProxyStream {
-        close()
         val cipher = SsCrypto.resolveCipher(item.method)
         val transport = Transport.open(item.copy(network = "tcp", tls = false))
         try {
+            Transport.noteStage("SS")
             val session = SsCrypto.newSession(item.password, cipher)
             transport.output.write(session.salt)
             val bodyOut = SsBodyOutputStream(transport.output, session, targetHost, targetPort)
             val bodyIn = SsBodyInputStream(transport.input, session)
             transport.socket.soTimeout = 0
-            val s = SocketProxyStream(transport.socket, bodyIn, bodyOut)
-            stream = s
-            return s
+            Transport.clearWatchdogSocket()
+            DialLog.log("SS", "dial ok")
+            return TrackedProxyStream(
+                SocketProxyStream(transport.socket, bodyIn, bodyOut),
+                openStreams,
+            )
         } catch (e: Exception) {
             transport.close()
-            throw e
+            val failure = Transport.preferWatchdogFailure(e)
+            DialLog.failure("SS", failure)
+            throw failure
         }
     }
 
     override fun close() {
-        runCatching { stream?.close() }
-        stream = null
+        openStreams.toList().forEach { runCatching { it.close() } }
     }
 }
 

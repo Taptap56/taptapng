@@ -56,6 +56,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _delays = MutableStateFlow<Map<String, Long>>(emptyMap())
     val delays: StateFlow<Map<String, Long>> = _delays.asStateFlow()
 
+    /**
+     * guid -> failure stage for failed delay tests ("DNS gagal",
+     * "TCP timeout", "protect gagal", ...). v1.0.6, fix C: the row
+     * label shows the stage instead of a bare "Timeout".
+     */
+    private val _delayStages = MutableStateFlow<Map<String, String>>(emptyMap())
+    val delayStages: StateFlow<Map<String, String>> = _delayStages.asStateFlow()
+
     init {
         store.load()
         _profiles.value = store.profiles.toList()
@@ -201,17 +209,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val results = LinkedHashMap<String, Long>()
             for (item in items) {
-                val ms = if (realPing) {
+                val r = if (realPing) {
                     // v1.0.5: the (host, port) overload falls back to a
                     // TCP connect on the entry's own port — the
                     // host-only isReachable never answers on a
                     // non-root phone (ICMP needs raw sockets).
-                    ServerTester.testRealPing(item.address, item.port)
+                    ServerTester.testRealPingDetailed(item.address, item.port)
                 } else {
-                    ServerTester.testTcp(item.address, item.port)
+                    ServerTester.testTcpDetailed(item.address, item.port)
                 }
-                results[item.guid] = ms
-                _delays.value = _delays.value + (item.guid to ms)
+                results[item.guid] = r.ms
+                _delays.value = _delays.value + (item.guid to r.ms)
+                _delayStages.value = if (r.failureStage != null) {
+                    _delayStages.value + (item.guid to r.failureStage)
+                } else {
+                    _delayStages.value - item.guid
+                }
             }
             _statusText.value = "Tested ${results.size} server(s)"
         }
@@ -246,12 +259,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 _delays.value = _delays.value + (item.guid to if (outcome.isSuccess) ms else -1)
             } else {
-                ms = ServerTester.testTcp(item.address, item.port)
+                val r = ServerTester.testTcpDetailed(item.address, item.port)
+                ms = r.ms
                 _delays.value = _delays.value + (item.guid to ms)
+                _delayStages.value = if (r.failureStage != null) {
+                    _delayStages.value + (item.guid to r.failureStage)
+                } else {
+                    _delayStages.value - item.guid
+                }
                 label = if (ms >= 0) {
                     "${item.displayName()}: ${ms}ms"
                 } else {
-                    "${item.displayName()}: timeout"
+                    "${item.displayName()}: ${r.failureStage ?: "timeout"}"
                 }
             }
             _statusText.value = label

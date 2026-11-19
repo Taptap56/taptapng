@@ -9,6 +9,7 @@ import java.net.ServerSocket
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -109,6 +110,85 @@ class VmessClientTest {
         }
         serverThread.join(5_000)
         serverError?.let { throw AssertionError("Fake server gagal", it) }
+    }
+
+    @Test
+    fun `second dial does not close the first stream`() {
+        // v1.0.6: every client's dial() used to start with close(),
+        // killing the previous stream — two apps connecting at once
+        // killed the first session. Streams must stay open
+        // independently. On v1.0.5 the write to the first stream
+        // throws (socket closed by the second dial).
+        val server = ServerSocket(0, 50, java.net.InetAddress.getByName("::1"))
+        val port = server.localPort
+        val received = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val errors = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+        val serverThreads = mutableListOf<Thread>()
+        repeat(2) {
+            val t = Thread {
+                try {
+                    val socket = server.accept()
+                    socket.soTimeout = 5_000
+                    val input = socket.getInputStream()
+                    val output = socket.getOutputStream()
+                    val opened = VmessCrypto.openRequestHeader(VmessCrypto.cmdKey(uuid), input)
+                    val session = VmessSession(
+                        requestBytes = ByteArray(0),
+                        bodyKey = opened.header.bodyKey,
+                        bodyIV = opened.header.bodyIV,
+                        responseBodyKey = Crypto.sha256(opened.header.bodyKey).copyOfRange(0, 16),
+                        responseBodyIV = Crypto.sha256(opened.header.bodyIV).copyOfRange(0, 16),
+                        responseV = opened.header.responseV,
+                        security = VmessSecurity.AES_128_GCM,
+                    )
+                    output.write(VmessCrypto.sealResponseHeader(session, session.responseV))
+                    output.flush()
+                    val reqNonce = VmessCrypto.ChunkNonce(session.bodyIV)
+                    val reqMask = Shake128(session.bodyIV)
+                    while (true) {
+                        val payload = try {
+                            readChunk(
+                                input, session.bodyKey, reqNonce, reqMask,
+                                VmessSecurity.AES_128_GCM,
+                            )
+                        } catch (e: Exception) {
+                            break
+                        }
+                        if (payload.isEmpty()) break // termination chunk
+                        received.add(String(payload, Charsets.UTF_8))
+                    }
+                } catch (e: Throwable) {
+                    errors.add(e)
+                }
+            }
+            t.isDaemon = true
+            t.start()
+            serverThreads.add(t)
+        }
+        val item = ProfileItem(
+            configType = ConfigType.VMESS,
+            address = "::1", port = port,
+            uuid = uuid, security = "aes-128-gcm",
+            network = "tcp",
+        )
+        val client = VmessClient(item)
+        val s1 = client.dial("example.com", 443)
+        val s2 = client.dial("example.com", 443)
+        try {
+            s1.output.write("first".toByteArray())
+            s1.output.flush()
+            s2.output.write("second".toByteArray())
+            s2.output.flush()
+        } finally {
+            runCatching { s1.close() }
+            runCatching { s2.close() }
+            client.close()
+        }
+        serverThreads.forEach { it.join(5_000) }
+        runCatching { server.close() }
+        errors.firstOrNull()?.let { throw AssertionError("Fake server gagal", it) }
+        assertTrue(received.contains("first"), "server never got the first stream's bytes: $received")
+        assertTrue(received.contains("second"), "server never got the second stream's bytes: $received")
     }
 
     @Test

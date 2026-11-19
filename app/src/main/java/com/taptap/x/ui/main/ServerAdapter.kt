@@ -47,6 +47,13 @@ class ServerAdapter(
             notifyDataSetChanged()
         }
 
+    /** guid -> failure stage for failed delay tests (v1.0.6, fix C). */
+    var delayStages: Map<String, String> = emptyMap()
+        set(value) {
+            field = value
+            notifyDataSetChanged()
+        }
+
     var gridMode: Boolean = false
         set(value) {
             field = value
@@ -90,7 +97,9 @@ class ServerAdapter(
         if (delayMs == null) {
             holder.delay.text = ""
         } else if (delayMs < 0) {
-            holder.delay.text = "Timeout"
+            // v1.0.6: show WHERE the test died instead of a bare
+            // "Timeout" ("TCP timeout", "DNS gagal", "protect gagal").
+            holder.delay.text = delayStages[item.guid]?.takeIf { it.isNotBlank() } ?: "Timeout"
             holder.delay.setTextColor(ContextCompat.getColor(context, R.color.colorPingRed))
         } else {
             holder.delay.text = "${delayMs}ms"

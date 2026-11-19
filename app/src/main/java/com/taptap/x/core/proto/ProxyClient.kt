@@ -10,7 +10,11 @@ import java.net.Socket
  * A [ProxyClient] opens one proxied byte stream to [targetHost]:[targetPort]
  * per [dial] call. The target is sent inside the protocol header — it is
  * never resolved locally first. Each [dial] returns a fresh [ProxyStream];
- * dialing again closes the previous stream.
+ * streams stay open independently — v1.0.6: dialling again must NOT close
+ * the previous stream (the old `dial(){ close() }` killed the first
+ * session whenever two apps connected at once, because every client
+ * kept a single shared `stream` field). [close] closes every stream
+ * this client opened that has not been closed individually yet.
  *
  * Implementations must never log credentials (UUID, password, keys).
  */
@@ -39,6 +43,33 @@ class SocketProxyStream(
         runCatching { output.close() }
         runCatching { input.close() }
         runCatching { socket.close() }
+    }
+}
+
+/**
+ * A [ProxyStream] that removes itself from [registry] when closed
+ * (v1.0.6). The owning client registers every stream it returns;
+ * [ProxyClient.close] closes whatever is still registered. Without
+ * the self-removal the registry would keep every closed stream
+ * alive for the whole VPN session.
+ */
+class TrackedProxyStream(
+    private val inner: ProxyStream,
+    private val registry: MutableSet<ProxyStream>,
+) : ProxyStream {
+    override val input: InputStream get() = inner.input
+    override val output: OutputStream get() = inner.output
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    init {
+        registry.add(this)
+    }
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            registry.remove(this)
+            inner.close()
+        }
     }
 }
 

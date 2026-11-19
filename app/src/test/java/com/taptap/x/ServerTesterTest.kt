@@ -103,6 +103,52 @@ class ServerTesterTest {
         }
     }
 
+    // ---- v1.0.6, fix C: the delay label reports its own stage ----
+
+    @Test
+    fun `tcp detailed reports protect gagal when the hook refuses`() {
+        // v1.0.5 showed a bare "Timeout" for this case — the phone
+        // could not tell the protect hook from a dead network.
+        ServerSocket(0).use { server ->
+            val port = server.localPort
+            ServerTester.protectSocket = { false }
+            try {
+                val r = ServerTester.testTcpDetailed("127.0.0.1", port)
+                assertEquals(-1, r.ms)
+                assertEquals("protect gagal", r.failureStage)
+            } finally {
+                ServerTester.protectSocket = null
+            }
+        }
+    }
+
+    @Test
+    fun `tcp detailed reports TCP gagal on a closed port`() {
+        val r = ServerTester.testTcpDetailed("127.0.0.1", 1, timeoutMs = 1000)
+        assertEquals(-1, r.ms)
+        assertEquals("TCP gagal", r.failureStage)
+    }
+
+    @Test
+    fun `tcp detailed reports DNS gagal for an unresolvable host`() {
+        val start = System.nanoTime()
+        val r = ServerTester.testTcpDetailed("tidak-ada.invalid", 443, timeoutMs = 500)
+        assertEquals(-1, r.ms)
+        assertEquals("DNS gagal", r.failureStage)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        assertTrue(elapsedMs < 10_000, "testTcpDetailed menggantung $elapsedMs ms")
+    }
+
+    @Test
+    fun `tcp detailed succeeds against localhost listener with no stage`() {
+        ServerSocket(0).use { server ->
+            val port = server.localPort
+            val r = ServerTester.testTcpDetailed("127.0.0.1", port)
+            assertTrue(r.ms >= 0, "expected >= 0 ms, got ${r.ms}")
+            assertEquals(null, r.failureStage)
+        }
+    }
+
     @Test
     fun `real ping overload fails for unreachable host`() {
         // 192.0.2.1 (TEST-NET-1) tidak bisa dijangkau: ICMP gagal dan

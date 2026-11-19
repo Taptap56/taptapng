@@ -1,5 +1,6 @@
 package com.taptap.x.core.proto
 
+import com.taptap.x.core.DialLog
 import com.taptap.x.core.DnsResolver
 import com.taptap.x.data.ProfileItem
 import java.io.IOException
@@ -38,6 +39,47 @@ object Transport {
     @Volatile
     var protectSocket: ((Socket) -> Boolean)? = null
 
+    /**
+     * Per-thread dial watchdog (v1.0.6, fix A). The dialling thread
+     * (probe / forwarder dial) installs one before `client.dial()`
+     * and stops it in a `finally` after. Transport registers the
+     * live socket and the current stage with it, so a stage that
+     * blocks past the watchdog is killed by closing the socket.
+     * Null = no watchdog (plain unit-test dials).
+     */
+    private val threadWatchdog = ThreadLocal<DialWatchdog?>()
+
+    fun setThreadWatchdog(watchdog: DialWatchdog?) {
+        threadWatchdog.set(watchdog)
+    }
+
+    /** Record the stage the current thread's dial is in ("TCP", "TLS", ...). */
+    fun noteStage(stage: String) {
+        threadWatchdog.get()?.stage = stage
+    }
+
+    /** The protocol handshake succeeded: the watchdog must not touch this socket again. */
+    fun clearWatchdogSocket() {
+        threadWatchdog.get()?.clearSocket()
+    }
+
+    /**
+     * The watchdog-tagged failure for the current thread's dial, or
+     * null when the watchdog did not fire. Callers prefer this over
+     * the raw exception — it says WHERE the dial was stuck.
+     */
+    fun watchdogFailure(): SocketTimeoutException? {
+        val wd = threadWatchdog.get()
+        return if (wd != null && wd.fired) {
+            SocketTimeoutException("${wd.stage} gagal (watchdog ${wd.timeoutMs / 1000} dtk)")
+        } else {
+            null
+        }
+    }
+
+    /** Prefer the watchdog-tagged failure over [e] when the watchdog fired. */
+    fun preferWatchdogFailure(e: Exception): Exception = watchdogFailure() ?: e
+
     class OpenStream(
         val socket: Socket,
         val input: InputStream,
@@ -58,8 +100,13 @@ object Transport {
     fun open(item: ProfileItem): OpenStream {
         require(item.address.isNotBlank()) { "Address proxy kosong" }
         require(item.port in 1..65535) { "Port proxy di luar 1..65535: ${item.port}" }
+        val wd = threadWatchdog.get()
         val plain = Socket()
         try {
+            // Arm the watchdog on the plain socket FIRST: a connect
+            // that blocks past the watchdog is killed the same way
+            // as a stuck read (see DialWatchdog).
+            wd?.arm(plain)
             val protect = protectSocket
             if (protect != null && !protect(plain)) {
                 throw IllegalStateException("protect() gagal — dial tidak bisa bypass VPN")
@@ -72,7 +119,10 @@ object Transport {
             // sampai resolver menyerah (gejala v1.0.4: status macet di
             // "Connecting..." selamanya). Di sini address sudah IP
             // hasil resolve, jadi connect() tidak lookup lagi.
+            noteStage("DNS")
             val target = DnsResolver.resolveWithSystemFallback(item.address, item.port)
+            DialLog.log("DNS", "${item.address} -> $target")
+            noteStage("TCP")
             try {
                 plain.connect(InetSocketAddress(target, item.port), CONNECT_TIMEOUT_MS)
             } catch (e: SocketTimeoutException) {
@@ -83,9 +133,12 @@ object Transport {
                 throw IOException("TCP gagal: ${e.message}", e)
             }
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
+            DialLog.log("TCP", "${item.address}:${item.port} ok")
         } catch (e: Exception) {
             runCatching { plain.close() }
-            throw e
+            val failure = preferWatchdogFailure(e)
+            DialLog.failure("DIAL", failure)
+            throw failure
         }
         var socket: Socket = plain
         var input: InputStream = plain.getInputStream()
@@ -102,6 +155,7 @@ object Transport {
                 // — createSocket(plain, host, ...) tidak me-resolve
                 // host karena socket sudah terkoneksi; SNI di-set
                 // eksplisit dari item, bukan dari IP hasil resolve.
+                noteStage("TLS")
                 try {
                     socket = TlsUtil.wrap(plain, item)
                 } catch (e: SSLException) {
@@ -109,11 +163,16 @@ object Transport {
                 } catch (e: Exception) {
                     throw IOException("TLS gagal: ${e.message}", e)
                 }
+                // Re-arm the watchdog on the TLS socket: closing the
+                // plain socket would not unblock the TLS read.
+                wd?.arm(socket)
                 input = socket.getInputStream()
                 output = socket.getOutputStream()
+                DialLog.log("TLS", "${item.address} ok")
             }
             if (network == "ws") {
                 // Tahap WS.
+                noteStage("WS")
                 try {
                     val ws = WsTransport.connect(input, output, wsHost(item), wsPath(item))
                     input = ws.input
@@ -121,11 +180,19 @@ object Transport {
                 } catch (e: Exception) {
                     throw IOException("WS gagal: ${e.message}", e)
                 }
+                DialLog.log("WS", "${wsHost(item)}${wsPath(item)} ok")
             }
         } catch (e: Exception) {
             runCatching { socket.close() }
-            throw e
+            val failure = preferWatchdogFailure(e)
+            DialLog.failure("DIAL", failure)
+            throw failure
         }
+        // The transport ladder is up; the protocol handshake that
+        // follows runs under the same watchdog, and the protocol
+        // client clears the socket (clearWatchdogSocket) once its
+        // handshake has succeeded — so the timer can never kill a
+        // live relay socket.
         return OpenStream(socket, input, output)
     }
 

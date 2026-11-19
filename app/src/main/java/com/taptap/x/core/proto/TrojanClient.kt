@@ -1,6 +1,8 @@
 package com.taptap.x.core.proto
 
+import com.taptap.x.core.DialLog
 import com.taptap.x.data.ProfileItem
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Trojan client (trojan-gfw). After the (normally TLS) handshake the
@@ -21,32 +23,37 @@ import com.taptap.x.data.ProfileItem
  */
 class TrojanClient(private val item: ProfileItem) : ProxyClient {
 
-    private var stream: ProxyStream? = null
+    // v1.0.6: see VmessClient — streams stay open independently.
+    private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
     override fun dial(targetHost: String, targetPort: Int): ProxyStream {
         // Validate eagerly, before opening the TCP connection — like
         // VlessClient/SsClient. (Otherwise an empty password only
         // fails after a useless connect, with the wrong exception.)
         require(item.password.isNotEmpty()) { "Password Trojan kosong" }
-        close()
         val transport = Transport.open(item)
         try {
+            Transport.noteStage("Trojan")
             val header = TrojanCrypto.buildRequestHeader(item.password, targetHost, targetPort)
             transport.output.write(header)
             transport.output.flush()
             transport.socket.soTimeout = 0
-            val s = SocketProxyStream(transport.socket, transport.input, transport.output)
-            stream = s
-            return s
+            Transport.clearWatchdogSocket()
+            DialLog.log("Trojan", "handshake ok")
+            return TrackedProxyStream(
+                SocketProxyStream(transport.socket, transport.input, transport.output),
+                openStreams,
+            )
         } catch (e: Exception) {
             transport.close()
-            throw e
+            val failure = Transport.preferWatchdogFailure(e)
+            DialLog.failure("Trojan", failure)
+            throw failure
         }
     }
 
     override fun close() {
-        runCatching { stream?.close() }
-        stream = null
+        openStreams.toList().forEach { runCatching { it.close() } }
     }
 }
 

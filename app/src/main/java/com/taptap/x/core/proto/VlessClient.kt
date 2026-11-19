@@ -1,7 +1,9 @@
 package com.taptap.x.core.proto
 
+import com.taptap.x.core.DialLog
 import com.taptap.x.data.ProfileItem
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * VLESS client (version 0, XTLS). No body encryption — the stream after
@@ -20,10 +22,10 @@ import java.io.IOException
  */
 class VlessClient(private val item: ProfileItem) : ProxyClient {
 
-    private var stream: ProxyStream? = null
+    // v1.0.6: see VmessClient — streams stay open independently.
+    private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
     override fun dial(targetHost: String, targetPort: Int): ProxyStream {
-        close()
         val encryption = item.method.ifBlank { "none" }.lowercase()
         require(encryption == "none") {
             "VLESS encryption tidak didukung: $encryption (hanya none)"
@@ -33,20 +35,25 @@ class VlessClient(private val item: ProfileItem) : ProxyClient {
             val header = VlessCrypto.buildRequestHeader(item.uuid, targetHost, targetPort)
             transport.output.write(header)
             transport.output.flush()
+            Transport.noteStage("VLESS")
             VlessCrypto.readResponseHeader(transport.input)
             transport.socket.soTimeout = 0
-            val s = SocketProxyStream(transport.socket, transport.input, transport.output)
-            stream = s
-            return s
+            Transport.clearWatchdogSocket()
+            DialLog.log("VLESS", "handshake ok")
+            return TrackedProxyStream(
+                SocketProxyStream(transport.socket, transport.input, transport.output),
+                openStreams,
+            )
         } catch (e: Exception) {
             transport.close()
-            throw e
+            val failure = Transport.preferWatchdogFailure(e)
+            DialLog.failure("VLESS", failure)
+            throw failure
         }
     }
 
     override fun close() {
-        runCatching { stream?.close() }
-        stream = null
+        openStreams.toList().forEach { runCatching { it.close() } }
     }
 }
 

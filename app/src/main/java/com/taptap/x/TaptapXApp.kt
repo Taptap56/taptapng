@@ -4,7 +4,9 @@ import android.app.Application
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
+import android.util.Log
 import com.google.android.material.color.DynamicColors
+import com.taptap.x.core.DialLog
 import com.taptap.x.data.SettingsStore
 import java.util.Locale
 
@@ -17,6 +19,9 @@ class TaptapXApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppContext.init(this)
+        // v1.0.6, fix E: dial stages go to logcat (tag TaptapX-Dial)
+        // as well as to the in-app ring buffer.
+        DialLog.logcatSink = { tag, msg -> Log.d(tag, msg) }
         val settings = SettingsStore(this)
         settings.applyThemeMode()
         if (settings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

@@ -11,6 +11,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.taptap.x.R
 import com.taptap.x.TaptapXApp
+import com.taptap.x.core.DialLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -73,7 +74,23 @@ class LogActivity : AppCompatActivity() {
                 process.inputStream.bufferedReader().readText()
             }.getOrElse { "Failed to read logcat: ${it.message}" }
             withContext(Dispatchers.Main) {
-                logText.text = output.ifBlank { getString(R.string.log_empty) }
+                // v1.0.6, fix E: the in-app dial log first — it
+                // survives `logcat -c` and rotation, and it is the
+                // only place that shows every dial stage. The logcat
+                // dump follows with the DialLog lines filtered out
+                // (they are already above, via the logcat sink).
+                val dialLines = DialLog.lines()
+                val logcatLines = output.lines()
+                    .filterNot { it.contains(DialLog.TAG) }
+                val text = buildString {
+                    if (dialLines.isNotEmpty()) {
+                        append("— ${DialLog.TAG} (in-app) —\n")
+                        dialLines.forEach { append(it).append('\n') }
+                        append('\n')
+                    }
+                    append(logcatLines.joinToString("\n"))
+                }
+                logText.text = text.ifBlank { getString(R.string.log_empty) }
             }
         }
     }

@@ -1,7 +1,10 @@
 package com.taptap.x.service
 
+import com.taptap.x.core.DialLog
+import com.taptap.x.core.proto.DialWatchdog
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyStream
+import com.taptap.x.core.proto.Transport
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.DatagramPacket
@@ -226,13 +229,24 @@ class TunForwarder(
     private fun dial(session: TcpSession) {
         val key = session.key
         val stream: ProxyStream
+        // v1.0.6, fix A: every dial runs under its own watchdog, so
+        // a stage that blocks past 30 s is killed (socket closed)
+        // and reported with the stage — the dial can never hang
+        // forever while the status stays "Connecting...".
+        val watchdog = DialWatchdog()
+        Transport.setThreadWatchdog(watchdog)
         try {
+            watchdog.start()
             stream = proxy.dial(
                 TcpPacket.ipToString(key.dstIp),
                 key.dstPort,
             )
         } catch (e: Exception) {
             sessions.remove(key)
+            DialLog.failure(
+                "DIAL ${TcpPacket.ipToString(key.dstIp)}:${key.dstPort}",
+                e,
+            )
             // v1.0.4: report the failure instead of silently RST-ing
             // every dial while the status stays "Connecting..." forever.
             reportDialFailure(e)
@@ -244,6 +258,9 @@ class TunForwarder(
             )
             writePacket(rst)
             return
+        } finally {
+            watchdog.stop()
+            Transport.setThreadWatchdog(null)
         }
         if (session.closed.get() || session.state != State.DIALING) {
             runCatching { stream.close() }
