@@ -114,8 +114,10 @@ class MainToolbarTest {
         )
         val layout = read("app/src/main/res/layout/activity_main.xml")
         assertFalse(
-            layout.contains("app:menu="),
-            "layout must not also set app:menu (would duplicate items inflated in onCreateOptionsMenu)",
+            layout.contains("app:menu=\"@menu/main_toolbar\""),
+            "layout must not also set app:menu for the toolbar (would duplicate " +
+                "items inflated in onCreateOptionsMenu; the drawer NavigationView " +
+                "app:menu is unrelated and stays)",
         )
     }
 
@@ -140,8 +142,8 @@ class MainToolbarTest {
         )
         val layout = read("app/src/main/res/layout/activity_server_editor.xml")
         assertFalse(
-            layout.contains("app:menu="),
-            "layout must not also set app:menu (would duplicate items inflated in onCreateOptionsMenu)",
+            layout.contains("app:menu=\"@menu/editor_toolbar\""),
+            "layout must not also set app:menu for the toolbar (would duplicate items inflated in onCreateOptionsMenu)",
         )
     }
 }
