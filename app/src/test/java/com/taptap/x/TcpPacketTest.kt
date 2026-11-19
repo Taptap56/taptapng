@@ -138,6 +138,38 @@ class TcpPacketTest {
     }
 
     @Test
+    fun `parseTcp handles a realistic SYN with timestamps`() {
+        // v1.0.10: a real app SYN (Linux/Android) carries MSS +
+        // SACK + window scale + timestamps — a 44-byte header,
+        // data-offset byte 0xB0 (negative as a signed Byte). On
+        // v1.0.9 code parseTcp returned null for it, so the
+        // forwarder silently dropped every real SYN and the v1.0.9
+        // phone log had zero DIAL lines.
+        val options = byteArrayOf(
+            1, 1, 4, 2, // SACK-permitted
+            1, 3, 3, 7, // window scale 7
+            1, 1, 8, 10, 0, 0, 0, 0, 0, 0, 0, 0, // timestamps
+        )
+        val pkt = TcpPacket.buildTcp(
+            clientIp, serverIp, 12345, 443,
+            1000L, 0L, TcpPacket.FLAG_SYN, ByteArray(0),
+            mss = 1460, options = options,
+        )
+        val ip = TcpPacket.parseIp(pkt, pkt.size)
+        assertNotNull(ip)
+        val tcp = TcpPacket.parseTcp(ip!!.payload)
+        assertNotNull(tcp)
+        tcp!!
+        assertEquals(24, tcp.options.size)
+        val parsed = TcpPacket.parseTcpOptions(tcp.options)
+        assertEquals(1460, parsed.mss)
+        assertEquals(7, parsed.windowScale)
+        assertTrue(parsed.sackPermitted)
+        assertEquals(TcpPacket.TCP_WINDOW, tcp.window)
+        assertEquals(TcpPacket.FLAG_SYN, tcp.flags)
+    }
+
+    @Test
     fun `parseTcpOptions handles nop eol and unknown kinds`() {
         // EOL stops the scan; unknown kinds are skipped by length.
         val withEol = byteArrayOf(2, 4, 0x05, 0xB4.toByte(), 0, 3, 3, 7)

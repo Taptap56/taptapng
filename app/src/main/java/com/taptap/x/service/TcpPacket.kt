@@ -136,10 +136,21 @@ object TcpPacket {
         val dstPort = buf.short.toInt() and 0xFFFF
         val seq = buf.int.toLong() and 0xFFFFFFFFL
         val ack = buf.int.toLong() and 0xFFFFFFFFL
-        val dataOffset = (buf.get(12).toInt() ushr 4) * 4
+        val dataOffset = ((buf.get(12).toInt() and 0xFF) ushr 4) * 4
         if (payload.size < dataOffset) return null
         val flags = buf.get(13).toInt() and 0xFF
-        val window = buf.short.toInt() and 0xFFFF
+        // v1.0.10: the window field is at TCP offset 14 — the old
+        // relative buf.short() read at position 12 (data-offset +
+        // flags bytes) instead. And the data-offset byte above must
+        // be masked BEFORE ushr: a signed Byte >= 0x80 (ANY header
+        // with options — every real app SYN carries MSS/WS/SACK/
+        // timestamps, data offset 0x80/0xA0) sign-extends to a
+        // negative Int, ushr turns it into a huge number, and
+        // parseTcp returned null — the forwarder silently dropped
+        // every real SYN. That is the v1.0.9 "zero DIAL lines"
+        // root cause, not routing: the old tests only ever fed
+        // MSS-only SYNs (0x60, a positive byte).
+        val window = buf.getShort(14).toInt() and 0xFFFF
         val options = payload.copyOfRange(20, dataOffset)
         val data = payload.copyOfRange(dataOffset, payload.size)
         return TcpSegment(srcPort, dstPort, seq, ack, flags, window, data, options)
