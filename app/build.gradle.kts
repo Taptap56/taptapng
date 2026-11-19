@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -12,15 +11,20 @@ android {
         applicationId = "com.taptap.x"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Release + R8: the APK must stay small (XVEON-style).
+            // Signed with the debug keystore so the CI-built APK is
+            // installable on the phone (no release keystore exists yet).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -41,7 +45,6 @@ android {
 
     buildFeatures {
         buildConfig = true
-        compose = true
     }
 
     testOptions {
@@ -54,16 +57,12 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.activity.compose)
-
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.foundation)
-    implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.activity.ktx)
+    implementation(libs.androidx.material)
+    implementation(libs.androidx.recyclerview)
+    implementation(libs.androidx.preference.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.gson)
@@ -71,6 +70,10 @@ dependencies {
     // SSH (in-app, pure Java) — proof-of-concept protocol for Phase 1.
     // Same approach as XVEON: JSch, no native core.
     implementation(libs.jsch)
+
+    // QR code scan/generate: ZXing core only (no CameraX — CameraX
+    // would add megabytes; the scanner uses the framework Camera1 API).
+    implementation(libs.zxing.core)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)

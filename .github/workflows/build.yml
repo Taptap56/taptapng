@@ -1,11 +1,14 @@
-name: Build TaptapX (debug, arm64)
+name: Build TaptapX (release, arm64)
 
-# Debug build of TaptapX — a new Android app from scratch.
-# UI mirrors v2rayNG (Compose + Material 3); protocols are in-app
-# (Kotlin/Java, no bundled xray-core), so there is no native core
-# build step. SSH (JSch, pure Java) is the Phase 1 proof-of-concept
-# protocol, proven by an end-to-end unit test against an in-process
-# MINA SSHD server. No signing keystore needed: debug variant only.
+# Release build of TaptapX — a new Android app from scratch.
+# UI mirrors v2rayNG 2.3.15 with Android Views (XML layouts +
+# RecyclerView + Material Components, no Compose); protocols are
+# in-app (Kotlin/Java, no bundled xray-core), so there is no native
+# core build step. SSH (JSch, pure Java) is the Phase 1
+# proof-of-concept protocol, proven by an end-to-end unit test
+# against an in-process MINA SSHD server. Release is R8-minified
+# and signed with the debug keystore (no release keystore exists
+# yet) so the CI-built APK installs on the phone.
 
 on:
   workflow_dispatch:
@@ -39,37 +42,47 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
 
-    - name: Run unit tests (SSH end-to-end + ProfileStore)
+    - name: Run unit tests (SSH end-to-end + ProfileStore + LinkParser + ServerTester)
       run: |
         cd ${{ github.workspace }}
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
         ./gradlew :app:testDebugUnitTest
 
-    - name: Build APK (debug)
+    - name: Build APK (release, R8)
       run: |
         cd ${{ github.workspace }}
-        ./gradlew :app:assembleDebug
+        ./gradlew :app:assembleRelease
 
-    - name: Verify APK contents (no xray-core, small APK)
+    - name: Verify APK contents (no xray-core, no Compose, small APK)
       run: |
-        APK=$(ls ${{ github.workspace }}/app/build/outputs/apk/debug/*.apk | head -1)
+        APK=$(ls ${{ github.workspace }}/app/build/outputs/apk/release/*.apk | head -1)
         echo "APK=$APK"
         ls -la "$APK"
         # aapt2 is in the Android SDK build-tools.
         AAPT=$ANDROID_HOME/build-tools/37.0.0/aapt2
-        "$AAPT" dump badging "$APK" | head -3
-        unzip -l "$APK" | grep -E "classes.*\.dex|lib/|assets/" | head -20
+        "$AAPT" dump badging "$APK" | head -5
+        unzip -l "$APK" | grep -E "classes.*\.dex|lib/|assets/|res/" | head -20
         # There must be NO bundled xray-core: no libgojni.so anywhere.
         if unzip -l "$APK" | grep -q "libgojni"; then
           echo "ERROR: libgojni.so found — xray-core must NOT be bundled" >&2
           exit 1
         fi
+        # There must be NO Compose in the dex (Views-only UI).
+        TMPDEX=$(mktemp -d)
+        unzip -q -o "$APK" 'classes*.dex' -d "$TMPDEX"
+        if strings "$TMPDEX"/classes*.dex | grep -qi "androidx/compose"; then
+          echo "ERROR: androidx.compose found in dex — UI must be Views-only" >&2
+          exit 1
+        fi
+        echo "DEX files:"
+        ls -la "$TMPDEX"
         echo "APK size (bytes): $(stat -c%s "$APK")"
+        echo "APK SHA256: $(sha256sum "$APK" | cut -d' ' -f1)"
 
     - name: Upload APK
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
-        name: taptapx-debug-arm64
-        path: ${{ github.workspace }}/app/build/outputs/apk/debug/*.apk
+        name: taptapx-v1.0.1-release
+        path: ${{ github.workspace }}/app/build/outputs/apk/release/*.apk
