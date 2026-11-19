@@ -6,15 +6,15 @@ import com.taptap.x.service.ProxyStream
 import com.taptap.x.service.TcpPacket
 import com.taptap.x.service.TunForwarder
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.concurrent.thread
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
 
 /**
  * v1.0.10: the forwarder was silent — the v1.0.9 phone log had

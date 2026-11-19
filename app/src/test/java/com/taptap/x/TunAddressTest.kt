@@ -1,8 +1,8 @@
 package com.taptap.x
 
 import com.taptap.x.service.TaptapVpnService
-import org.junit.Assert.assertEquals
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
 
 /**
  * v1.0.10: the TUN address comes from the user's interface-address

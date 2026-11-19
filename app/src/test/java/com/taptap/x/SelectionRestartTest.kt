@@ -1,9 +1,9 @@
 package com.taptap.x
 
 import com.taptap.x.ui.main.shouldRestartOnSelect
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
 
 /**
  * v1.0.10: v2rayNG restarts the running service when the user taps
