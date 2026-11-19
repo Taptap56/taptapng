@@ -180,8 +180,19 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.reload()
-        viewModel.setRunning(TaptapVpnService.isRunning)
+        syncServiceState()
         if (lastDoubleColumn != settings.doubleColumnDisplay) applyLayoutManager()
+    }
+
+    /** Read the real service state (it may have failed to start, e.g.
+     *  SSH profile selected) instead of trusting the optimistic UI. */
+    private fun syncServiceState() {
+        val running = TaptapVpnService.isRunning
+        val status = TaptapVpnService.statusMessage.ifBlank {
+            if (running) getString(R.string.status_running)
+            else getString(R.string.status_stopped)
+        }
+        viewModel.setRunning(running, status)
     }
 
     private fun applyLayoutManager() {
@@ -549,6 +560,9 @@ class MainActivity : AppCompatActivity() {
             .setAction(TaptapVpnService.ACTION_START)
         startService(intent)
         viewModel.setRunning(true, getString(R.string.status_running))
+        // The service may refuse to start (no server / SSH profile /
+        // bad profile): re-read its real state shortly after.
+        fab.postDelayed({ syncServiceState() }, 1500)
     }
 
     private fun stopVpn() {

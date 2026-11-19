@@ -211,4 +211,207 @@ class LinkParserTest {
         assertNull(LinkParser.parse("https://example.com"))
         assertNull(LinkParser.parse(""))
     }
+
+    // ---- v2rayNG <-> TaptapX round trip ("saling copy") ----
+
+    @Test
+    fun `v2rayng exported vmess link parses fully`() {
+        // Exact shape of a v2rayNG vmess export: base64-JSON with the
+        // standard keys, aid as a string, tls empty when off.
+        val json = """{"v":"2","ps":"Taptap WS (CDN) TLS","add":"104.17.3.81","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"0","scy":"auto","net":"ws","type":"none","host":"edu.ruangguru.com","path":"/vmess","tls":"tls","sni":"chat.sociomile.com","fp":"","alpn":""}"""
+        val item = LinkParser.parse(
+            "vmess://" + Base64Util.encodeUrlSafe(json.toByteArray(Charsets.UTF_8))
+        )
+        assertNotNull(item)
+        item!!
+        assertEquals("Taptap WS (CDN) TLS", item.remarks)
+        assertEquals("104.17.3.81", item.address)
+        assertEquals(443, item.port)
+        assertEquals("11111111-2222-3333-4444-555555555555", item.uuid)
+        assertEquals(0, item.alterId)
+        assertEquals("ws", item.network)
+        assertEquals("edu.ruangguru.com", item.host)
+        assertEquals("/vmess", item.path)
+        assertTrue(item.tls)
+        assertEquals("chat.sociomile.com", item.sni)
+    }
+
+    @Test
+    fun `vmess json round trip preserves aid and all standard fields`() {
+        val json = """{"v":"2","ps":"RT","add":"1.2.3.4","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"5","scy":"aes-128-gcm","net":"ws","type":"none","host":"h.example","path":"/p","tls":"tls","sni":"s.example","fp":"chrome","alpn":"h2"}"""
+        val first = LinkParser.parse(
+            "vmess://" + Base64Util.encodeUrlSafe(json.toByteArray(Charsets.UTF_8))
+        )!!
+        val back = LinkParser.parse(LinkParser.toUri(first)!!)
+        assertNotNull(back)
+        back!!
+        assertEquals(first.remarks, back.remarks)
+        assertEquals(first.address, back.address)
+        assertEquals(first.port, back.port)
+        assertEquals(first.uuid, back.uuid)
+        assertEquals(5, back.alterId)
+        assertEquals("aes-128-gcm", back.security)
+        assertEquals(first.network, back.network)
+        assertEquals(first.host, back.host)
+        assertEquals(first.path, back.path)
+        assertEquals(first.tls, back.tls)
+        assertEquals(first.sni, back.sni)
+        assertEquals(first.fingerprint, back.fingerprint)
+        assertEquals(first.alpn, back.alpn)
+    }
+
+    @Test
+    fun `vmess json round trip preserves pemicu and dnstt`() {
+        val json = """{"v":"2","ps":"Ext","add":"1.2.3.4","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"0","scy":"auto","net":"ws","type":"none","host":"","path":"/","tls":"tls","sni":"","dnstt_ns":"ns.example.com","dnstt_pubkey":"PUBKEY","dnstt_resolver":"8.8.8.8","pemicu_domain":"support.zoom.us","pemicu_port":"443","pemicu_interval":"15"}"""
+        val first = LinkParser.parse(
+            "vmess://" + Base64Util.encodeUrlSafe(json.toByteArray(Charsets.UTF_8))
+        )!!
+        assertTrue(first.dnsttEnabled)
+        assertTrue(first.pemicuEnabled)
+        val back = LinkParser.parse(LinkParser.toUri(first)!!)
+        assertNotNull(back)
+        back!!
+        assertTrue(back.dnsttEnabled)
+        assertEquals("ns.example.com", back.dnsttNS)
+        assertEquals("PUBKEY", back.dnsttPubkey)
+        assertEquals("8.8.8.8", back.dnsttResolver)
+        assertTrue(back.pemicuEnabled)
+        assertEquals("support.zoom.us", back.pemicuDomain)
+        assertEquals(443, back.pemicuPort)
+        assertEquals(15, back.pemicuInterval)
+    }
+
+    @Test
+    fun `vmess std single-param link parses`() {
+        // Regression: std form used to require '&'; a link with a
+        // single query param fell through to base64 and returned null.
+        val item = LinkParser.parse(
+            "vmess://11111111-2222-3333-4444-555555555555@1.2.3.4:443?security=tls#Single"
+        )
+        assertNotNull(item)
+        assertTrue(item!!.tls)
+        assertEquals("Single", item.remarks)
+    }
+
+    @Test
+    fun `vless round trip preserves dnstt pemicu onering`() {
+        val first = LinkParser.parse(
+            "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@leaseweb4.svrkencang.web.id:443" +
+                "?encryption=none&security=tls&sni=onering%3Asupport.zoom.us%3Alive.iflix.com" +
+                "&type=ws&host=leaseweb4.svrkencang.web.id&path=%2Fvmess" +
+                "&dnstt_ns=ns.example.com&dnstt_pubkey=PUBKEY" +
+                "&pemicu_domain=chat.sociomile.com&pemicu_port=443&pemicu_interval=15#VLESS-RT"
+        )!!
+        assertTrue(first.oneringEnabled)
+        assertEquals("support.zoom.us", first.sni)
+        assertEquals("live.iflix.com", first.oneringBug)
+        val back = LinkParser.parse(LinkParser.toUri(first)!!)
+        assertNotNull(back)
+        back!!
+        assertEquals(first.address, back.address)
+        assertEquals(first.uuid, back.uuid)
+        assertEquals(first.network, back.network)
+        assertEquals(first.host, back.host)
+        assertEquals(first.path, back.path)
+        assertTrue(back.tls)
+        assertTrue(back.oneringEnabled)
+        assertEquals("support.zoom.us", back.sni)
+        assertEquals("live.iflix.com", back.oneringBug)
+        assertTrue(back.dnsttEnabled)
+        assertEquals("ns.example.com", back.dnsttNS)
+        assertTrue(back.pemicuEnabled)
+        assertEquals("chat.sociomile.com", back.pemicuDomain)
+        assertEquals(443, back.pemicuPort)
+        assertEquals(15, back.pemicuInterval)
+    }
+
+    @Test
+    fun `trojan round trip preserves ws tls sni path host`() {
+        val first = LinkParser.parse(
+            "trojan://secretpass@trojan.example.com:443" +
+                "?sni=trojan.example.com&type=ws&path=%2Ftrojan&host=h.example#Trojan-RT"
+        )!!
+        val back = LinkParser.parse(LinkParser.toUri(first)!!)
+        assertNotNull(back)
+        back!!
+        assertEquals("secretpass", back.password)
+        assertEquals("trojan.example.com", back.address)
+        assertTrue(back.tls)
+        assertEquals("ws", back.network)
+        assertEquals("/trojan", back.path)
+        assertEquals("h.example", back.host)
+        assertEquals("trojan.example.com", back.sni)
+    }
+
+    @Test
+    fun `ss sip002 round trip preserves dnstt pemicu`() {
+        val userInfo = Base64Util.encodeUrlSafe("aes-256-gcm:pass123".toByteArray(Charsets.UTF_8))
+        val first = LinkParser.parse(
+            "ss://$userInfo@ss.example.com:8388" +
+                "/?dnstt_ns=ns.example.com&dnstt_pubkey=PUBKEY" +
+                "&pemicu_domain=d.example&pemicu_port=443&pemicu_interval=30#SS-RT"
+        )!!
+        assertTrue(first.dnsttEnabled)
+        assertTrue(first.pemicuEnabled)
+        val back = LinkParser.parse(LinkParser.toUri(first)!!)
+        assertNotNull(back)
+        back!!
+        assertEquals("aes-256-gcm", back.method)
+        assertEquals("pass123", back.password)
+        assertEquals("ss.example.com", back.address)
+        assertEquals(8388, back.port)
+        assertTrue(back.dnsttEnabled)
+        assertEquals("ns.example.com", back.dnsttNS)
+        assertTrue(back.pemicuEnabled)
+        assertEquals("d.example", back.pemicuDomain)
+        assertEquals(443, back.pemicuPort)
+        assertEquals(30, back.pemicuInterval)
+    }
+
+    @Test
+    fun `dnstt record type TXT round trips`() {
+        // Regression: toUri used to drop dnstt_record_type, so a TXT
+        // SlowDNS entry silently became NULL on the receiving app.
+        val json = """{"v":"2","ps":"TXT","add":"1.2.3.4","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"0","scy":"auto","net":"ws","type":"none","host":"","path":"/","tls":"tls","sni":"","dnstt_ns":"ns.example.com","dnstt_pubkey":"PUBKEY","dnstt_resolver":"8.8.8.8","dnstt_record_type":"txt"}"""
+        val first = LinkParser.parse(
+            "vmess://" + Base64Util.encodeUrlSafe(json.toByteArray(Charsets.UTF_8))
+        )!!
+        assertTrue(first.dnsttEnabled)
+        assertEquals("txt", first.dnsttRecordType)
+        val back = LinkParser.parse(LinkParser.toUri(first)!!)
+        assertNotNull(back)
+        assertEquals("txt", back!!.dnsttRecordType)
+        assertTrue(back.dnsttEnabled)
+
+        // Same via a VLESS query link (commonQuery path).
+        val vless = LinkParser.parse(
+            "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@a.example:443" +
+                "?encryption=none&security=tls&dnstt_ns=ns.example.com&dnstt_pubkey=PUBKEY" +
+                "&dnstt_record_type=txt#VLESS-TXT"
+        )!!
+        assertEquals("txt", vless.dnsttRecordType)
+        val vlessBack = LinkParser.parse(LinkParser.toUri(vless)!!)
+        assertNotNull(vlessBack)
+        assertEquals("txt", vlessBack!!.dnsttRecordType)
+    }
+
+    @Test
+    fun `toUri vmess json keeps v2rayng standard keys`() {
+        // TaptapX -> v2rayNG direction: the exported vmess JSON must
+        // still carry every standard key v2rayNG reads.
+        val json = """{"v":"2","ps":"Std","add":"1.2.3.4","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"0","scy":"auto","net":"ws","type":"none","host":"h.example","path":"/","tls":"tls","sni":"s.example","fp":"","alpn":""}"""
+        val item = LinkParser.parse(
+            "vmess://" + Base64Util.encodeUrlSafe(json.toByteArray(Charsets.UTF_8))
+        )!!
+        val exported = Base64Util.decodeToString(
+            LinkParser.toUri(item)!!.removePrefix("vmess://")
+        )!!
+        for (key in listOf("\"v\":", "\"ps\":", "\"add\":", "\"port\":", "\"id\":",
+            "\"aid\":", "\"scy\":", "\"net\":", "\"type\":", "\"host\":",
+            "\"path\":", "\"tls\":", "\"sni\":", "\"fp\":", "\"alpn\":")) {
+            assertTrue(exported.contains(key), "missing key $key in $exported")
+        }
+        assertTrue(exported.contains("\"add\":\"1.2.3.4\""))
+        assertTrue(exported.contains("\"sni\":\"s.example\""))
+    }
 }

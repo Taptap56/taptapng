@@ -42,7 +42,7 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
 
-    - name: Run unit tests (SSH end-to-end + ProfileStore + LinkParser + ServerTester)
+    - name: Run unit tests (SSH + LinkParser round-trip + proto + ProfileStore + ServerTester)
       run: |
         cd ${{ github.workspace }}
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
@@ -84,5 +84,5 @@ jobs:
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
-        name: taptapx-v1.0.1-release
+        name: taptapx-v1.0.2-release
         path: ${{ github.workspace }}/app/build/outputs/apk/release/*.apk

@@ -60,8 +60,9 @@ object LinkParser {
 
     private fun parseVmess(str: String): ProfileItem? {
         val body = str.substring("vmess://".length)
-        // Std form: vmess://uuid@host:port?query (has '?' and '&').
-        if (body.contains('?') && body.contains('&') && body.contains('@')) {
+        // Std form: vmess://uuid@host:port?query (a '?' before any '#'
+        // fragment; v2rayNG std links can have a single query param).
+        if (body.contains('@') && body.substringBefore('#').contains('?')) {
             return parseVmessStd(str)
         }
         val json = Base64Util.decodeToString(body) ?: return null
@@ -93,6 +94,7 @@ object LinkParser {
         item.address = add
         item.port = port.toIntOrNull() ?: return null
         item.uuid = id
+        item.alterId = obj.str("aid")?.toIntOrNull() ?: 0
         item.security = obj.str("scy")?.ifBlank { "auto" } ?: "auto"
         item.network = net.ifBlank { "tcp" }
         item.host = obj.str("host") ?: ""
@@ -104,6 +106,14 @@ object LinkParser {
         applyOneringSni(item, sni)
         item.fingerprint = obj.str("fp") ?: ""
         item.alpn = obj.str("alpn") ?: ""
+        applyExtensionJson(item, obj)
+        return item
+    }
+
+    /** TaptapX extensions carried as extra keys in the vmess JSON
+     *  (v2rayNG ignores unknown JSON keys, so the link still imports
+     *  there — the extensions are just dropped in that direction). */
+    private fun applyExtensionJson(item: ProfileItem, obj: com.google.gson.JsonObject) {
         item.dnsttNS = obj.str("dnstt_ns") ?: ""
         item.dnsttPubkey = obj.str("dnstt_pubkey") ?: ""
         item.dnsttResolver = obj.str("dnstt_resolver") ?: ""
@@ -111,7 +121,13 @@ object LinkParser {
         if (item.dnsttNS.isNotBlank() && item.dnsttPubkey.isNotBlank()) {
             item.dnsttEnabled = true
         }
-        return item
+        val pemicuDomain = obj.str("pemicu_domain") ?: ""
+        if (pemicuDomain.isNotBlank()) {
+            item.pemicuEnabled = true
+            item.pemicuDomain = pemicuDomain
+            item.pemicuPort = obj.str("pemicu_port")?.toIntOrNull()
+            item.pemicuInterval = obj.str("pemicu_interval")?.toIntOrNull()
+        }
     }
 
     // ---- VLESS / Trojan ----
@@ -182,6 +198,7 @@ object LinkParser {
                 item.path = kv["path"] ?: ""
             }
         }
+        applyExtensionQuery(item, q)
         return item
     }
 
@@ -230,14 +247,8 @@ object LinkParser {
         item.port = if (uri.port > 0) uri.port else 22
         item.remarks = percentDecode(uri.rawFragment ?: "").ifEmpty { "none" }
         val q = queryParams(uri)
-        item.dnsttNS = q["dnstt_ns"] ?: ""
-        item.dnsttPubkey = q["dnstt_pubkey"] ?: ""
-        item.dnsttResolver = q["dnstt_resolver"] ?: ""
-        item.dnsttRecordType = q["dnstt_record_type"] ?: "null"
-        if (item.dnsttNS.isNotBlank() && item.dnsttPubkey.isNotBlank()) {
-            item.dnsttEnabled = true
-            item.sshUseSlowdns = true
-        }
+        applyExtensionQuery(item, q)
+        if (item.dnsttEnabled) item.sshUseSlowdns = true
         item.privateKey = q["private_key"] ?: ""
         item.sshPayload = q["payload"] ?: ""
         item.sshRemoteProxy = q["remote_proxy"] ?: ""
@@ -258,13 +269,6 @@ object LinkParser {
                 "slowdns" -> item.sshUseSlowdns = true
             }
         }
-        val pemicuDomain = q["pemicu_domain"] ?: ""
-        if (pemicuDomain.isNotBlank()) {
-            item.pemicuEnabled = true
-            item.pemicuDomain = pemicuDomain
-            item.pemicuPort = q["pemicu_port"]?.toIntOrNull()
-            item.pemicuInterval = q["pemicu_interval"]?.toIntOrNull()
-        }
         return item
     }
 
@@ -283,6 +287,14 @@ object LinkParser {
         applyOneringSni(item, q["sni"] ?: "")
         item.fingerprint = q["fp"] ?: ""
         item.alpn = q["alpn"] ?: ""
+        applyExtensionQuery(item, q)
+    }
+
+    /** TaptapX extensions carried in the query string (round-tripped
+     *  by [toUri]). v2rayNG ignores unknown query params, so a link
+     *  carrying them still imports there — the extensions are just
+     *  dropped in that direction. */
+    private fun applyExtensionQuery(item: ProfileItem, q: Map<String, String>) {
         item.dnsttNS = q["dnstt_ns"] ?: ""
         item.dnsttPubkey = q["dnstt_pubkey"] ?: ""
         item.dnsttResolver = q["dnstt_resolver"] ?: ""
@@ -348,6 +360,7 @@ object LinkParser {
         if (item.dnsttNS.isNotBlank()) q["dnstt_ns"] = item.dnsttNS
         if (item.dnsttPubkey.isNotBlank()) q["dnstt_pubkey"] = item.dnsttPubkey
         if (item.dnsttResolver.isNotBlank()) q["dnstt_resolver"] = item.dnsttResolver
+        if (item.dnsttNS.isNotBlank()) q["dnstt_record_type"] = item.dnsttRecordType
         if (item.pemicuEnabled && item.pemicuDomain.isNotBlank()) {
             q["pemicu_domain"] = item.pemicuDomain
             item.pemicuPort?.let { q["pemicu_port"] = it.toString() }
@@ -385,6 +398,12 @@ object LinkParser {
             if (item.dnsttNS.isNotBlank()) append(",\"dnstt_ns\":${jsonStr(item.dnsttNS)}")
             if (item.dnsttPubkey.isNotBlank()) append(",\"dnstt_pubkey\":${jsonStr(item.dnsttPubkey)}")
             if (item.dnsttResolver.isNotBlank()) append(",\"dnstt_resolver\":${jsonStr(item.dnsttResolver)}")
+            if (item.dnsttNS.isNotBlank()) append(",\"dnstt_record_type\":${jsonStr(item.dnsttRecordType)}")
+            if (item.pemicuEnabled && item.pemicuDomain.isNotBlank()) {
+                append(",\"pemicu_domain\":${jsonStr(item.pemicuDomain)}")
+                item.pemicuPort?.let { append(",\"pemicu_port\":${jsonStr(it.toString())}") }
+                item.pemicuInterval?.let { append(",\"pemicu_interval\":${jsonStr(it.toString())}") }
+            }
             append("}")
         }
         return "vmess://" + Base64Util.encodeUrlSafe(json.toByteArray(Charsets.UTF_8))
@@ -407,7 +426,21 @@ object LinkParser {
         val userInfo = Base64Util.encodeUrlSafe(
             "${item.method}:${item.password}".toByteArray(Charsets.UTF_8)
         )
-        return "ss://$userInfo@${item.address}:${item.port}#${encodeURIComponent(item.remarks)}"
+        // SIP002 query form (/?key=value): v2rayNG ignores unknown
+        // query params, so TaptapX extensions survive our own round
+        // trip and are dropped (harmlessly) on the v2rayNG side.
+        val ext = LinkedHashMap<String, String>()
+        if (item.dnsttNS.isNotBlank()) ext["dnstt_ns"] = item.dnsttNS
+        if (item.dnsttPubkey.isNotBlank()) ext["dnstt_pubkey"] = item.dnsttPubkey
+        if (item.dnsttResolver.isNotBlank()) ext["dnstt_resolver"] = item.dnsttResolver
+        if (item.dnsttNS.isNotBlank()) ext["dnstt_record_type"] = item.dnsttRecordType
+        if (item.pemicuEnabled && item.pemicuDomain.isNotBlank()) {
+            ext["pemicu_domain"] = item.pemicuDomain
+            item.pemicuPort?.let { ext["pemicu_port"] = it.toString() }
+            item.pemicuInterval?.let { ext["pemicu_interval"] = it.toString() }
+        }
+        val query = if (ext.isEmpty()) "" else "/?${encodeQuery(ext)}"
+        return "ss://$userInfo@${item.address}:${item.port}$query#${encodeURIComponent(item.remarks)}"
     }
 
     private fun toSshUri(item: ProfileItem): String {
@@ -426,6 +459,7 @@ object LinkParser {
         if (item.dnsttNS.isNotBlank()) q["dnstt_ns"] = item.dnsttNS
         if (item.dnsttPubkey.isNotBlank()) q["dnstt_pubkey"] = item.dnsttPubkey
         if (item.dnsttResolver.isNotBlank()) q["dnstt_resolver"] = item.dnsttResolver
+        if (item.dnsttNS.isNotBlank()) q["dnstt_record_type"] = item.dnsttRecordType
         if (item.pemicuEnabled && item.pemicuDomain.isNotBlank()) {
             q["pemicu_domain"] = item.pemicuDomain
             item.pemicuPort?.let { q["pemicu_port"] = it.toString() }

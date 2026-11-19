@@ -1,0 +1,181 @@
+package com.taptap.x.proto
+import com.taptap.x.core.proto.*
+
+import com.taptap.x.data.ConfigType
+import com.taptap.x.data.ProfileItem
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.ServerSocket
+import org.junit.jupiter.api.Assertions.assertArrayEquals
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Test
+
+/**
+ * End-to-end VMess over a loopback fake server. The fake server
+ * re-implements the server side from the spec (header open, chunk
+ * read/write with the response keys) — it shares only the crypto
+ * primitives, not the client's framing code.
+ * Loopback uses ::1, not 127.0.0.1: the dev VM's sandbox blackholes
+ * JVM client connects to IPv4 loopback, while ::1 connects fine.
+ */
+class VmessClientTest {
+
+    private val uuid = "de305d54-75b4-431b-adb2-eb6b9e546014"
+
+    @Test
+    fun `vmess dial relays bytes both ways aes-128-gcm`() {
+        vmessRelay("aes-128-gcm", VmessSecurity.AES_128_GCM)
+    }
+
+    @Test
+    fun `vmess dial relays bytes both ways chacha20-poly1305`() {
+        vmessRelay("chacha20-poly1305", VmessSecurity.CHACHA20_POLY1305)
+    }
+
+    private fun vmessRelay(securityName: String, security: VmessSecurity) {
+        val server = ServerSocket(0)
+        val port = server.localPort
+        var serverError: Throwable? = null
+        val serverThread = Thread {
+            val socket = server.accept()
+            socket.soTimeout = 5_000
+            try {
+                val input = socket.getInputStream()
+                val output = socket.getOutputStream()
+                val opened = VmessCrypto.openRequestHeader(VmessCrypto.cmdKey(uuid), input)
+                assertEquals("example.com", opened.header.target.host)
+                assertEquals(443, opened.header.target.port)
+                assertEquals(security, opened.header.security)
+                val session = VmessSession(
+                    requestBytes = ByteArray(0),
+                    bodyKey = opened.header.bodyKey,
+                    bodyIV = opened.header.bodyIV,
+                    responseBodyKey = Crypto.sha256(opened.header.bodyKey).copyOfRange(0, 16),
+                    responseBodyIV = Crypto.sha256(opened.header.bodyIV).copyOfRange(0, 16),
+                    responseV = opened.header.responseV,
+                    security = security,
+                )
+                // Response header goes out immediately (no body wait).
+                output.write(VmessCrypto.sealResponseHeader(session, session.responseV))
+                output.flush()
+                // Request direction state (client -> server).
+                val reqNonce = VmessCrypto.ChunkNonce(session.bodyIV)
+                val reqMask = Shake128(session.bodyIV)
+                val clientPayload = readChunk(
+                    input, session.bodyKey, reqNonce, reqMask, security,
+                )
+                assertArrayEquals("hello-from-client".toByteArray(), clientPayload)
+                // Response direction state (server -> client).
+                val respNonce = VmessCrypto.ChunkNonce(session.responseBodyIV)
+                val respMask = Shake128(session.responseBodyIV)
+                writeChunk(
+                    output, session.responseBodyKey, respNonce, respMask, security,
+                    "hello-from-server".toByteArray(),
+                )
+                // The client's empty termination chunk.
+                val term = readChunk(input, session.bodyKey, reqNonce, reqMask, security)
+                assertEquals(0, term.size)
+            } catch (e: Throwable) {
+                serverError = e
+            } finally {
+                runCatching { socket.close() }
+                runCatching { server.close() }
+            }
+        }
+        serverThread.start()
+        val item = ProfileItem(
+            configType = ConfigType.VMESS,
+            address = "::1", port = port,
+            uuid = uuid, security = securityName,
+            network = "tcp",
+        )
+        val client = VmessClient(item)
+        val stream = client.dial("example.com", 443)
+        try {
+            stream.output.write("hello-from-client".toByteArray())
+            stream.output.flush()
+            val buf = ByteArray("hello-from-server".length)
+            var filled = 0
+            while (filled < buf.size) {
+                val r = stream.input.read(buf, filled, buf.size - filled)
+                if (r == -1) break
+                filled += r
+            }
+            assertEquals(buf.size, filled)
+            assertArrayEquals("hello-from-server".toByteArray(), buf)
+        } finally {
+            client.close()
+        }
+        serverThread.join(5_000)
+        serverError?.let { throw AssertionError("Fake server gagal", it) }
+    }
+
+    @Test
+    fun `vmess dial with wrong uuid fails`() {
+        val server = ServerSocket(0)
+        val port = server.localPort
+        val serverThread = Thread {
+            val socket = server.accept()
+            socket.soTimeout = 5_000
+            try {
+                // The header will not open with our key: close at once.
+                runCatching {
+                    VmessCrypto.openRequestHeader(VmessCrypto.cmdKey(uuid), socket.getInputStream())
+                }
+            } finally {
+                runCatching { socket.close() }
+                runCatching { server.close() }
+            }
+        }
+        serverThread.start()
+        val item = ProfileItem(
+            configType = ConfigType.VMESS,
+            address = "::1", port = port,
+            uuid = "11111111-2222-3333-4444-555555555555",
+            security = "auto",
+            network = "tcp",
+        )
+        assertThrows(Exception::class.java) {
+            VmessClient(item).dial("example.com", 443)
+        }
+        serverThread.join(5_000)
+    }
+
+    /** Server-side chunk reader (shared framing, caller keeps state). */
+    private fun readChunk(
+        input: InputStream,
+        key: ByteArray,
+        nonce: VmessCrypto.ChunkNonce,
+        mask: Shake128,
+        security: VmessSecurity,
+    ): ByteArray {
+        val maskedBytes = input.readExactBytes(2)
+        val maskedSize = ((maskedBytes[0].toInt() and 0xFF) shl 8) or
+            (maskedBytes[1].toInt() and 0xFF)
+        val paddingLen = mask.nextPaddingLen()
+        val size = maskedSize xor mask.nextUint16()
+        val wire = input.readExactBytes(size)
+        val sealed = wire.copyOfRange(0, size - paddingLen)
+        return VmessCrypto.openBodyChunk(security, key, nonce.next(), sealed)
+    }
+
+    /** Server-side chunk writer (shared framing, caller keeps state). */
+    private fun writeChunk(
+        output: OutputStream,
+        key: ByteArray,
+        nonce: VmessCrypto.ChunkNonce,
+        mask: Shake128,
+        security: VmessSecurity,
+        payload: ByteArray,
+    ) {
+        val paddingLen = mask.nextPaddingLen()
+        val sealed = VmessCrypto.sealBodyChunk(security, key, nonce.next(), payload)
+        val total = sealed.size + paddingLen
+        val maskedSize = total xor mask.nextUint16()
+        output.write(byteArrayOf(((maskedSize ushr 8) and 0xFF).toByte(), (maskedSize and 0xFF).toByte()))
+        output.write(sealed)
+        if (paddingLen > 0) output.write(Crypto.randomBytes(paddingLen))
+        output.flush()
+    }
+}
