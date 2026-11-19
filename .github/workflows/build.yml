@@ -1,0 +1,75 @@
+name: Build TaptapX (debug, arm64)
+
+# Debug build of TaptapX — a new Android app from scratch.
+# UI mirrors v2rayNG (Compose + Material 3); protocols are in-app
+# (Kotlin/Java, no bundled xray-core), so there is no native core
+# build step. SSH (JSch, pure Java) is the Phase 1 proof-of-concept
+# protocol, proven by an end-to-end unit test against an in-process
+# MINA SSHD server. No signing keystore needed: debug variant only.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: '0'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v4
+      with:
+        log-accepted-android-sdk-licenses: false
+        cmdline-tools-version: '14742923'
+        packages: 'platforms;android-37.0 build-tools;37.0.0 platform-tools'
+
+    - name: Setup Java
+      uses: actions/setup-java@v6.1.0
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+
+    - name: Run unit tests (SSH end-to-end + ProfileStore)
+      run: |
+        cd ${{ github.workspace }}
+        echo "sdk.dir=${ANDROID_HOME}" > local.properties
+        chmod 755 gradlew
+        ./gradlew :app:testDebugUnitTest
+
+    - name: Build APK (debug)
+      run: |
+        cd ${{ github.workspace }}
+        ./gradlew :app:assembleDebug
+
+    - name: Verify APK contents (no xray-core, small APK)
+      run: |
+        APK=$(ls ${{ github.workspace }}/app/build/outputs/apk/debug/*.apk | head -1)
+        echo "APK=$APK"
+        ls -la "$APK"
+        # aapt2 is in the Android SDK build-tools.
+        AAPT=$ANDROID_HOME/build-tools/37.0.0/aapt2
+        "$AAPT" dump badging "$APK" | head -3
+        unzip -l "$APK" | grep -E "classes.*\.dex|lib/|assets/" | head -20
+        # There must be NO bundled xray-core: no libgojni.so anywhere.
+        if unzip -l "$APK" | grep -q "libgojni"; then
+          echo "ERROR: libgojni.so found — xray-core must NOT be bundled" >&2
+          exit 1
+        fi
+        echo "APK size (bytes): $(stat -c%s "$APK")"
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v7
+      if: ${{ success() }}
+      with:
+        name: taptapx-debug-arm64
+        path: ${{ github.workspace }}/app/build/outputs/apk/debug/*.apk
