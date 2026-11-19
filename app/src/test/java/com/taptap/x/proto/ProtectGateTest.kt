@@ -117,4 +117,36 @@ class ProtectGateTest {
         }
         runCatching { server.close() }
     }
+
+    @Test
+    fun `forwarder dial with TUN up proceeds when protect refuses but the app is disallowed`() {
+        // v1.0.9 (taptapx-6.txt, 2026-11-20 04:18): on this phone
+        // protect() returns false once the TUN is up, and the old
+        // fail-fast starved the forwarder — no dial ever happened,
+        // so no app traffic flowed ("Vpn naik internet ga jalan",
+        // 04:21). v2rayNG disallows its own package from the VPN, so
+        // its sockets bypass at the routing level even when protect()
+        // refuses. While TunnelState.appBypass is true the refusal
+        // is non-fatal and the dial continues (logged as PROTECT).
+        // Fails on v1.0.8 code (throws "protect() gagal").
+        val (server, port) = listener()
+        TunnelState.up = true
+        TunnelState.appBypass = true
+        Transport.protectSocket = { false }
+        try {
+            val before = com.taptap.x.core.DialLog.lines().size
+            val stream = Transport.open(plainTcpItem(port))
+            stream.close()
+            assertTrue(
+                com.taptap.x.core.DialLog.lines().drop(before)
+                    .any { it.contains("lanjut via disallow aplikasi") },
+                "DialLog must record the continued dial",
+            )
+        } finally {
+            Transport.protectSocket = null
+            TunnelState.appBypass = false
+            TunnelState.up = false
+        }
+        runCatching { server.close() }
+    }
 }

@@ -149,6 +149,31 @@ class ServerTesterTest {
     }
 
     @Test
+    fun `tcp detailed proceeds when protect refuses but the app is disallowed`() {
+        // v1.0.9: on this phone protect() returns false once the TUN
+        // is up, so every delay test read "protect gagal" even though
+        // a plain TCP connect succeeds (taptapx-6.txt 04:18). While
+        // the app is disallowed from the VPN the socket bypasses at
+        // the routing level, so the test measures a real direct
+        // delay. Fails on v1.0.8 code (ms -1, stage "protect gagal").
+        ServerSocket(0).use { server ->
+            val port = server.localPort
+            TunnelState.up = true
+            TunnelState.appBypass = true
+            ServerTester.protectSocket = { false }
+            try {
+                val r = ServerTester.testTcpDetailed("127.0.0.1", port)
+                assertTrue(r.ms >= 0, "expected >= 0 ms, got ${r.ms}")
+                assertEquals(null, r.failureStage)
+            } finally {
+                ServerTester.protectSocket = null
+                TunnelState.appBypass = false
+                TunnelState.up = false
+            }
+        }
+    }
+
+    @Test
     fun `tcp detailed ignores a refusing protect hook while the TUN is down`() {
         // v1.0.7: same gate as testTcp — a refused hook pre-TUN must
         // not produce a "protect gagal" stage. Fails on v1.0.6 code.
@@ -182,6 +207,30 @@ class ServerTesterTest {
                 assertTrue(ok >= 0, "expected >= 0 ms, got $ok")
             } finally {
                 ServerTester.protectSocket = null
+                TunnelState.up = false
+            }
+        }
+    }
+
+    @Test
+    fun `tcpConnectMs proceeds when protect refuses but the app is disallowed`() {
+        // v1.0.9: same tolerance as testTcpDetailed, second call
+        // site (the real-ping TCP fallback). Fails on v1.0.8 code
+        // (ms -1, stage "protect gagal").
+        ServerSocket(0).use { server ->
+            val port = server.localPort
+            TunnelState.up = true
+            TunnelState.appBypass = true
+            ServerTester.protectSocket = { false }
+            try {
+                val r = ServerTester.tcpConnectMsDetailed(
+                    java.net.InetAddress.getByName("127.0.0.1"), port, 3000,
+                )
+                assertTrue(r.ms >= 0, "expected >= 0 ms, got ${r.ms}")
+                assertEquals(null, r.failureStage)
+            } finally {
+                ServerTester.protectSocket = null
+                TunnelState.appBypass = false
                 TunnelState.up = false
             }
         }

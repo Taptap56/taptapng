@@ -59,7 +59,10 @@ object DnsResolver {
      * protect tidak dipaksakan — protect() mengembalikan false sebelum
      * establish(), jadi query langsung jalan tanpa protect (v1.0.7:
      * kalau tidak, dial probe untuk entry ber-domain mati di DNS
-     * sebelum sempat mencoba resolver sistem).
+     * sebelum sempat mencoba resolver sistem). v1.0.9: penolakan juga
+     * tidak fatal bila [TunnelState.appBypass] — aplikasi di-disallow
+     * dari VPN, jadi query bypass di level routing (pola v2rayNG;
+     * di HP ini protect() mengembalikan false begitu TUN naik).
      */
     @Volatile
     var protectUdp: ((DatagramSocket) -> Boolean)? = null
@@ -132,7 +135,19 @@ object DnsResolver {
         try {
             val protect = protectUdp
             if (protect != null && TunnelState.up && !protect(socket)) {
-                throw IOException("protect() gagal — query DNS tidak bisa bypass VPN")
+                if (TunnelState.appBypass) {
+                    // v1.0.9: protect() refused, but the app is
+                    // disallowed from the VPN — the query bypasses
+                    // at the routing level and cannot loop back into
+                    // the relay (v2rayNG pattern; on this phone
+                    // protect() returns false once the TUN is up).
+                    DialLog.log(
+                        "PROTECT",
+                        "protect() gagal — query DNS $host lanjut via disallow aplikasi",
+                    )
+                } else {
+                    throw IOException("protect() gagal — query DNS tidak bisa bypass VPN")
+                }
             }
             socket.soTimeout = timeoutMs
             socket.send(DatagramPacket(query, query.size, dnsServerAddress(), dnsPort))

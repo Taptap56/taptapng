@@ -46,9 +46,35 @@ object ServerTester {
      * enforced while [TunnelState.up]: before establish() protect()
      * returns false (no VPN yet), so a test run during start goes
      * direct instead of reporting a false "protect gagal" (v1.0.7).
+     * v1.0.9: the refusal is ALSO non-fatal while
+     * [TunnelState.appBypass] — the app is disallowed from the VPN,
+     * so the socket bypasses at the routing level anyway (on this
+     * phone protect() returns false once the TUN is up, and the old
+     * fail-fast made every delay test read "protect gagal").
      */
     @Volatile
     var protectSocket: ((Socket) -> Boolean)? = null
+
+    /**
+     * v1.0.9: true when a refused protect must abort the test. The
+     * refusal is only fatal while the TUN is up AND the app is NOT
+     * disallowed from the VPN: when [TunnelState.appBypass] is true,
+     * the socket bypasses at the routing level anyway (v2rayNG
+     * pattern), so the test continues and measures a real direct
+     * delay instead of reporting a false "protect gagal" — on this
+     * phone protect() returns false once the TUN is up
+     * (taptapx-6.txt 04:18). While the TUN is down the hook is not
+     * invoked at all (protect() returns false pre-establish, v1.0.7).
+     */
+    private fun mustAbortOnProtectRefusal(socket: Socket): Boolean {
+        if (!TunnelState.up) return false
+        if (protectSocket?.invoke(socket) != false) return false
+        if (TunnelState.appBypass) {
+            DialLog.log("PROTECT", "protect() gagal — delay test lanjut via disallow aplikasi")
+            return false
+        }
+        return true
+    }
 
     /** TCP connect timing in ms, or -1 on failure. */
     fun testTcp(host: String, port: Int, timeoutMs: Int = 3000): Long =
@@ -62,9 +88,12 @@ object ServerTester {
             Socket().use { socket ->
                 // Bypass our own TUN when the service set the hook
                 // and the TUN is up; a refused protect fails fast
-                // instead of nesting. While the TUN is down the hook
-                // is ignored (protect() returns false pre-establish).
-                if (TunnelState.up && protectSocket?.invoke(socket) == false) {
+                // instead of nesting — unless the app is disallowed
+                // from the VPN (v1.0.9), in which case the socket
+                // bypasses at the routing level anyway. While the TUN
+                // is down the hook is ignored (protect() returns false
+                // pre-establish).
+                if (mustAbortOnProtectRefusal(socket)) {
                     return TestResult(-1, "protect gagal")
                 }
                 // Resolve dulu lewat DNS langsung (bypass TUN),
@@ -150,7 +179,7 @@ object ServerTester {
         val start = System.nanoTime()
         return try {
             Socket().use { socket ->
-                if (TunnelState.up && protectSocket?.invoke(socket) == false) {
+                if (mustAbortOnProtectRefusal(socket)) {
                     return TestResult(-1, "protect gagal")
                 }
                 socket.connect(InetSocketAddress(address, port), timeoutMs)

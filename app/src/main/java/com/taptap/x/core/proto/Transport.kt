@@ -39,6 +39,11 @@ object Transport {
      * establish() there is no VPN yet and protect() returns false,
      * so a pre-TUN dial goes direct instead of failing instantly
      * (v1.0.7: every v1.0.6 probe died here with "protect() gagal").
+     * v1.0.9: a refused protect is ALSO non-fatal while
+     * [TunnelState.appBypass] — the app's own package is disallowed
+     * from the VPN, so the socket bypasses at the routing level
+     * anyway (v2rayNG pattern; on this phone protect() returns false
+     * once the TUN is up, and failing here starved the forwarder).
      */
     @Volatile
     var protectSocket: ((Socket) -> Boolean)? = null
@@ -113,7 +118,26 @@ object Transport {
             wd?.arm(plain)
             val protect = protectSocket
             if (protect != null && TunnelState.up && !protect(plain)) {
-                throw IllegalStateException("protect() gagal — dial tidak bisa bypass VPN")
+                if (TunnelState.appBypass) {
+                    // v1.0.9: protect() refused, but our package is
+                    // disallowed from the VPN, so this socket bypasses
+                    // the TUN at the routing level anyway (v2rayNG
+                    // pattern — its Pemicu dial "bypasses even if
+                    // protect() returns false"). Continue the dial
+                    // instead of failing it: on this phone protect()
+                    // returns false once the TUN is up, and failing
+                    // here meant the forwarder never dialled at all
+                    // ("Vpn naik internet ga jalan", 2026-11-20
+                    // 04:21). Without the disallow the refusal stays
+                    // fatal — an unprotected dial would loop into
+                    // the tunnel forever.
+                    DialLog.log(
+                        "PROTECT",
+                        "protect() gagal — dial ${item.address} lanjut via disallow aplikasi",
+                    )
+                } else {
+                    throw IllegalStateException("protect() gagal — dial tidak bisa bypass VPN")
+                }
             }
             if (protect != null && !TunnelState.up) {
                 // Probe-first dial, TUN belum naik: tidak ada VPN

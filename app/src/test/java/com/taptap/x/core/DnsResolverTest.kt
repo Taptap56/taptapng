@@ -215,6 +215,33 @@ class DnsResolverTest {
     }
 
     @Test
+    fun `resolve proceeds when protect refuses but the app is disallowed`() {
+        // v1.0.9: same tolerance as Transport / ServerTester — while
+        // the app is disallowed from the VPN the query bypasses at
+        // the routing level and cannot loop into the relay. Fails on
+        // v1.0.8 code (throws "protect() gagal").
+        val (server, running, serverThread) = fakeDnsServer()
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        TunnelState.up = true
+        TunnelState.appBypass = true
+        DnsResolver.protectUdp = { false }
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = server.localPort
+            val addr = DnsResolver.resolve("example.com", timeoutMs = 2000)
+            assertEquals("93.184.216.34", addr.hostAddress)
+        } finally {
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            DnsResolver.protectUdp = null
+            TunnelState.appBypass = false
+            TunnelState.up = false
+            stopFakeDns(server, running, serverThread)
+        }
+    }
+
+    @Test
     fun `resolve returns IP literals without any network`() {
         // Server DNS diarahkan ke port mati: bila literal ikut lookup,
         // tes ini akan timeout — membuktikan literal tidak lookup.

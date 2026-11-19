@@ -245,6 +245,27 @@ class TaptapVpnService : VpnService() {
             .addRoute("::", 0)
             .addDnsServer(dns)
             .setMtu(mtu)
+        // v1.0.9: exclude our own package from the VPN — v2rayNG's
+        // CoreVpnService.configurePerAppProxy does exactly this
+        // ("if per-app proxy is not enabled, disallow the VPN
+        // service's own package"). Our dial/DNS/test sockets are
+        // created by this app, so they bypass the TUN at the routing
+        // level even when VpnService.protect() returns false — which
+        // it does on this phone once the TUN is up (delay test
+        // "protect gagal", taptapx-6.txt 04:18; with protect as the
+        // only bypass, the forwarder never dialled at all and no app
+        // traffic flowed). protect() stays the first layer; the
+        // disallow is the second layer that makes a refused protect
+        // non-fatal (see TunnelState.appBypass).
+        val disallowed = try {
+            builder.addDisallowedApplication(packageName)
+            true
+        } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
+            // Own package always exists; if it ever fails, protect()
+            // stays the only bypass and a refused protect still fails
+            // fast (TunnelState.appBypass stays false).
+            false
+        }
         val fd = builder.establish()
             ?: throw IllegalStateException("Gagal establish TUN (izin VPN ditolak?)")
         // The TUN exists from here on: dial/DNS/test sockets must
@@ -252,6 +273,7 @@ class TaptapVpnService : VpnService() {
         // Transport / DnsResolver / ServerTester). Before this line
         // protect() returns false, so the probe dials direct (v1.0.7).
         TunnelState.up = true
+        TunnelState.appBypass = disallowed
         tunFd = fd
         try {
             val tunIn = FileInputStream(fd.fileDescriptor)
@@ -334,6 +356,7 @@ class TaptapVpnService : VpnService() {
         // The TUN is going away: from here on there is nothing to
         // bypass again, so protect enforcement switches off first.
         TunnelState.up = false
+        TunnelState.appBypass = false
         probeWatchdog?.cancel()
         probeWatchdog = null
         synchronized(tunnelLock) {

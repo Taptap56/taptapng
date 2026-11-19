@@ -232,16 +232,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Test the selected server (bottom-bar tap, like v2rayNG). */
+    /**
+     * Test the selected server (bottom-bar tap, like v2rayNG).
+     * v1.0.9: the result goes to the ROW label only (delay +
+     * failure stage) — it must never overwrite the bottom status,
+     * which reflects the CONNECTION state. v1.0.8 wrote
+     * "<remark>: protect gagal" into the status bar, so a
+     * delay-test failure looked like the VPN itself had failed
+     * (taptapx-6.txt 04:18), and the 2 s service poll then fought
+     * it — the bar flickered between the two.
+     */
     fun testCurrent() {
         val item = selectedItem() ?: run {
             _statusText.value = "No server selected"
             return
         }
-        _statusText.value = "Testing ${item.displayName()}..."
         viewModelScope.launch(Dispatchers.IO) {
-            val ms: Long
-            val label: String
             if (item.configType == ConfigType.SSH) {
                 val start = System.nanoTime()
                 val outcome = runCatching {
@@ -254,28 +260,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         command = "echo ok",
                     )
                 }
-                ms = (System.nanoTime() - start) / 1_000_000
-                label = outcome.fold(
-                    onSuccess = { "SSH ${item.displayName()}: ${it.output.trim()} (${ms}ms)" },
-                    onFailure = { "SSH ${item.displayName()} gagal: ${it.message}" },
-                )
+                val ms = (System.nanoTime() - start) / 1_000_000
                 _delays.value = _delays.value + (item.guid to if (outcome.isSuccess) ms else -1)
+                _delayStages.value = if (outcome.isSuccess) {
+                    _delayStages.value - item.guid
+                } else {
+                    _delayStages.value + (item.guid to "SSH gagal")
+                }
             } else {
                 val r = ServerTester.testTcpDetailed(item.address, item.port)
-                ms = r.ms
-                _delays.value = _delays.value + (item.guid to ms)
+                _delays.value = _delays.value + (item.guid to r.ms)
                 _delayStages.value = if (r.failureStage != null) {
                     _delayStages.value + (item.guid to r.failureStage)
                 } else {
                     _delayStages.value - item.guid
                 }
-                label = if (ms >= 0) {
-                    "${item.displayName()}: ${ms}ms"
-                } else {
-                    "${item.displayName()}: ${r.failureStage ?: "timeout"}"
-                }
             }
-            _statusText.value = label
         }
     }
 

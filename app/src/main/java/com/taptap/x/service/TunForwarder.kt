@@ -1,6 +1,7 @@
 package com.taptap.x.service
 
 import com.taptap.x.core.DialLog
+import com.taptap.x.core.TunnelState
 import com.taptap.x.core.proto.DialWatchdog
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyStream
@@ -228,6 +229,13 @@ class TunForwarder(
 
     private fun dial(session: TcpSession) {
         val key = session.key
+        val dst = "${TcpPacket.ipToString(key.dstIp)}:${key.dstPort}"
+        // v1.0.9: log EVERY attempt, not just failures. taptapx-6.txt
+        // (2026-11-20 04:17) stopped at "PROBE ok" with no forwarder
+        // lines at all, so nobody could tell whether a dial was even
+        // attempted once the TUN was up — the next phone log must
+        // show the attempt and its outcome, not only failures.
+        DialLog.log("DIAL", dst)
         val stream: ProxyStream
         // v1.0.6, fix A: every dial runs under its own watchdog, so
         // a stage that blocks past 30 s is killed (socket closed)
@@ -243,10 +251,7 @@ class TunForwarder(
             )
         } catch (e: Exception) {
             sessions.remove(key)
-            DialLog.failure(
-                "DIAL ${TcpPacket.ipToString(key.dstIp)}:${key.dstPort}",
-                e,
-            )
+            DialLog.failure("DIAL $dst", e)
             // v1.0.4: report the failure instead of silently RST-ing
             // every dial while the status stays "Connecting..." forever.
             reportDialFailure(e)
@@ -269,6 +274,7 @@ class TunForwarder(
         session.stream = stream
         session.state = State.SYN_SENT
         sendSynAck(session)
+        DialLog.log("DIAL", "$dst ok")
         if (!firstDialReported) {
             firstDialReported = true
             onStatus("Connected")
@@ -381,8 +387,21 @@ class TunForwarder(
                     // melihatnya sebagai query baru, dan begitu
                     // seterusnya — loop thread tak berujung. Sebelumnya
                     // return value protectUdp diabaikan. Drop diam-diam;
-                    // aplikasi akan retry sendiri.
-                    if (!protectUdp(sock)) return@thread
+                    // aplikasi akan retry sendiri. v1.0.9: pengecualian
+                    // bila aplikasi di-disallow dari VPN
+                    // (TunnelState.appBypass) — query bypass di level
+                    // routing dan tidak bisa masuk TUN (pola v2rayNG;
+                    // di HP ini protect() mengembalikan false begitu
+                    // TUN naik, dan drop di sini mematikan DNS semua
+                    // aplikasi).
+                    val protected = protectUdp(sock)
+                    if (!protected && !TunnelState.appBypass) return@thread
+                    if (!protected) {
+                        DialLog.log(
+                            "PROTECT",
+                            "protect() gagal — relay DNS lanjut via disallow aplikasi",
+                        )
+                    }
                     sock.soTimeout = 5000
                     val server = InetAddress.getByName(dnsServer)
                     sock.send(DatagramPacket(query, query.size, server, 53))
