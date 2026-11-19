@@ -24,6 +24,10 @@ class TrojanClient(private val item: ProfileItem) : ProxyClient {
     private var stream: ProxyStream? = null
 
     override fun dial(targetHost: String, targetPort: Int): ProxyStream {
+        // Validate eagerly, before opening the TCP connection — like
+        // VlessClient/SsClient. (Otherwise an empty password only
+        // fails after a useless connect, with the wrong exception.)
+        require(item.password.isNotEmpty()) { "Password Trojan kosong" }
         close()
         val transport = Transport.open(item)
         try {
