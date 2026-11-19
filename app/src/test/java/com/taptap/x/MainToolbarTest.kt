@@ -35,7 +35,7 @@ import org.junit.jupiter.api.Test
 class MainToolbarTest {
 
     private fun projectRoot(): File {
-        var dir = File(System.getProperty("user.dir")).absoluteFile
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (dir != null) {
             if (File(dir, "app/src/main/res/menu/main_toolbar.xml").exists()) return dir
             dir = dir.parentFile
@@ -108,8 +108,9 @@ class MainToolbarTest {
             "MainActivity must override onOptionsItemSelected (clicks route there)",
         )
         assertFalse(
-            src.contains("setOnMenuItemClickListener"),
-            "Toolbar's own click listener is dead once it is the support ActionBar",
+            src.contains("toolbar.setOnMenuItemClickListener"),
+            "Toolbar's own click listener is dead once it is the support ActionBar " +
+                "(PopupMenu listeners elsewhere in the file are fine)",
         )
         val layout = read("app/src/main/res/layout/activity_main.xml")
         assertFalse(
@@ -134,7 +135,7 @@ class MainToolbarTest {
             "ServerEditorActivity must override onOptionsItemSelected",
         )
         assertFalse(
-            src.contains("setOnMenuItemClickListener"),
+            src.contains("toolbar.setOnMenuItemClickListener"),
             "Toolbar's own click listener is dead once it is the support ActionBar",
         )
         val layout = read("app/src/main/res/layout/activity_server_editor.xml")
