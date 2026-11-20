@@ -12,10 +12,10 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.SwitchCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.taptap.x.R
 import com.taptap.x.TaptapXApp
 import com.taptap.x.data.SettingsStore
@@ -782,8 +782,7 @@ class SettingsActivity : AppCompatActivity() {
         private class ItemHolder(view: View) : RecyclerView.ViewHolder(view) {
             private val title: TextView = view.findViewById(R.id.item_title)
             private val subtitle: TextView = view.findViewById(R.id.item_subtitle)
-            private val value: TextView = view.findViewById(R.id.item_value)
-            private val switch: SwitchCompat = view.findViewById(R.id.item_switch)
+            private val switch: SwitchMaterial = view.findViewById(R.id.item_switch)
 
             fun bind(
                 item: SettingItem,
@@ -792,16 +791,17 @@ class SettingsActivity : AppCompatActivity() {
             ) {
                 val context = itemView.context
                 title.setText(item.titleRes)
-                val sub = context.getString(item.subtitleRes)
-                subtitle.text = if (item.notSupportedM2) {
-                    "$sub • ${context.getString(R.string.set_not_supported_m2)}"
-                } else {
-                    sub
-                }
+                subtitle.text = subtitleFor(
+                    showValueAsSubtitle =
+                        item.kind == Kind.LIST || item.kind == Kind.TEXT,
+                    staticSubtitle = context.getString(item.subtitleRes),
+                    displayValue = item.displayValue(),
+                    notSupportedM2 = item.notSupportedM2,
+                    notSupportedLabel = context.getString(R.string.set_not_supported_m2),
+                )
                 val enabled = item.enabled()
                 itemView.alpha = if (enabled) 1f else 0.4f
                 if (item.kind == Kind.SWITCH) {
-                    value.visibility = View.GONE
                     switch.visibility = View.VISIBLE
                     switch.setOnCheckedChangeListener(null)
                     switch.isChecked = item.isOn()
@@ -814,8 +814,6 @@ class SettingsActivity : AppCompatActivity() {
                     }
                 } else {
                     switch.visibility = View.GONE
-                    value.visibility = View.VISIBLE
-                    value.text = item.displayValue()
                     switch.setOnCheckedChangeListener(null)
                     itemView.setOnClickListener {
                         if (enabled) onTap(item)
@@ -835,5 +833,29 @@ class SettingsActivity : AppCompatActivity() {
 
         /** Sections expanded on first open, matching v2rayNG. */
         private val DEFAULT_EXPANDED = setOf("ui", "vpn", "core", "advanced", "mode")
+
+        /**
+         * Subtitle shown under a setting title (v1.0.27, mirroring
+         * v2rayNG's SettingsListItem / SettingsEditItem): LIST and
+         * TEXT rows show the current value as the summary, SWITCH
+         * and ACTION rows keep the static subtitle. A blank value
+         * falls back to the static subtitle; the "not supported"
+         * marker is appended whenever it applies. Pure string
+         * logic — unit-tested in SettingsSubtitleTest.
+         */
+        internal fun subtitleFor(
+            showValueAsSubtitle: Boolean,
+            staticSubtitle: String,
+            displayValue: String,
+            notSupportedM2: Boolean,
+            notSupportedLabel: String,
+        ): String {
+            val base = if (showValueAsSubtitle && displayValue.isNotBlank()) {
+                displayValue
+            } else {
+                staticSubtitle
+            }
+            return if (notSupportedM2) "$base • $notSupportedLabel" else base
+        }
     }
 }

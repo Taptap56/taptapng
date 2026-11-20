@@ -1,4 +1,4 @@
-# TaptapX v1.0.26
+# TaptapX v1.0.27
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.26 (vc27)
+- **id** `com.taptap.x`, **versi** 1.0.27 (vc28)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,79 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.27 — Settings dirapikan ala v2rayNG
+
+**Kenapa.** Screenshot Settings 2026-11-21 02:43: header seksi
+("UI settings", "VPN settings") berupa teks putih besar tebal
+(16sp bold) dengan chevron putih — di v2rayNG header seksi itu
+teks kecil oranye (titleSmall 14sp, warna secondary); baris
+setting punya padding atas/bawah 10dp (v2rayNG: 16dp di semua
+sisi) dan subtitle 13sp; switch ukuran penuh gaya M2 (v2rayNG:
+M3 Switch skala 0,8, rel oranye saat nyala); dan baris nilai
+(Language, UI mode settings) menampilkan nilai di kolom kanan
+("System default") — di v2rayNG nilai itu adalah subtitle di
+bawah judul (`SettingsListItem` / `SettingsEditItem` menampilkan
+nilai sebagai summary), bukan kolom kanan.
+
+**Yang diubah** (hanya tampilan layar Settings — perilaku, key,
+nilai default, dan nilai tersimpan setting TIDAK berubah):
+
+1. **Header seksi = `CollapsiblePreferenceGroupHeader` v2rayNG**:
+   judul 14sp `sans-serif-medium` (titleSmall M3) warna
+   secondary (oranye `#f97910`, sama di light + dark), padding
+   horizontal 16dp / vertikal 12dp, chevron 24dp warna secondary
+   (tetap berputar 180° saat seksi dibuka, seperti sebelumnya).
+   Latar `colorSurface` yang terpisah dihapus — v2rayNG tidak
+   punya latar header yang berbeda dari latar layar.
+2. **Baris = `SettingsItemRow` v2rayNG**: padding 16dp di semua
+   sisi (atas/bawah 10dp → 16dp); judul `textAppearanceBodyLarge`
+   (16sp, onSurface); subtitle `textAppearanceBodySmall` (12sp,
+   onSurfaceVariant) dengan jarak 4dp di bawah judul (spacer
+   v2rayNG). Ritme antar-baris dan antar-seksi kini sama dengan
+   v2rayNG secara otomatis (baris 16dp + header 12dp).
+3. **Switch = M3 Switch v2rayNG**: `SwitchCompat` ukuran penuh
+   diganti `SwitchMaterial` skala 0,8 dengan tint yang sama
+   seperti v1.0.26 di layar Edit server (`switch_thumb` /
+   `switch_track`: rel nyala = secondary oranye, jempol nyala =
+   onSecondary, mati = outline / onSurface 16%). Baris penuh
+   tetap bisa diklik untuk toggle, seperti sebelumnya.
+4. **Baris nilai: nilai jadi subtitle** (seperti
+   `SettingsListItem` / `SettingsEditItem` v2rayNG): baris LIST
+   dan TEXT kini menampilkan `displayValue()` sebagai subtitle
+   di bawah judul — mis. Language jadi "Language" /
+   "System default", UI mode settings jadi "UI mode settings" /
+   "System default". Kolom nilai kanan (`item_value`) dihapus
+   dari layout dan adapter. Bila nilai kosong, subtitle kembali
+   ke subtitle statis; penanda "• Not supported yet" tetap
+   menempel di subtitle bila berlaku. Aturan pemilihan subtitle
+   ini adalah fungsi murni (`subtitleFor`) yang dikunci unit
+   test (`SettingsSubtitleTest`, 6 tes).
+5. **Tidak berubah**: status disabled tetap `alpha 0.4f` pada
+   baris (v2rayNG: warna judul/deskripsi alpha 0.38 — bedanya
+   tidak kelihatan), toolbar dan padding bawah list tetap sama.
+
+**Yang TIDAK bisa sama persis dengan v2rayNG** (dicatat jujur):
+
+- v2rayNG memakai Compose + Material 3; TaptapX memakai Views +
+  tema M2 — switch di atas adalah M2 `SwitchMaterial` skala 0,8
+  dengan tint yang sama, bukan komponen M3 `Switch` asli.
+  Geometri jempol/rel bisa beda sedikit.
+- `titleSmall` M3 adalah 14sp medium dengan letterSpacing 0.1sp;
+  di Views dipakai `sans-serif-medium` 14sp tanpa letterSpacing
+  (0.1sp tidak kelihatan).
+- Tampilan switch dan header belum bisa dibuktikan di VM ini
+  (tidak ada emulator) — verifikasi lewat screenshot HP sesudah
+  pasang (lihat "Verifikasi di HP" di bawah).
+
+**Verifikasi di HP.** Buka Settings: header "UI settings" /
+"VPN settings" harus teks kecil oranye (bukan putih besar tebal)
+dengan chevron oranye; baris "Language" harus menampilkan
+"System default" sebagai baris kedua di bawah judul (bukan di
+kanan); switch yang nyala harus kecil dengan rel oranye dan
+jempol putih (di dark: jempol coklat tua); ketuk baris switch di
+teksnya harus tetap toggle; buka-tutup seksi harus tetap
+menyimpan nilainya.
 
 ## v1.0.26 — Editor "Edit server" dirapikan ala v2rayNG
 

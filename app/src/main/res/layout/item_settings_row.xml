@@ -1,17 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One setting row: title + subtitle + current value, or a switch
-     (v1.0.5, mirroring v2rayNG's title + summary + value rows). -->
+<!-- One setting row (v1.0.5, restyled v1.0.27 to match v2rayNG's
+     SettingsItemRow): 16dp padding all sides; title bodyLarge (16sp),
+     subtitle bodySmall (12sp, onSurfaceVariant) 4dp below the title;
+     LIST/TEXT rows show the current value as the subtitle (like
+     SettingsListItem/SettingsEditItem) — no right-side value view;
+     switch = M3 SwitchMaterial scaled 0.8 with the v1.0.26 tints
+     (track on = secondary, thumb on = onSecondary). -->
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:clickable="true"
     android:focusable="true"
     android:orientation="horizontal"
     android:paddingStart="16dp"
-    android:paddingTop="10dp"
+    android:paddingTop="16dp"
     android:paddingEnd="16dp"
-    android:paddingBottom="10dp">
+    android:paddingBottom="16dp">
 
     <LinearLayout
         android:layout_width="0dp"
@@ -24,35 +30,25 @@
             android:id="@+id/item_title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="?attr/colorOnSurface"
-            android:textSize="16sp" />
+            android:textAppearance="?attr/textAppearanceBodyLarge" />
 
         <TextView
             android:id="@+id/item_subtitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="?android:attr/textColorSecondary"
-            android:textSize="13sp" />
+            android:layout_marginTop="4dp"
+            android:textAppearance="?attr/textAppearanceBodySmall" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/item_value"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center_vertical"
-        android:layout_marginStart="8dp"
-        android:ellipsize="end"
-        android:gravity="end"
-        android:maxLines="1"
-        android:maxWidth="150dp"
-        android:textColor="?android:attr/textColorSecondary"
-        android:textSize="14sp" />
-
-    <androidx.appcompat.widget.SwitchCompat
+    <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/item_switch"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center_vertical"
         android:layout_marginStart="8dp"
-        android:visibility="gone" />
+        android:scaleX="0.8"
+        android:scaleY="0.8"
+        android:visibility="gone"
+        app:thumbTint="@color/switch_thumb"
+        app:trackTint="@color/switch_track" />
 </LinearLayout>
