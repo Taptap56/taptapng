@@ -138,6 +138,13 @@ class TunForwarder(
 
     private fun readLoop() {
         val buf = ByteArray(65535)
+        // v1.0.11: the service sets the TUN fd blocking in
+        // establishTunnel(), so read() waits for a packet. This
+        // line proves the reader thread is alive and waiting —
+        // the v1.0.10 phone log showed "FORWARDER mulai" and then
+        // nothing until "baca TUN selesai (n=0)" 1 ms later, so
+        // nobody could tell the thread had even entered its read.
+        DialLog.log("FORWARDER", "loop baca TUN jalan — menunggu paket")
         while (running.get()) {
             val n = try {
                 tunIn.read(buf)
@@ -148,8 +155,27 @@ class TunForwarder(
                 if (running.get()) DialLog.failure("FORWARDER baca TUN", e)
                 break
             }
-            if (n <= 0) {
-                if (running.get()) DialLog.log("FORWARDER", "baca TUN selesai (n=$n)")
+            if (n == 0) {
+                // No data yet (EAGAIN on a non-blocking fd) — NOT
+                // end-of-stream. Keep waiting. The sleep only
+                // matters if the fd somehow stayed non-blocking;
+                // with a blocking fd read() never returns 0.
+                try {
+                    Thread.sleep(10)
+                } catch (_: InterruptedException) {
+                    // Stop was requested; the while condition exits.
+                }
+                continue
+            }
+            if (n < 0) {
+                // EOF: the TUN fd closed while the VPN is still
+                // running — an error, not a clean finish.
+                if (running.get()) {
+                    DialLog.failure(
+                        "FORWARDER baca TUN",
+                        java.io.IOException("EOF (n=-1): fd TUN tertutup saat VPN jalan"),
+                    )
+                }
                 break
             }
             packetsRead.incrementAndGet()
@@ -158,6 +184,11 @@ class TunForwarder(
             } catch (_: Exception) {
                 // One bad packet must not kill the reader.
             }
+        }
+        // "selesai" is only for a real teardown (stop() cleared
+        // running); an error exit above already logged itself.
+        if (!running.get()) {
+            DialLog.log("FORWARDER", "baca TUN selesai (paket: ${packetsRead.get()})")
         }
     }
 

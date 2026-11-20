@@ -303,6 +303,29 @@ class TaptapVpnService : VpnService() {
         }
         val fd = builder.establish()
             ?: throw IllegalStateException("Gagal establish TUN (izin VPN ditolak?)")
+        // v1.0.11: the fd from establish() is NON-BLOCKING
+        // (O_NONBLOCK) — FileInputStream.read() returns 0 at once
+        // when no packet is waiting (EAGAIN), and the reader
+        // treated 0 as end-of-stream and exited 1 ms after start
+        // (phone log 08:05:09.528–529, "baca TUN selesai (n=0)").
+        // Set it blocking so read() waits for the first packet;
+        // the reader then only exits on stop() or a real read
+        // error. v2rayNG never hits this: it hands the fd to the
+        // native core, and xray-core's Android TUN sets the fd
+        // non-blocking and waits in the Go poller
+        // (tun_android.go: SetNonblock + fdTun.ReadParts) — a
+        // naive Java read loop must have a blocking fd instead.
+        try {
+            android.system.Os.setBlocking(fd.fileDescriptor, true)
+        } catch (e: Exception) {
+            // If this ever fails, the reader still survives: a 0
+            // read is retried, not treated as end-of-stream
+            // (see TunForwarder.readLoop).
+            DialLog.log(
+                "FORWARDER",
+                "setBlocking gagal (${e.javaClass.simpleName}) — baca TUN tetap jalan (retry)",
+            )
+        }
         // The TUN exists from here on: dial/DNS/test sockets must
         // now be protected (TunnelState.up gates enforcement in
         // Transport / DnsResolver / ServerTester). Before this line
