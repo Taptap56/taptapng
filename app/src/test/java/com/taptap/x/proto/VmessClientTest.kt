@@ -1,8 +1,10 @@
 package com.taptap.x.proto
+import com.taptap.x.core.DialLog
 import com.taptap.x.core.proto.*
 
 import com.taptap.x.data.ConfigType
 import com.taptap.x.data.ProfileItem
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
@@ -195,7 +197,7 @@ class VmessClientTest {
     }
 
     @Test
-    fun `vmess dial with wrong uuid fails`() {
+    fun `vmess dial with wrong uuid fails on first read`() {
         val server = ServerSocket(0)
         val port = server.localPort
         val serverThread = Thread {
@@ -219,9 +221,16 @@ class VmessClientTest {
             security = "auto",
             network = "tcp",
         )
-        assertThrows(Exception::class.java) {
-            VmessClient(item).dial("example.com", 443)
+        // v1.0.12: the response header is read lazily — dial()
+        // returns, and the bad UUID surfaces on the first read (EOF:
+        // the server closed the connection instead of answering).
+        val client = VmessClient(item)
+        val stream = client.dial("example.com", 443)
+        assertThrows(IOException::class.java) {
+            stream.input.read()
         }
+        runCatching { stream.close() }
+        client.close()
         serverThread.join(5_000)
     }
 
@@ -298,9 +307,18 @@ class VmessClientTest {
         assertArrayEquals(probeBody, firstChunk)
     }
 
+    // v1.0.12: the relay dial no longer reads the response header
+    // in dial() — the xray-like server waits for the first body
+    // chunk before flushing it, and the body can only be sent after
+    // dial() returns (the forwarder sends the SYN-ACK first). So a
+    // relay dial returns at once, and the 10 s timeout (if the app
+    // never sends data) surfaces on the FIRST READ instead — the
+    // phone symptom in taptapx-7.txt was dial() itself timing out
+    // on every forwarder connection.
+
     @Test
     @Timeout(value = 20, unit = TimeUnit.SECONDS)
-    fun `dial without probe body times out against xray-like server`() {
+    fun `relay dial returns at once but first read times out against xray-like server with no body`() {
         val server = ServerSocket(0)
         val port = server.localPort
         val serverThread = Thread {
@@ -321,17 +339,17 @@ class VmessClientTest {
                 )
                 val reqNonce = VmessCrypto.ChunkNonce(session.bodyIV)
                 val reqMask = Shake128(session.bodyIV)
-                // Waits for the first body chunk — a dial with no
-                // probe body never sends one.
+                // Waits for the first body chunk — a relay that never
+                // sends a body never gets a response header.
                 readChunk(
                     input, session.bodyKey, reqNonce, reqMask, VmessSecurity.AES_128_GCM,
                 )
                 output.write(VmessCrypto.sealResponseHeader(session, session.responseV))
                 output.flush()
             } catch (_: Throwable) {
-                // Expected: the client times out first (~10 s) and
-                // closes the transport (EOF), or the server's own
-                // 15 s read timeout fires.
+                // Expected: the client times out on its first read
+                // (~10 s) and closes the transport (EOF), or the
+                // server's own 15 s read timeout fires.
             } finally {
                 runCatching { socket.close() }
                 runCatching { server.close() }
@@ -344,12 +362,121 @@ class VmessClientTest {
             uuid = uuid, security = "aes-128-gcm",
             network = "tcp",
         )
-        // No probe body: must fail reading the response header
-        // (~10 s), exactly like the phone (taptapx-5.txt).
-        assertThrows(SocketTimeoutException::class.java) {
-            VmessClient(item).dial("example.com", 443)
+        // No probe body: dial() must return at once (on v1.0.11 it
+        // threw SocketTimeoutException here, ~10 s in).
+        val client = VmessClient(item)
+        val dialStart = System.currentTimeMillis()
+        val stream = client.dial("example.com", 443)
+        val dialMs = System.currentTimeMillis() - dialStart
+        assertTrue(dialMs < 5_000, "dial() harus kembali seketika, butuh ${dialMs}ms")
+        try {
+            assertThrows(SocketTimeoutException::class.java) {
+                stream.input.read()
+            }
+        } finally {
+            runCatching { stream.close() }
+            client.close()
         }
         serverThread.join(5_000)
+    }
+
+    @Test
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
+    fun `relay dial succeeds against xray-like server when app data is sent first`() {
+        val server = ServerSocket(0)
+        val port = server.localPort
+        val appData = "hello-from-app".toByteArray() // 14 byte
+        var serverError: Throwable? = null
+        var firstChunk: ByteArray? = null
+        val serverThread = Thread {
+            val socket = server.accept()
+            socket.soTimeout = 5_000
+            try {
+                val input = socket.getInputStream()
+                val output = socket.getOutputStream()
+                val opened = VmessCrypto.openRequestHeader(VmessCrypto.cmdKey(uuid), input)
+                val session = VmessSession(
+                    requestBytes = ByteArray(0),
+                    bodyKey = opened.header.bodyKey,
+                    bodyIV = opened.header.bodyIV,
+                    responseBodyKey = Crypto.sha256(opened.header.bodyKey).copyOfRange(0, 16),
+                    responseBodyIV = Crypto.sha256(opened.header.bodyIV).copyOfRange(0, 16),
+                    responseV = opened.header.responseV,
+                    security = VmessSecurity.AES_128_GCM,
+                )
+                val reqNonce = VmessCrypto.ChunkNonce(session.bodyIV)
+                val reqMask = Shake128(session.bodyIV)
+                // xray-like: no response header until the first body
+                // chunk arrives — and it must be the app's real
+                // bytes, not a dummy (taptapx-7.txt: the forwarder
+                // sent no body at all, so every dial deadlocked).
+                firstChunk = readChunk(
+                    input, session.bodyKey, reqNonce, reqMask, VmessSecurity.AES_128_GCM,
+                )
+                output.write(VmessCrypto.sealResponseHeader(session, session.responseV))
+                output.flush()
+                val respNonce = VmessCrypto.ChunkNonce(session.responseBodyIV)
+                val respMask = Shake128(session.responseBodyIV)
+                writeChunk(
+                    output, session.responseBodyKey, respNonce, respMask,
+                    VmessSecurity.AES_128_GCM, "hello-from-server".toByteArray(),
+                )
+                // The client's empty termination chunk.
+                val term = readChunk(
+                    input, session.bodyKey, reqNonce, reqMask, VmessSecurity.AES_128_GCM,
+                )
+                assertEquals(0, term.size)
+            } catch (e: Throwable) {
+                serverError = e
+            } finally {
+                runCatching { socket.close() }
+                runCatching { server.close() }
+            }
+        }
+        serverThread.start()
+        val item = ProfileItem(
+            configType = ConfigType.VMESS,
+            address = "::1", port = port,
+            uuid = uuid, security = "aes-128-gcm",
+            network = "tcp",
+        )
+        val logBefore = DialLog.lines().size
+        val client = VmessClient(item)
+        // On v1.0.11 dial() itself throws SocketTimeoutException
+        // here (~10 s): it reads the response header before any
+        // body exists to unblock the server.
+        val stream = client.dial("example.com", 443)
+        try {
+            stream.output.write(appData)
+            stream.output.flush()
+            val buf = ByteArray("hello-from-server".length)
+            var filled = 0
+            while (filled < buf.size) {
+                val r = stream.input.read(buf, filled, buf.size - filled)
+                if (r == -1) break
+                filled += r
+            }
+            assertEquals(buf.size, filled)
+            assertArrayEquals("hello-from-server".toByteArray(), buf)
+        } finally {
+            runCatching { stream.close() }
+            client.close()
+        }
+        serverThread.join(5_000)
+        assertTrue(!serverThread.isAlive, "fake server thread must finish")
+        serverError?.let { throw AssertionError("Fake server gagal", it) }
+        // The server must have received exactly the app's bytes.
+        assertArrayEquals(appData, firstChunk)
+        // The log must prove the body went out and the header arrived.
+        val logLines = DialLog.lines().drop(logBefore)
+        assertTrue(
+            logLines.any { it.contains("VMess body 14B untuk example.com:443") },
+            "log harus ada 'VMess body 14B ...': $logLines",
+        )
+        assertTrue(
+            logLines.any { it.contains("VMess handshake ok") },
+            "log harus ada 'VMess handshake ok': $logLines",
+        )
     }
 
     /** Server-side chunk reader (shared framing, caller keeps state). */

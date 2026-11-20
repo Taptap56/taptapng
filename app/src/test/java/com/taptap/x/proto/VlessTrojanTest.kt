@@ -1,15 +1,19 @@
 package com.taptap.x.proto
+import com.taptap.x.core.DialLog
 import com.taptap.x.core.proto.*
 
 import com.taptap.x.data.ConfigType
 import com.taptap.x.data.ProfileItem
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 
 /**
  * VLESS + Trojan: header build/parse-back and loopback relay against
@@ -173,6 +177,144 @@ class VlessTrojanTest {
         assertTrue(!serverThread.isAlive, "fake server thread must finish")
         serverError?.let { throw AssertionError("Fake VLESS server gagal", it) }
         assertArrayEquals(probeBody, receivedProbe)
+    }
+
+    // v1.0.12: same deadlock as VMess, same fix — the relay dial
+    // must not read the response header before the app's first data
+    // is sent (the xray-like server flushes the header only once
+    // data flows). A relay dial returns at once; the header is read
+    // lazily on the first read.
+
+    @Test
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
+    fun `vless relay dial succeeds against xray-like server when app data is sent first`() {
+        val server = ServerSocket(0)
+        val port = server.localPort
+        var serverError: Throwable? = null
+        val serverThread = Thread {
+            val socket = server.accept()
+            socket.soTimeout = 5_000
+            try {
+                val input = socket.getInputStream()
+                val output = socket.getOutputStream()
+                val head = input.readExactBytes(19)
+                val parsed = VlessCrypto.parseRequestHeader(head + input.readExactBytes(15))
+                assertEquals("example.com", parsed.target.host)
+                assertEquals(443, parsed.target.port)
+                // xray-like: response header only after the first
+                // body bytes arrive.
+                val buf = ByteArray(4)
+                var filled = 0
+                while (filled < buf.size) {
+                    val r = input.read(buf, filled, buf.size - filled)
+                    if (r == -1) break
+                    filled += r
+                }
+                assertArrayEquals("ping".toByteArray(), buf)
+                output.write(byteArrayOf(0x00, 0x00)) // version + addon length
+                output.flush()
+                output.write("pong".toByteArray())
+                output.flush()
+            } catch (e: Throwable) {
+                serverError = e
+            } finally {
+                runCatching { socket.close() }
+                runCatching { server.close() }
+            }
+        }
+        serverThread.start()
+        val item = ProfileItem(
+            configType = ConfigType.VLESS,
+            address = "::1", port = port,
+            uuid = uuid, method = "none", network = "tcp",
+        )
+        val logBefore = DialLog.lines().size
+        val client = VlessClient(item)
+        // On v1.0.11 dial() itself throws SocketTimeoutException
+        // here (~10 s): it reads the response header before any
+        // body exists to unblock the server.
+        val stream = client.dial("example.com", 443)
+        try {
+            stream.output.write("ping".toByteArray())
+            stream.output.flush()
+            val buf = ByteArray(4)
+            var filled = 0
+            while (filled < buf.size) {
+                val r = stream.input.read(buf, filled, buf.size - filled)
+                if (r == -1) break
+                filled += r
+            }
+            assertArrayEquals("pong".toByteArray(), buf)
+        } finally {
+            client.close()
+        }
+        serverThread.join(5_000)
+        assertTrue(!serverThread.isAlive, "fake server thread must finish")
+        serverError?.let { throw AssertionError("Fake VLESS server gagal", it) }
+        val logLines = DialLog.lines().drop(logBefore)
+        assertTrue(
+            logLines.any { it.contains("VLESS body 4B untuk example.com:443") },
+            "log harus ada 'VLESS body 4B ...': $logLines",
+        )
+        assertTrue(
+            logLines.any { it.contains("VLESS handshake ok") },
+            "log harus ada 'VLESS handshake ok': $logLines",
+        )
+    }
+
+    @Test
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
+    fun `vless relay dial returns at once but first read times out with no body`() {
+        val server = ServerSocket(0)
+        val port = server.localPort
+        val serverThread = Thread {
+            val socket = server.accept()
+            socket.soTimeout = 15_000
+            try {
+                val input = socket.getInputStream()
+                val output = socket.getOutputStream()
+                val head = input.readExactBytes(19)
+                VlessCrypto.parseRequestHeader(head + input.readExactBytes(15))
+                // Waits for the first body bytes — a relay that never
+                // sends a body never gets a response header.
+                val buf = ByteArray(4)
+                var filled = 0
+                while (filled < buf.size) {
+                    val r = input.read(buf, filled, buf.size - filled)
+                    if (r == -1) break
+                    filled += r
+                }
+                output.write(byteArrayOf(0x00, 0x00))
+                output.flush()
+            } catch (_: Throwable) {
+                // Expected: the client times out on its first read
+                // (~10 s) and closes the transport (EOF), or the
+                // server's own 15 s read timeout fires.
+            } finally {
+                runCatching { socket.close() }
+                runCatching { server.close() }
+            }
+        }
+        serverThread.start()
+        val item = ProfileItem(
+            configType = ConfigType.VLESS,
+            address = "::1", port = port,
+            uuid = uuid, method = "none", network = "tcp",
+        )
+        val client = VlessClient(item)
+        val dialStart = System.currentTimeMillis()
+        val stream = client.dial("example.com", 443)
+        val dialMs = System.currentTimeMillis() - dialStart
+        assertTrue(dialMs < 5_000, "dial() harus kembali seketika, butuh ${dialMs}ms")
+        try {
+            assertThrows(SocketTimeoutException::class.java) {
+                stream.input.read()
+            }
+        } finally {
+            runCatching { stream.close() }
+            client.close()
+        }
+        serverThread.join(5_000)
     }
 
     @Test

@@ -3,7 +3,7 @@ package com.taptap.x
 /** App-wide constants (Phase 1). */
 object AppConfig {
     const val APP_NAME = "TaptapX"
-    const val VERSION_NAME = "1.0.11"
+    const val VERSION_NAME = "1.0.12"
 
     /** Profiles are stored as one JSON file in the app's private files dir. */
     const val PROFILES_FILE = "profiles.json"

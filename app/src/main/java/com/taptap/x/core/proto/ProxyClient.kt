@@ -3,6 +3,7 @@ package com.taptap.x.core.proto
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Common stream/client contract for the in-app proxy protocols (M2).
@@ -95,4 +96,78 @@ fun InputStream.readExactBytes(n: Int): ByteArray {
         filled += r
     }
     return out
+}
+
+/**
+ * InputStream that runs [onFirstRead] exactly once, before the first
+ * read (v1.0.12). The VMess/VLESS response header is read lazily
+ * through it: the xray-core server only flushes its response header
+ * once data flows from the dispatch target, so a relay dial that
+ * reads the header before the app has sent any body deadlocks into
+ * a 10 s timeout (taptapx-7.txt: every forwarder dial died at
+ * "VMess gagal: Read timed out", zero "DIAL ... ok"). xray-core's
+ * own client runs the two directions concurrently (outbound.go:
+ * task.Run(requestDone, responseDone)) — the header read must never
+ * precede the body write. The hook runs on the reading thread (the
+ * forwarder's relay thread); the socket's handshake SO_TIMEOUT still
+ * bounds it, and the hook clears it once the header arrives. All
+ * other operations delegate untouched; [available] does NOT trigger
+ * the hook.
+ */
+class LazyHeaderInputStream(
+    private val rawIn: InputStream,
+    private val onFirstRead: () -> Unit,
+) : InputStream() {
+
+    private val done = AtomicBoolean(false)
+
+    private fun ensureHeader() {
+        if (done.compareAndSet(false, true)) onFirstRead()
+    }
+
+    override fun read(): Int {
+        ensureHeader()
+        return rawIn.read()
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        ensureHeader()
+        return rawIn.read(b, off, len)
+    }
+
+    override fun available(): Int = rawIn.available()
+
+    override fun close() {
+        runCatching { rawIn.close() }
+    }
+}
+
+/**
+ * OutputStream that calls [onFirstWrite] once with the size of the
+ * first non-empty write (v1.0.12). The forwarder writes the app's
+ * first data through it, so the phone log can prove a body was
+ * actually sent ("VLESS body 512B untuk ...") instead of only
+ * showing the dial stages. Empty writes do not trigger it; [flush]
+ * does not trigger it either — the log means bytes went on the
+ * wire, not that a buffer was flushed.
+ */
+class FirstWriteLoggingOutputStream(
+    private val rawOut: OutputStream,
+    private val onFirstWrite: (Int) -> Unit,
+) : OutputStream() {
+
+    private val done = AtomicBoolean(false)
+
+    override fun write(b: Int) = write(byteArrayOf(b.toByte()))
+
+    override fun write(b: ByteArray, off: Int, len: Int) {
+        if (len > 0 && done.compareAndSet(false, true)) onFirstWrite(len)
+        rawOut.write(b, off, len)
+    }
+
+    override fun flush() = rawOut.flush()
+
+    override fun close() {
+        runCatching { rawOut.close() }
+    }
 }

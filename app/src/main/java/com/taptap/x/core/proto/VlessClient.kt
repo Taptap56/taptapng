@@ -43,14 +43,49 @@ class VlessClient(private val item: ProfileItem) : ProxyClient {
                 transport.output.write(probeBody)
                 transport.output.flush()
                 DialLog.log("VLESS", "probe body ${probeBody.size}B")
+                Transport.noteStage("VLESS")
+                VlessCrypto.readResponseHeader(transport.input)
+                transport.socket.soTimeout = 0
+                Transport.clearWatchdogSocket()
+                DialLog.log("VLESS", "handshake ok")
+                return TrackedProxyStream(
+                    SocketProxyStream(transport.socket, transport.input, transport.output),
+                    openStreams,
+                )
             }
-            Transport.noteStage("VLESS")
-            VlessCrypto.readResponseHeader(transport.input)
-            transport.socket.soTimeout = 0
-            Transport.clearWatchdogSocket()
-            DialLog.log("VLESS", "handshake ok")
+            // v1.0.12: RELAY dial — same deadlock as VMess, same
+            // fix. Reading the response header here waits ~10 s
+            // while the app's first data — the body that unblocks
+            // the server's flush — can only be sent after dial()
+            // returns. Read it lazily on the first relay read
+            // instead (xray-core's client runs both directions
+            // concurrently); the 10 s handshake timeout still
+            // bounds the lazy read, and the first body write is
+            // logged so the phone log proves a body was sent.
+            val lazyIn = LazyHeaderInputStream(transport.input) {
+                try {
+                    Transport.noteStage("VLESS")
+                    VlessCrypto.readResponseHeader(transport.input)
+                } catch (e: java.net.SocketTimeoutException) {
+                    val failure = Transport.preferWatchdogFailure(
+                        java.net.SocketTimeoutException("VLESS gagal: ${e.message}"),
+                    )
+                    DialLog.failure("VLESS", failure)
+                    throw failure
+                } catch (e: Exception) {
+                    val failure = Transport.preferWatchdogFailure(e)
+                    DialLog.failure("VLESS", failure)
+                    throw failure
+                }
+                transport.socket.soTimeout = 0
+                Transport.clearWatchdogSocket()
+                DialLog.log("VLESS", "handshake ok")
+            }
+            val loggedOut = FirstWriteLoggingOutputStream(transport.output) { n ->
+                DialLog.log("VLESS", "body ${n}B untuk $targetHost:$targetPort")
+            }
             return TrackedProxyStream(
-                SocketProxyStream(transport.socket, transport.input, transport.output),
+                SocketProxyStream(transport.socket, lazyIn, loggedOut),
                 openStreams,
             )
         } catch (e: Exception) {

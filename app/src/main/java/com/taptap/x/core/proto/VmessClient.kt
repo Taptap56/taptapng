@@ -65,22 +65,74 @@ class VmessClient(private val item: ProfileItem) : ProxyClient {
             // here (not after the handshake) so the probe chunk
             // uses the same mask/nonce sequence as the relay that
             // follows — one stream, one state.
-            val bodyOut = VmessBodyOutputStream(transport.output, session)
+            // v1.0.12: on a RELAY dial the first chunk is the app's
+            // own first data — log it ("VMess body 512B untuk ...")
+            // so the phone log proves a body was sent. On a probe
+            // dial the probe body already has its own line.
+            val bodyOut = VmessBodyOutputStream(
+                transport.output,
+                session,
+                onFirstChunk = if (probeBody == null) {
+                    { n -> DialLog.log("VMess", "body ${n}B untuk $targetHost:$targetPort") }
+                } else {
+                    null
+                },
+            )
             if (probeBody != null) {
                 bodyOut.write(probeBody)
                 bodyOut.flush()
                 DialLog.log("VMess", "probe body ${probeBody.size}B")
+                // Fail fast: the server answers with its response header
+                // right after dispatching; a bad UUID/header dies here.
+                Transport.noteStage("VMess")
+                VmessCrypto.readResponseHeader(transport.input, session)
+                val bodyIn = VmessBodyInputStream(transport.input, session)
+                transport.socket.soTimeout = 0
+                Transport.clearWatchdogSocket()
+                DialLog.log("VMess", "handshake ok")
+                return TrackedProxyStream(
+                    SocketProxyStream(transport.socket, bodyIn, bodyOut),
+                    openStreams,
+                )
             }
-            // Fail fast: the server answers with its response header
-            // right after dispatching; a bad UUID/header dies here.
-            Transport.noteStage("VMess")
-            VmessCrypto.readResponseHeader(transport.input, session)
+            // v1.0.12: RELAY dial — the response header is read
+            // LAZILY, on the relay thread's first read, NOT here.
+            // The server holds the header in its BufferedWriter
+            // until the app's first data reaches the target
+            // (inbound.go transferResponse reads link.Reader first);
+            // reading it here deadlocks: the forwarder only sends
+            // the SYN-ACK — and the app only sends its data — after
+            // dial() returns (taptapx-7.txt: 100% of forwarder
+            // dials died at "VMess gagal: Read timed out", zero
+            // "DIAL ... ok"). xray-core's client runs both
+            // directions concurrently (outbound.go:
+            // task.Run(requestDone, responseDone)) — the body write
+            // and the header read are independent. The socket's 10 s
+            // handshake timeout still bounds the lazy read; the hook
+            // clears it once the header arrives, and a bad
+            // UUID/header surfaces on the first read instead.
             val bodyIn = VmessBodyInputStream(transport.input, session)
-            transport.socket.soTimeout = 0
-            Transport.clearWatchdogSocket()
-            DialLog.log("VMess", "handshake ok")
+            val lazyIn = LazyHeaderInputStream(bodyIn) {
+                try {
+                    Transport.noteStage("VMess")
+                    VmessCrypto.readResponseHeader(transport.input, session)
+                } catch (e: java.net.SocketTimeoutException) {
+                    val failure = Transport.preferWatchdogFailure(
+                        java.net.SocketTimeoutException("VMess gagal: ${e.message}"),
+                    )
+                    DialLog.failure("VMess", failure)
+                    throw failure
+                } catch (e: Exception) {
+                    val failure = Transport.preferWatchdogFailure(e)
+                    DialLog.failure("VMess", failure)
+                    throw failure
+                }
+                transport.socket.soTimeout = 0
+                Transport.clearWatchdogSocket()
+                DialLog.log("VMess", "handshake ok")
+            }
             return TrackedProxyStream(
-                SocketProxyStream(transport.socket, bodyIn, bodyOut),
+                SocketProxyStream(transport.socket, lazyIn, bodyOut),
                 openStreams,
             )
         } catch (e: java.net.SocketTimeoutException) {
@@ -412,12 +464,21 @@ object VmessCrypto {
 class VmessBodyOutputStream(
     private val rawOut: OutputStream,
     private val session: VmessSession,
+    /**
+     * v1.0.12: called once with the plaintext size of the first
+     * non-empty chunk — the relay's proof that the app's first data
+     * went out as the body. Null on probe dials (the probe body
+     * already has its own log line). The empty termination chunk
+     * never fires it.
+     */
+    private val onFirstChunk: ((Int) -> Unit)? = null,
 ) : OutputStream() {
 
     private val mask = Shake128(session.bodyIV)
     private val nonce = VmessCrypto.ChunkNonce(session.bodyIV)
     private val pending = mutableListOf<Byte>()
     private var closed = false
+    private val firstChunkLogged = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun write(b: Int) = write(byteArrayOf(b.toByte()))
 
@@ -452,6 +513,9 @@ class VmessBodyOutputStream(
      * size mask — the reader must consume them in the same order.
      */
     fun writeChunk(data: ByteArray) {
+        if (data.isNotEmpty() && firstChunkLogged.compareAndSet(false, true)) {
+            onFirstChunk?.invoke(data.size)
+        }
         if (session.security == VmessSecurity.NONE) {
             rawOut.write(data)
             return
