@@ -32,10 +32,19 @@ class TunForwarderResponsivenessTest {
     private val clientIp = TcpPacket.ipFromBytes(10, 10, 14, 2)
     private val serverIp = TcpPacket.ipFromBytes(93, 184, 216, 34)
 
-    /** Proxy stream that records everything written to it. */
+    /** Proxy stream that records everything written to it. The
+     * input is a CONNECTED pipe whose write end is never written
+     * to, so read() blocks forever like a real socket waiting for
+     * server data — an unconnected PipedInputStream throws
+     * immediately ("Pipe not connected"), which made the relay
+     * FIN the session microseconds after dial and broke every
+     * test that feeds data after "Connected". The write end is
+     * held in a field so the pipe stays connected. */
     private class RecordingStream : ProxyStream {
         val written = ByteArrayOutputStream()
-        override val input: InputStream = PipedInputStream()
+        @Suppress("unused")
+        private val pipeOut = PipedOutputStream()
+        override val input: InputStream = PipedInputStream(pipeOut)
         override val output: OutputStream = written
         override fun close() {
             runCatching { input.close() }
@@ -175,6 +184,12 @@ class TunForwarderResponsivenessTest {
         try {
             h.fwd.start()
             h.feed(syn())
+            // Wait until the reader processed the SYN alone: the
+            // pipe is a byte stream, so a data packet fed
+            // immediately after the SYN can coalesce into the same
+            // read() and be lost (the reader parses one packet per
+            // read). The session existing proves the SYN was read.
+            assertTrue(waitFor(what = "SYN processed") { h.fwd.sessionCount() == 1 })
             // The dial is blocked on the latch; the app's first
             // data arrives while DIALING and must be queued.
             val before = h.drainedBytes().size
