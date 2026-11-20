@@ -387,10 +387,12 @@ class SpeedStatsTest {
             // window — the read stage must be non-zero.
             val rdMs = Regex("rd=(\\d+)ms").find(window)?.groupValues?.get(1)?.toLongOrNull()
             assertTrue((rdMs ?: 0) > 0, "relay read time must be > 0 in a live window: $window")
-            // End the relay: closing the feed makes the read return
-            // -1, sendFin logs the summary.
-            runCatching { proxy.stream.feedOut.close() }
+            // End the relay: wait for the feeder to push all 20
+            // chunks first (closing early would make the down total
+            // non-deterministic), then close the feed — the read
+            // returns -1, sendFin logs the summary.
             feederDone.await(5, TimeUnit.SECONDS)
+            runCatching { proxy.stream.feedOut.close() }
             assertTrue(
                 waitFor(timeoutMs = 10_000, what = "SPEED TUTUP line") {
                     speedLines().any { it.contains("TUTUP") }
