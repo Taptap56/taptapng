@@ -33,9 +33,11 @@ object WsTransport {
     class WsStream internal constructor(
         rawIn: InputStream,
         rawOut: OutputStream,
+        /** v1.0.16: per-connection speed stats (null = off). */
+        stats: SpeedStats? = null,
     ) {
         private val writeLock = Any()
-        val input: InputStream = WsInputStream(rawIn, rawOut, writeLock)
+        val input: InputStream = WsInputStream(rawIn, rawOut, writeLock, stats)
         val output: OutputStream = WsOutputStream(rawOut, writeLock)
 
         /** Send a Close frame (best effort). Does NOT close the raw socket. */
@@ -44,7 +46,13 @@ object WsTransport {
         }
     }
 
-    fun connect(rawIn: InputStream, rawOut: OutputStream, host: String, path: String): WsStream {
+    fun connect(
+        rawIn: InputStream,
+        rawOut: OutputStream,
+        host: String,
+        path: String,
+        stats: SpeedStats? = null,
+    ): WsStream {
         val keyBytes = Crypto.randomBytes(16)
         val key = Base64Util.encode(keyBytes)
         val request = buildString {
@@ -76,7 +84,7 @@ object WsTransport {
         if (!MessageDigest.isEqual(accept.toByteArray(Charsets.UTF_8), expected.toByteArray(Charsets.UTF_8))) {
             throw IOException("WebSocket Sec-WebSocket-Accept tidak cocok")
         }
-        return WsStream(rawIn, rawOut)
+        return WsStream(rawIn, rawOut, stats)
     }
 
     /** Read HTTP response headers byte-by-byte until the blank line. */
@@ -180,6 +188,8 @@ object WsTransport {
         private val rawIn: InputStream,
         private val rawOut: OutputStream,
         private val writeLock: Any,
+        /** v1.0.16: per-connection speed stats (null = off). */
+        private val stats: SpeedStats? = null,
     ) : InputStream() {
 
         private var messageBuf: ByteArray = ByteArray(0)
@@ -252,6 +262,13 @@ object WsTransport {
                     payload[i] = (payload[i].toInt() xor mask[i % 4].toInt()).toByte()
                 }
             }
+            // v1.0.16: count data frames (continuation/text/binary)
+            // — with the bytes delivered, this shows the WS frame
+            // granularity (a 16 KiB frame per read vs many small
+            // ones). Control frames (ping/pong/close) are not data.
+            if (opcode == 0x00 || opcode == 0x01 || opcode == 0x02) {
+                stats?.wsFrames?.incrementAndGet()
+            }
             return Triple(fin, opcode, payload)
         }
 
@@ -262,15 +279,28 @@ object WsTransport {
 
         override fun read(b: ByteArray, off: Int, len: Int): Int {
             if (closed) return -1
-            if (messagePos >= messageBuf.size) {
-                val msg = readMessage() ?: return -1
-                messageBuf = msg
-                messagePos = 0
+            // v1.0.16: parse-only time = this read's wall time minus
+            // the raw transport read time already counted in tls+net
+            // (TimedInputStream). A return from the buffered message
+            // has no raw read, so its whole wall is parse/copy.
+            val t0 = if (stats != null) System.nanoTime() else 0L
+            val tlsBefore = stats?.tlsNetNs?.get() ?: 0L
+            val result: Int = run {
+                if (messagePos >= messageBuf.size) {
+                    val msg = readMessage() ?: return@run -1
+                    messageBuf = msg
+                    messagePos = 0
+                }
+                val take = minOf(len, messageBuf.size - messagePos)
+                messageBuf.copyInto(b, off, messagePos, messagePos + take)
+                messagePos += take
+                take
             }
-            val take = minOf(len, messageBuf.size - messagePos)
-            messageBuf.copyInto(b, off, messagePos, messagePos + take)
-            messagePos += take
-            return take
+            stats?.let {
+                val own = (System.nanoTime() - t0) - (it.tlsNetNs.get() - tlsBefore)
+                if (own > 0) it.wsNs.addAndGet(own)
+            }
+            return result
         }
 
         override fun available(): Int = messageBuf.size - messagePos

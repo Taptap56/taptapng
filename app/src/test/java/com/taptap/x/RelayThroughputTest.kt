@@ -3,6 +3,7 @@ package com.taptap.x
 import com.taptap.x.core.proto.Crypto
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyStream
+import com.taptap.x.core.proto.SpeedStats
 import com.taptap.x.core.proto.VmessBodyInputStream
 import com.taptap.x.core.proto.VmessBodyOutputStream
 import com.taptap.x.core.proto.VmessSecurity
@@ -65,7 +66,12 @@ class RelayThroughputTest {
 
     private class FeedProxy : ProxyClient {
         val stream = FeedStream()
-        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream =
+override fun dial(
+            targetHost: String,
+            targetPort: Int,
+            probeBody: ByteArray?,
+            stats: SpeedStats? = null,
+        ): ProxyStream =
             stream
 
         override fun close() = Unit

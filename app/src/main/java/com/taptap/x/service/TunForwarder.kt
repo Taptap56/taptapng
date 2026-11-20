@@ -5,6 +5,7 @@ import com.taptap.x.core.TunnelState
 import com.taptap.x.core.proto.DialWatchdog
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyStream
+import com.taptap.x.core.proto.SpeedStats
 import com.taptap.x.core.proto.Transport
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -54,6 +55,12 @@ class TunForwarder(
     /** MTU from Settings (v2rayNG default 1500) — the SYN-ACK MSS
      * is derived from it (v1.0.13, fix A6). */
     private val tunMtu: Int = 1500,
+    /**
+     * SPEED window (v1.0.16): while a session transfers, a SPEED
+     * line is logged every [speedWindowMs] ms. Tests shorten it so
+     * a window line appears without a 5 s transfer.
+     */
+    private val speedWindowMs: Long = 5000,
 ) {
 
     private enum class State { DIALING, SYN_SENT, ESTABLISHED, CLOSED }
@@ -95,6 +102,17 @@ class TunForwarder(
         @Volatile var peerMss: Int = TcpPacket.TCP_MSS
         @Volatile var wsOffered: Boolean = false
         @Volatile var sackOffered: Boolean = false
+        /**
+         * v1.0.16: per-session speed stats (created in dial(), one
+         * object per connection, shared by the transport ladder,
+         * the body streams, the relay thread and the writer
+         * thread). Null while DIALING (no stream yet).
+         */
+        @Volatile var speedStats: SpeedStats? = null
+        /** v1.0.16: when the stats clock started (dial ok). */
+        @Volatile var speedStartMs: Long = 0L
+        /** v1.0.16: the TUTUP summary was logged (single-shot). */
+        val speedLogged = AtomicBoolean(false)
     }
 
     private val sessions = ConcurrentHashMap<Key, TcpSession>()
@@ -476,10 +494,25 @@ class TunForwarder(
                     val next = session.outQueue.poll() ?: break
                     batch.add(next)
                 }
+                // v1.0.16: the write+flush below is timed (see
+                // after the flush).
+                val stats = session.speedStats
+                val t0 = if (stats != null) System.nanoTime() else 0L
+                var written = 0
                 for (chunk in batch) {
                     stream.output.write(chunk)
+                    written += chunk.size
                 }
                 stream.output.flush()
+                // v1.0.16: time the upload write+flush (upW: VMess
+                // seal + WS frame + TLS wrap + socket write,
+                // combined) and count the app bytes written to the
+                // proxy. The VMess seal part is timed separately
+                // inside VmessBodyOutputStream (upVmess).
+                if (stats != null) {
+                    stats.upWriteNs.addAndGet(System.nanoTime() - t0)
+                    stats.upBytes.addAndGet(written.toLong())
+                }
                 session.lastActivityMs = System.currentTimeMillis()
             }
         } catch (_: Exception) {
@@ -504,11 +537,18 @@ class TunForwarder(
         // forever while the status stays "Connecting...".
         val watchdog = DialWatchdog()
         Transport.setThreadWatchdog(watchdog)
+        // v1.0.16: one SpeedStats per session — threaded through
+        // the transport ladder (TLS/WS) and the body streams, so
+        // the SPEED lines can split the download time by stage.
+        // A proxy that ignores it (test fakes) still gets its
+        // forwarder-side stages timed (relay read / build / TUN).
+        val speed = SpeedStats()
         try {
             watchdog.start()
             stream = proxy.dial(
                 TcpPacket.ipToString(key.dstIp),
                 key.dstPort,
+                stats = speed,
             )
         } catch (e: Exception) {
             sessions.remove(key)
@@ -534,6 +574,10 @@ class TunForwarder(
         }
         session.stream = stream
         session.state = State.SYN_SENT
+        // v1.0.16: the stats clock starts at dial-ok (the transfer,
+        // not the dial + handshake, is what the SPEED lines time).
+        session.speedStats = speed
+        session.speedStartMs = System.currentTimeMillis()
         sendSynAck(session)
         // v1.0.13, fix A1: start the writer now, so data queued
         // while DIALING drains at once.
@@ -557,6 +601,11 @@ class TunForwarder(
 
     private fun relay(session: TcpSession) {
         val stream = session.stream ?: return
+        // v1.0.16: this thread's stage timings land in the session's
+        // SpeedStats — the SPEED window lines below are the whole
+        // point of this version (measure, don't guess).
+        val stats = session.speedStats
+        val dst = "${TcpPacket.ipToString(session.key.dstIp)}:${session.key.dstPort}"
         // v1.0.15: one read() pulls up to RELAY_READ_SIZE (several
         // VMess chunks) instead of one peer-MSS read per segment,
         // and segments are built straight from the read buffer
@@ -574,16 +623,46 @@ class TunForwarder(
         val segMss = session.peerMss.coerceIn(1, TcpPacket.TCP_MSS)
         var buffered = 0
         var pos = 0
+        // SPEED window bookkeeping: the window starts at the first
+        // read with data (the dial + handshake is not transfer),
+        // and a line is logged every speedWindowMs of active
+        // transfer. windowSnap is the zero baseline taken at relay
+        // start (no bytes have flowed yet).
+        var windowStartMs = 0L
+        var windowSnap = stats?.snapshot()
         try {
             while (!session.closed.get()) {
                 if (pos >= buffered) {
+                    // Time the proxy read (rd): inside it the
+                    // tls+net / ws / vmess stages are timed by the
+                    // layers below — never double-counted here.
+                    val t0 = if (stats != null) System.nanoTime() else 0L
                     val n = stream.input.read(readBuf)
+                    if (stats != null) stats.relayReadNs.addAndGet(System.nanoTime() - t0)
                     if (n == -1) break
                     if (n <= 0) continue
                     buffered = n
                     pos = 0
+                    stats?.downBytes?.addAndGet(n.toLong())
+                    if (stats != null) {
+                        val nowMs = System.currentTimeMillis()
+                        if (windowStartMs == 0L) {
+                            windowStartMs = nowMs
+                        } else if (nowMs - windowStartMs >= speedWindowMs) {
+                            val snap = stats.snapshot()
+                            DialLog.log(
+                                "SPEED",
+                                SpeedStats.windowLine(
+                                    windowSnap ?: snap, snap, dst, nowMs - windowStartMs,
+                                ),
+                            )
+                            windowStartMs = nowMs
+                            windowSnap = snap
+                        }
+                    }
                 }
                 val take = minOf(segMss, buffered - pos)
+                val tb = if (stats != null) System.nanoTime() else 0L
                 val pktLen = TcpPacket.buildTcpInto(
                     pktBuf,
                     session.key.dstIp, session.key.srcIp,
@@ -592,7 +671,13 @@ class TunForwarder(
                     TcpPacket.FLAG_PSH or TcpPacket.FLAG_ACK,
                     readBuf, pos, take,
                 )
+                if (stats != null) stats.buildNs.addAndGet(System.nanoTime() - tb)
+                val tw = if (stats != null) System.nanoTime() else 0L
                 writePacket(pktBuf, pktLen)
+                if (stats != null) {
+                    stats.tunNs.addAndGet(System.nanoTime() - tw)
+                    stats.tunWrites.incrementAndGet()
+                }
                 pos += take
                 session.serverSeq = (session.serverSeq + take) and 0xFFFFFFFFL
             }
@@ -643,6 +728,7 @@ class TunForwarder(
     /** Send FIN|ACK and tear the session down (single-shot). */
     private fun sendFin(session: TcpSession) {
         if (!session.closed.compareAndSet(false, true)) return
+        logSpeedSummary(session)
         val key = session.key
         val pkt = TcpPacket.buildTcp(
             key.dstIp, key.srcIp, key.dstPort, key.srcPort,
@@ -658,9 +744,31 @@ class TunForwarder(
 
     private fun closeSession(session: TcpSession) {
         if (!session.closed.compareAndSet(false, true)) return
+        logSpeedSummary(session)
         session.state = State.CLOSED
         sessions.remove(session.key)
         runCatching { session.stream?.close() }
+    }
+
+    /**
+     * v1.0.16: log the session's SPEED TUTUP summary once — the
+     * totals over the whole connection (download MB + effective
+     * MB/s + per-stage totals + upload totals + counts). Only
+     * sessions that moved bytes get a line; a dial that never
+     * transferred stays quiet. Called from sendFin() and
+     * closeSession(); the guard makes the first call win. The
+     * numbers are best-effort at teardown: if the writer thread
+     * tears the session down first (write failure), the relay may
+     * still be draining — the summary then misses its last bytes.
+     */
+    private fun logSpeedSummary(session: TcpSession) {
+        val stats = session.speedStats ?: return
+        if (!session.speedLogged.compareAndSet(false, true)) return
+        val snap = stats.snapshot()
+        if (snap.downBytes == 0L && snap.upBytes == 0L) return
+        val wallMs = System.currentTimeMillis() - session.speedStartMs
+        val dst = "${TcpPacket.ipToString(session.key.dstIp)}:${session.key.dstPort}"
+        DialLog.log("SPEED", SpeedStats.totalLine(snap, dst, wallMs))
     }
 
     private fun sendRst(srcIp: Int, dstIp: Int, tcp: TcpPacket.TcpSegment) {

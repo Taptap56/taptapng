@@ -116,7 +116,7 @@ object Transport {
      * stays a timeout and [SSLException] stays a TLS failure, so
      * `TunForwarder.dialFailureReason` keeps mapping them the same way.
      */
-    fun open(item: ProfileItem): OpenStream {
+    fun open(item: ProfileItem, stats: SpeedStats? = null): OpenStream {
         require(item.address.isNotBlank()) { "Address proxy kosong" }
         require(item.port in 1..65535) { "Port proxy di luar 1..65535: ${item.port}" }
         val wd = threadWatchdog.get()
@@ -213,17 +213,26 @@ object Transport {
                 output = socket.getOutputStream()
                 DialLog.log("TLS", "${item.address} ok")
             }
+            // v1.0.16: time every read from the transport stream
+            // (TLS unwrap + socket wait — inseparable on the
+            // SSLSocket path, so one honest "tls+net" bucket) BEFORE
+            // the WS layer reads from it. No WS: the body stream
+            // reads from this wrapper directly. stats == null: no
+            // wrapper, no overhead — byte-identical to v1.0.15.
+            val timedIn = if (stats != null) TimedInputStream(input, stats) else input
             if (network == "ws") {
                 // Tahap WS.
                 noteStage("WS")
                 try {
-                    val ws = WsTransport.connect(input, output, wsHost(item), wsPath(item))
+                    val ws = WsTransport.connect(timedIn, output, wsHost(item), wsPath(item), stats)
                     input = ws.input
                     output = ws.output
                 } catch (e: Exception) {
                     throw IOException("WS gagal: ${e.message}", e)
                 }
                 DialLog.log("WS", "${wsHost(item)}${wsPath(item)} ok")
+            } else {
+                input = timedIn
             }
         } catch (e: Exception) {
             runCatching { socket.close() }

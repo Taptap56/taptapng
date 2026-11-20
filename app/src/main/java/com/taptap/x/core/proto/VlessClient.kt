@@ -34,13 +34,18 @@ class VlessClient(
     // M3: one DNSTT session per client (see VmessClient).
     private val slowDns = slowDnsPool ?: SlowDnsSessionPool(item)
 
-    override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
+    override fun dial(
+        targetHost: String,
+        targetPort: Int,
+        probeBody: ByteArray?,
+        stats: SpeedStats? = null,
+    ): ProxyStream {
         val encryption = item.method.ifBlank { "none" }.lowercase()
         require(encryption == "none") {
             "VLESS encryption tidak didukung: $encryption (hanya none)"
         }
         // M3: socket ladder or DNSTT ladder (see VmessClient).
-        val transport = SlowDnsTransport.open(item, slowDns)
+        val transport = SlowDnsTransport.open(item, slowDns, stats)
         try {
             val header = VlessCrypto.buildRequestHeader(item.uuid, targetHost, targetPort)
             transport.output.write(header)

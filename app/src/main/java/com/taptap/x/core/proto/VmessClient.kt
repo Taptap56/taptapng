@@ -62,11 +62,16 @@ class VmessClient(
     // entry is not a SlowDNS entry.
     private val slowDns = slowDnsPool ?: SlowDnsSessionPool(item)
 
-    override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
+    override fun dial(
+        targetHost: String,
+        targetPort: Int,
+        probeBody: ByteArray?,
+        stats: SpeedStats? = null,
+    ): ProxyStream {
         // M3: the ladder is a socket (TCP → TLS → WS) for a plain
         // entry, or a DNSTT smux stream (→ TLS → WS) for a SlowDNS
         // entry. Everything below is identical for both.
-        val transport = SlowDnsTransport.open(item, slowDns)
+        val transport = SlowDnsTransport.open(item, slowDns, stats)
         try {
             val session = VmessCrypto.newSession(item, targetHost, targetPort)
             transport.output.write(session.requestBytes)
@@ -91,6 +96,7 @@ class VmessClient(
                 } else {
                     null
                 },
+                stats = stats,
             )
             if (probeBody != null) {
                 bodyOut.write(probeBody)
@@ -100,7 +106,7 @@ class VmessClient(
                 // right after dispatching; a bad UUID/header dies here.
                 Transport.noteStage("VMess")
                 VmessCrypto.readResponseHeader(transport.input, session)
-                val bodyIn = VmessBodyInputStream(transport.input, session)
+                val bodyIn = VmessBodyInputStream(transport.input, session, stats = stats)
                 transport.clearHandshakeTimeout()
                 DialLog.log("VMess", "handshake ok")
                 return TrackedProxyStream(
@@ -124,7 +130,7 @@ class VmessClient(
             // handshake timeout still bounds the lazy read; the hook
             // clears it once the header arrives, and a bad
             // UUID/header surfaces on the first read instead.
-            val bodyIn = VmessBodyInputStream(transport.input, session)
+            val bodyIn = VmessBodyInputStream(transport.input, session, stats = stats)
             val lazyIn = LazyHeaderInputStream(bodyIn) {
                 try {
                     Transport.noteStage("VMess")
@@ -499,6 +505,11 @@ class VmessBodyOutputStream(
      */
     private val onFirstChunk: ((Int) -> Unit)? = null,
     /**
+     * v1.0.16: per-connection speed stats (null = off). The seal
+     * time of every chunk is timed into [SpeedStats.upVmessNs].
+     */
+    private val stats: SpeedStats? = null,
+    /**
      * M3: the key/IV pair that masks + seals the chunks. Default is
      * the REQUEST pair (bodyKey/bodyIV) — the client writing the
      * request body. A server writing the RESPONSE body passes the
@@ -580,9 +591,13 @@ class VmessBodyOutputStream(
             return
         }
         val paddingLen = mask.nextPaddingLen()
+        // v1.0.16: time the AEAD seal (upload side). One nanoTime
+        // pair per chunk, only when stats is on.
+        val t0 = if (stats != null) System.nanoTime() else 0L
         val sealed = VmessCrypto.sealBodyChunk(
             session.security, key, nonce.next(), data,
         )
+        if (stats != null) stats.upVmessNs.addAndGet(System.nanoTime() - t0)
         val total = sealed.size + paddingLen
         val maskedSize = total xor mask.nextUint16()
         rawOut.write(byteArrayOf(((maskedSize ushr 8) and 0xFF).toByte(), (maskedSize and 0xFF).toByte()))
@@ -609,6 +624,14 @@ class VmessBodyOutputStream(
 class VmessBodyInputStream(
     private val rawIn: InputStream,
     private val session: VmessSession,
+    /**
+     * v1.0.16: per-connection speed stats (null = off). The AEAD
+     * open time of every chunk is timed into [SpeedStats.vmessNs];
+     * the rawIn read time is timed by the layers below (WS /
+     * TimedInputStream), never here — timing it here too would
+     * double-count it.
+     */
+    private val stats: SpeedStats? = null,
     /**
      * M3: the key/IV pair that unmasks + opens the chunks. Default
      * is the RESPONSE pair (responseBodyKey/responseBodyIV) — the
@@ -642,7 +665,15 @@ class VmessBodyInputStream(
         val sealed = wire.copyOfRange(0, size - paddingLen)
         // Response direction: response body key (SHA256 of request key).
         val plain = try {
-            VmessCrypto.openBodyChunk(session.security, key, nonce.next(), sealed)
+            // v1.0.16: time the AEAD open only — the rawIn reads
+            // above are timed by the WS / transport layers below.
+            val t0 = if (stats != null) System.nanoTime() else 0L
+            val p = VmessCrypto.openBodyChunk(session.security, key, nonce.next(), sealed)
+            stats?.let {
+                it.vmessNs.addAndGet(System.nanoTime() - t0)
+                it.vmessChunks.incrementAndGet()
+            }
+            p
         } catch (e: AEADBadTagException) {
             throw IOException("VMess body chunk gagal diverifikasi", e)
         }

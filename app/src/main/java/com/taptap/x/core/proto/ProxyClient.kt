@@ -38,7 +38,20 @@ interface ProxyClient {
      * only when spoken to). Relay dials MUST pass null: any extra
      * bytes there would corrupt the app's first data.
      */
-    fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray? = null): ProxyStream
+    fun dial(
+        targetHost: String,
+        targetPort: Int,
+        probeBody: ByteArray? = null,
+        /**
+         * v1.0.16: per-connection speed instrumentation. The
+         * forwarder passes one [SpeedStats] per session; the client
+         * threads it through the transport ladder (TLS/WS) and the
+         * body streams, so the phone log can show which stage is
+         * slow. Null (probes, unit tests) = no instrumentation, and
+         * the hot path stays byte-identical to v1.0.15.
+         */
+        stats: SpeedStats? = null,
+    ): ProxyStream
     fun close()
 }
 

@@ -3,6 +3,7 @@ package com.taptap.x
 import com.taptap.x.core.DialLog
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyStream
+import com.taptap.x.core.proto.SpeedStats
 import com.taptap.x.service.TcpPacket
 import com.taptap.x.service.TunForwarder
 import java.io.ByteArrayOutputStream
@@ -37,7 +38,12 @@ class TunForwarderDialFailureTest {
     private val serverIp = TcpPacket.ipFromBytes(1, 2, 3, 4)
 
     private class FailingProxy(private val error: Exception) : ProxyClient {
-        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
+override fun dial(
+            targetHost: String,
+            targetPort: Int,
+            probeBody: ByteArray?,
+            stats: SpeedStats? = null,
+        ): ProxyStream {
             throw error
         }
 
@@ -48,7 +54,12 @@ class TunForwarderDialFailureTest {
      * data), output is discarded — enough for the dial + SYN-ACK
      * path; the relay thread just waits. */
     private class OkProxy : ProxyClient {
-        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
+override fun dial(
+            targetHost: String,
+            targetPort: Int,
+            probeBody: ByteArray?,
+            stats: SpeedStats? = null,
+        ): ProxyStream {
             val input = PipedInputStream()
             return object : ProxyStream {
                 override val input: InputStream = input

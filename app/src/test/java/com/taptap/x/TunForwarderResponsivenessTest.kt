@@ -3,6 +3,7 @@ package com.taptap.x
 import com.taptap.x.core.DialLog
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyStream
+import com.taptap.x.core.proto.SpeedStats
 import com.taptap.x.service.TcpPacket
 import com.taptap.x.service.TunForwarder
 import java.io.ByteArrayOutputStream
@@ -54,7 +55,12 @@ class TunForwarderResponsivenessTest {
     /** Proxy that always succeeds; the stream's input blocks forever. */
     private class OkProxy : ProxyClient {
         val last = RecordingStream()
-        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream =
+override fun dial(
+            targetHost: String,
+            targetPort: Int,
+            probeBody: ByteArray?,
+            stats: SpeedStats? = null,
+        ): ProxyStream =
             last
 
         override fun close() = Unit
@@ -63,7 +69,12 @@ class TunForwarderResponsivenessTest {
     /** Proxy whose dial blocks on [latch] until released. */
     private class SlowProxy(private val latch: CountDownLatch) : ProxyClient {
         val stream = RecordingStream()
-        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
+override fun dial(
+            targetHost: String,
+            targetPort: Int,
+            probeBody: ByteArray?,
+            stats: SpeedStats? = null,
+        ): ProxyStream {
             latch.await(10, TimeUnit.SECONDS)
             return stream
         }

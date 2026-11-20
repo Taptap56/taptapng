@@ -3,6 +3,7 @@ package com.taptap.x
 import com.taptap.x.core.DialLog
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyStream
+import com.taptap.x.core.proto.SpeedStats
 import com.taptap.x.service.TcpPacket
 import com.taptap.x.service.TunForwarder
 import java.io.ByteArrayOutputStream
@@ -42,7 +43,12 @@ class TunForwarderReadLoopTest {
     }
 
     private class OkProxy : ProxyClient {
-        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream =
+override fun dial(
+            targetHost: String,
+            targetPort: Int,
+            probeBody: ByteArray?,
+            stats: SpeedStats? = null,
+        ): ProxyStream =
             BlockingStream()
 
         override fun close() = Unit

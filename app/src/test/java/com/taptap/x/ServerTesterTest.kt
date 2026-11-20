@@ -4,6 +4,7 @@ import com.taptap.x.core.ServerTester
 import com.taptap.x.core.TunnelState
 import com.taptap.x.core.proto.ProxyClient
 import com.taptap.x.core.proto.ProxyStream
+import com.taptap.x.core.proto.SpeedStats
 import com.taptap.x.data.ConfigType
 import com.taptap.x.data.ProfileItem
 import java.io.ByteArrayInputStream
@@ -297,7 +298,12 @@ class ServerTesterTest {
     ) : ProxyClient {
         val dialed = java.util.Collections.synchronizedList(mutableListOf<Pair<String, Int>>())
         val written = ByteArrayOutputStream()
-        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
+override fun dial(
+            targetHost: String,
+            targetPort: Int,
+            probeBody: ByteArray?,
+            stats: SpeedStats? = null,
+        ): ProxyStream {
             dialed.add(targetHost to targetPort)
             val input = ByteArrayInputStream(response.toByteArray(Charsets.UTF_8))
             return object : ProxyStream {
@@ -345,7 +351,12 @@ class ServerTesterTest {
         // show its stage — never a TCP number. Fails on v1.0.12
         // code (the row showed a TCP connect time for a dead entry).
         val failing = object : ProxyClient {
-            override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream =
+override fun dial(
+                targetHost: String,
+                targetPort: Int,
+                probeBody: ByteArray?,
+                stats: SpeedStats? = null,
+            ): ProxyStream =
                 throw SocketTimeoutException("VMess gagal: Read timed out")
 
             override fun close() = Unit
