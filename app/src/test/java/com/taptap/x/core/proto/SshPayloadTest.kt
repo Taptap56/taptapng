@@ -133,12 +133,12 @@ class SshPayloadTest {
     @Test
     fun `detectFraming maps banner to raw and frames to ws`() {
         assertEquals(SshPayload.Framing.RAW, SshPayload.detectFraming("SSH-2.0-OpenSSH".toByteArray(Charsets.UTF_8)))
-        assertEquals(SshPayload.Framing.WS, SshPayload.detectFraming(byteArrayOf(0x81, 0x05, 'h'.code.toByte(), 'i'.code.toByte())))
-        assertEquals(SshPayload.Framing.WS, SshPayload.detectFraming(byteArrayOf(0x82, 0x10, 'x'.code.toByte(), 'y'.code.toByte())))
-        assertEquals(SshPayload.Framing.UNKNOWN, SshPayload.detectFraming(byteArrayOf(0x81)))
+        assertEquals(SshPayload.Framing.WS, SshPayload.detectFraming(byteArrayOf(0x81.toByte(), 0x05, 'h'.code.toByte(), 'i'.code.toByte())))
+        assertEquals(SshPayload.Framing.WS, SshPayload.detectFraming(byteArrayOf(0x82.toByte(), 0x10, 'x'.code.toByte(), 'y'.code.toByte())))
+        assertEquals(SshPayload.Framing.UNKNOWN, SshPayload.detectFraming(byteArrayOf(0x81.toByte())))
         assertEquals(SshPayload.Framing.UNKNOWN, SshPayload.detectFraming("HTTP/1.1 101".toByteArray(Charsets.UTF_8)))
         // Masked server frame (mask bit set) is not a plain WS frame.
-        assertEquals(SshPayload.Framing.UNKNOWN, SshPayload.detectFraming(byteArrayOf(0x81, 0x85.toByte(), 'x'.code.toByte(), 'y'.code.toByte())))
+        assertEquals(SshPayload.Framing.UNKNOWN, SshPayload.detectFraming(byteArrayOf(0x81.toByte(), 0x85.toByte(), 'x'.code.toByte(), 'y'.code.toByte())))
     }
 
     @Test
