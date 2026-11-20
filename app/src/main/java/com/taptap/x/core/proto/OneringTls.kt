@@ -24,7 +24,7 @@ import org.bouncycastle.tls.TlsAuthentication
 import org.bouncycastle.tls.TlsClientProtocol
 import org.bouncycastle.tls.TlsCredentials
 import org.bouncycastle.tls.TlsServerCertificate
-import org.bouncycastle.tls.crypto.impl.jcajce.JcaTlsCryptoProvider
+import org.bouncycastle.tls.crypto.impl.bc.BcTlsCrypto
 
 /**
  * Onering (M4, v1.0.23): the bug domain rides in TLS extension 0xff00,
@@ -47,9 +47,20 @@ import org.bouncycastle.tls.crypto.impl.jcajce.JcaTlsCryptoProvider
  *   ordering is forced with [OrderedExtensions] (0xff00 first);
  *   TlsExtensionsUtils.ensureExtensionsInitialised does NOT copy the
  *   table, so the ordering survives into sendClientHello.
- *   Crypto comes from the platform JCA (JcaTlsCryptoProvider), so
- *   only bctls is needed — no bcprov. R8 shrinks it to the reachable
- *   TLS client code (APK size is checked on every release build).
+ *   Crypto is BC's own implementation ([BcTlsCrypto]), NOT the
+ *   platform JCA ([JcaTlsCryptoProvider]): the JCA path delegates
+ *   the TLS 1.3 CertificateVerify signature to the platform under
+ *   BC's algorithm name "SHA256WITHRSAANDMGF1" (rsa_pss_rsae_sha256),
+ *   which no platform provider registers, so the handshake dies
+ *   with NoSuchAlgorithmException -> TlsFatalAlert internal_error(80)
+ *   against any RSA server (proven by the 44722503904 CI failure +
+ *   a local JVM repro, 2026-11-20). BcTlsCrypto verifies natively
+ *   inside BC — no provider registration, no reflection. bcprov
+ *   is still on the classpath (transitive dep of bctls via bcutil)
+ *   because BcTlsCrypto's algorithm implementations live there; R8 keeps
+ *   only what is reachable. Certificate validation itself still
+ *   uses the platform TrustManager (see getAuthentication).
+ *   (APK size is checked on every release build.)
  *
  * The 0xff00 extension DATA is byte-identical to the TC fork
  * (`oneringBugExtensionData`, port of dharak36/xray-onering,
@@ -231,7 +242,7 @@ object OneringTls {
         val sni = item.sni.ifBlank { item.address }
         val bug = item.oneringBug.trim()
         require(bug.isNotBlank()) { "Bug domain Onering kosong" }
-        val crypto = JcaTlsCryptoProvider().create(SecureRandom())
+        val crypto = BcTlsCrypto(SecureRandom())
         val protocol = TlsClientProtocol(input, output)
         val client = OneringTlsClient(crypto, sni, item.alpn, bug, item.insecure, trustManager)
         protocol.connect(client)
