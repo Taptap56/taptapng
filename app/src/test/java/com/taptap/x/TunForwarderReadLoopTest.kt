@@ -53,6 +53,8 @@ class TunForwarderReadLoopTest {
      * data yet: the first read returns 0 (EAGAIN), the second
      * delivers one packet, later reads block until close() —
      * exactly what the real TUN fd does once set blocking.
+     * The block is a sleep-poll on the closed flag (Kotlin's
+     * Any has no wait()/notifyAll() to call).
      */
     private class EagainThenPacketIn(private val packet: ByteArray) : InputStream() {
         private val closed = AtomicBoolean(false)
@@ -68,8 +70,12 @@ class TunForwarderReadLoopTest {
                     n
                 }
                 else -> {
-                    synchronized(this) {
-                        while (!closed.get()) wait(100)
+                    while (!closed.get()) {
+                        try {
+                            Thread.sleep(50)
+                        } catch (_: InterruptedException) {
+                            // Keep waiting until close().
+                        }
                     }
                     -1
                 }
@@ -83,10 +89,7 @@ class TunForwarderReadLoopTest {
         }
 
         override fun close() {
-            synchronized(this) {
-                closed.set(true)
-                notifyAll()
-            }
+            closed.set(true)
         }
     }
 
