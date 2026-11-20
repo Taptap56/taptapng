@@ -1,9 +1,9 @@
 package com.taptap.x.ui.server
 
 import com.taptap.x.data.ConfigType
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
 
 /**
  * v1.0.31: the Xray method section (SlowDNS / Onering / Pemicu) is
