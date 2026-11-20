@@ -78,7 +78,7 @@ class PemicuManagerTest {
     // --- clamp ---
 
     @Test
-    fun `clampInterval defaults to 15 and clamps to 5..300`() {
+    fun `clampInterval defaults to 15 and clamps to 5 to 300`() {
         assertEquals(15, PemicuManager.clampInterval(null))
         assertEquals(5, PemicuManager.clampInterval(0))
         assertEquals(5, PemicuManager.clampInterval(4))
@@ -89,7 +89,7 @@ class PemicuManagerTest {
     }
 
     @Test
-    fun `clampPort defaults to 443 and clamps to 1..65535`() {
+    fun `clampPort defaults to 443 and clamps to 1 to 65535`() {
         assertEquals(443, PemicuManager.clampPort(null))
         assertEquals(443, PemicuManager.clampPort(0))
         assertEquals(443, PemicuManager.clampPort(70000))
