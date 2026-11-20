@@ -36,9 +36,14 @@ object DialLog {
      * log now flows like v2rayNG's (a line per connection/DNS
      * query), and 200 lines evict during one page load, so the
      * dial stages the user needs disappear before they open the
-     * Log page. 500 lines is still ~50 KB in memory.
+     * Log page. v1.0.17: 5000 — a Speedtest + background traffic
+     * produces well over 500 lines, so the download phase was
+     * evicted before the user exported the log (phone logs
+     * taptapx-40774e0e.txt / taptapx-9c8c1aca.txt, 2026-11-20:
+     * log 1 kept only the upload phase, log 2 only background
+     * traffic). 5000 lines is still ~500 KB in memory.
      */
-    const val MAX_LINES = 500
+    const val MAX_LINES = 5000
 
     /** Set by the app to forward lines to logcat. Null = ring buffer only. */
     @Volatile

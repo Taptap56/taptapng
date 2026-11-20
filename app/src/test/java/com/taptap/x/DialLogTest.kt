@@ -44,6 +44,26 @@ class DialLogTest {
     }
 
     @Test
+    fun `ring buffer holds 5000 lines (v1.0.17)`() {
+        // Phone logs taptapx-40774e0e.txt / taptapx-9c8c1aca.txt
+        // (2026-11-20): a Speedtest + background traffic produces
+        // well over 500 lines, so the 500-line buffer evicted the
+        // whole download phase before the user exported the log.
+        // 5000 lines must hold a full Speedtest run.
+        assertEquals(5000, DialLog.MAX_LINES)
+        DialLog.clear()
+        try {
+            repeat(5001) { DialLog.log("TEST", "line $it") }
+            val lines = DialLog.lines()
+            assertEquals(5000, lines.size)
+            assertTrue(lines.first().contains("line 1"), lines.first())
+            assertTrue(lines.last().contains("line 5000"), lines.last())
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
     fun `failure never logs a UUID or other credential`() {
         DialLog.clear()
         try {

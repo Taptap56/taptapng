@@ -1,4 +1,4 @@
-# TaptapX v1.0.16
+# TaptapX v1.0.17
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.16 (vc17)
+- **id** `com.taptap.x`, **versi** 1.0.17 (vc18)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,27 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.17 — Buffer log 500 → 5000 baris
+
+**Satu perubahan kecil, bukan perbaikan kecepatan.** `DialLog`
+menyimpan log di ring buffer 500 baris — baris lama dibuang begitu
+penuh. Dua log HP membuktikan fase download Speedtest terbuang
+sebelum sempat di-export: log 14:01 (taptapx-40774e0e.txt) cuma
+menyimpan fase upload (lebih baru, 8,11 MB), log 14:07
+(taptapx-9c8c1aca.txt) cuma traffic background. Urutan export user
+sudah benar — buffer-nya yang kekecilan. Sekarang buffer menahan
+5000 baris (~500 KB memori), cukup untuk satu Speedtest penuh
+beserta traffic background. Tidak ada perubahan lain: protokol,
+relay, instrumentasi SPEED, dan UI tetap seperti v1.0.16.
+
+**Tes HP** — konek entry biasa (VMess yang sama dengan tes
+sebelumnya), jalankan SATU Speedtest sampai SELESAI (angka download
+dan upload muncul di layar), BARU buka TaptapX → Log → export, lalu
+kirim file log + screenshot hasil Speedtest. Fase download sekarang
+harusnya utuh di log: cari baris `SPEED` koneksi Speedtest
+(`:8080`) — tahap dengan angka terbesar di tiap jendela 5 detik
+adalah bottleneck-nya, plus baris `TUTUP`-nya.
 
 ## v1.0.16 — Instrumentasi kecepatan (BUKAN perbaikan)
 
