@@ -41,6 +41,7 @@ import com.taptap.x.AppConfig
 import com.taptap.x.R
 import com.taptap.x.TaptapXApp
 import com.taptap.x.core.LinkParser
+import com.taptap.x.core.PemicuManager
 import com.taptap.x.data.ConfigType
 import com.taptap.x.data.ProfileItem
 import com.taptap.x.data.SettingsStore
@@ -424,6 +425,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.more_sort_by_test -> viewModel.sortByDelay()
                 R.id.more_test_all -> viewModel.testAll(false)
                 R.id.more_test_all_real -> viewModel.testAll(true)
+                R.id.more_prime_now -> primeNow()
                 R.id.more_update_sub -> Toast.makeText(
                     this, R.string.toast_not_available, Toast.LENGTH_SHORT
                 ).show()
@@ -431,6 +433,26 @@ class MainActivity : AppCompatActivity() {
             true
         }
         popup.show()
+    }
+
+    /**
+     * Manual "Prime sekarang" (v1.0.24, M5): prime the selected
+     * entry's Pemicu target once, right now — works whether the VPN
+     * is up or down (the dial goes direct when there is no TUN).
+     * The result lands in DialLog (PRIME OK / PRIME GAGAL); the
+     * toast only confirms the prime was sent.
+     */
+    private fun primeNow() {
+        val item = viewModel.selectedItem() ?: run {
+            Toast.makeText(this, R.string.toast_no_server_selected, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (PemicuManager.targetFromProfile(item) == null) {
+            Toast.makeText(this, R.string.toast_prime_no_domain, Toast.LENGTH_SHORT).show()
+            return
+        }
+        PemicuManager.primeNow(item)
+        Toast.makeText(this, R.string.toast_prime_sent, Toast.LENGTH_SHORT).show()
     }
 
     private fun onDrawerItem(itemId: Int) {

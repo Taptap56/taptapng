@@ -1,4 +1,4 @@
-# TaptapX v1.0.23
+# TaptapX v1.0.24
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.23 (vc24)
+- **id** `com.taptap.x`, **versi** 1.0.24 (vc25)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,42 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.24 — MILESTONE M5: Pemicu bawaan (primer di dalam TaptapX)
+
+**Cara pakai.** Di editor entry, seksi Xray method: nyalakan chip
+**Pemicu**, isi **Domain pemicu** (wajib — mis. `chat.sociomile.com`
+untuk entry Sociomile, `support.zoom.us` untuk entry Zoom),
+**Port pemicu** kosong = 443, **Interval pemicu** default 15 detik
+(5..300). Domain kosong = entry TIDAK di-prime, tanpa fallback ke
+address entry. Pemicu TIDAK ikut link (sama seperti v2rayNG) — sesudah
+copy server, isi Domain pemicu manual di app penerima.
+
+**Cara kerja.** Primer FULL PISAH dari entry (model TB v1.0.84 +
+v2rayNG PemicuManager): dial SSLSocket in-app + `protect()` (bypass
+TUN), dual-stack (IPv4 dulu, lalu IPv6), timeout TCP 5 dtk / TLS
+10 dtk. SNI dial = Domain pemicu itu sendiri, bukan address entry.
+Saat VPN konek, prime SEGERA sekali sebelum dial utama (probe), lalu
+auto-prime tiap interval selama VPN jalan — jaga jendela operator
+(~14 menit, per domain) tetap buka. Menu "⋮ → Prime sekarang"
+prime entry terpilih sekali, kapan saja (VPN nyala atau mati).
+Hasilnya di Log: `PRIME OK <host>:<port> <ms>` / `PRIME GAGAL
+<host> (<alasan>)`. Prime gagal TIDAK PERNAH menggagalkan koneksi
+VPN — hanya tercatat di Log.
+
+**Tes HP penentu.** Matikan TB + pemicu.apk (jangan jalan bareng),
+diamkan ~14 menit tanpa prime (jendela tutup), lalu konek TaptapX
+dengan entry yang Domain pemicunya sudah diisi. Bila entry konek,
+primer bawaan sendiri yang membuka jendela. Log harus ada baris
+`PRIME OK` sebelum dial utama. Bila entry timeout padahal Log sudah
+`PRIME OK`, masalahnya bukan jendela — cek entry/core-nya.
+
+**Batas yang jujur.** Pemicu hanya menjaga SATU domain per entry
+(domain yang diisi); entry tanpa Domain pemicu tidak di-prime sama
+sekali. Prime loop hanya jalan untuk entry yang sedang konek — entry
+lain yang Pemicu-nya nyala tidak ikut di-prime selama VPN jalan
+(model v2rayNG mem-prime SEMUA entry; TaptapX M5 mem-prime entry
+yang konek saja).
 
 ## v1.0.23 — MILESTONE M4: Onering (ext TLS 0xff00 via Bouncy Castle)
 

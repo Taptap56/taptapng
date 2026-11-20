@@ -164,6 +164,38 @@ class DnsResolverTest {
     }
 
     @Test
+    fun `resolveAll returns A then AAAA from a fake DNS server`() {
+        // Server palsu menjawab SETIAP query (A maupun AAAA) dengan
+        // record A 93.184.216.34 — resolveAll harus mendedupe jadi
+        // satu alamat, bukan dua kali alamat yang sama.
+        val (server, running, serverThread) = fakeDnsServer()
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = server.localPort
+            val addrs = DnsResolver.resolveAll("example.com", 443, timeoutMs = 2000)
+            assertEquals(listOf("93.184.216.34"), addrs.map { it.hostAddress })
+        } finally {
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            stopFakeDns(server, running, serverThread)
+        }
+    }
+
+    @Test
+    fun `resolveAll returns IP literals without any network`() {
+        assertEquals(
+            listOf(InetAddress.getByName("104.17.3.81")),
+            DnsResolver.resolveAll("104.17.3.81", 443),
+        )
+        assertEquals(
+            listOf(InetAddress.getByName("::1")),
+            DnsResolver.resolveAll("::1", 443),
+        )
+    }
+
+    @Test
     fun `resolve ignores a refusing protect hook while the TUN is down`() {
         // v1.0.7 (taptapx-4.txt, 2026-11-20 03:19): the probe dials
         // before establish(), so protect() refuses — the direct DNS

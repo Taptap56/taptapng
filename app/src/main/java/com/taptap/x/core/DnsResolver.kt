@@ -4,6 +4,7 @@ import com.taptap.x.core.proto.AddrCodec
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
@@ -128,6 +129,46 @@ object DnsResolver {
             if (cached != null) return cached.addr
             throw e
         }
+    }
+
+    /**
+     * Resolve [host] to ALL addresses (A then AAAA), for dials that
+     * must try IPv4 first then IPv6 (prime dial, v2rayNG pattern:
+     * getAllByName sorted v4-first). Direct UDP queries first
+     * (bypass TUN, same as [resolve]); the system resolver is the
+     * fallback, bounded by [timeoutMs]. Deduped, IPv4 first.
+     * Deliberately NOT cached: the v1.0.22 cache holds ONE address
+     * per host, but the prime needs both families, and a prime dial
+     * runs at most once per interval (15 s+), so two UDP queries per
+     * dial are cheap. @throws IOException bila kedua jalur gagal.
+     */
+    fun resolveAll(
+        host: String,
+        port: Int,
+        timeoutMs: Int = DEFAULT_TIMEOUT_MS,
+    ): List<InetAddress> {
+        require(host.isNotBlank()) { "Host DNS kosong" }
+        val clean = host.trim().trimEnd('.')
+        if (AddrCodec.isIpLiteral(clean)) {
+            return listOf(InetAddress.getByName(clean))
+        }
+        try {
+            // A dulu; bila servernya saja tidak menjawab (timeout),
+            // jangan buang waktu coba AAAA — langsung fallback sistem
+            // (pola yang sama dengan resolve()).
+            val a = queryOnce(clean, TYPE_A, timeoutMs)
+            val aaaa = runCatching { queryOnce(clean, TYPE_AAAA, timeoutMs) }
+                .getOrElse { emptyList() }
+            val out = (a + aaaa).distinctBy { it.hostAddress }
+            if (out.isNotEmpty()) return out
+            // Server menjawab tapi tanpa record A/AAAA → fallback sistem.
+        } catch (_: IOException) {
+            // Jalur langsung gagal → fallback sistem di bawah.
+        }
+        val all = runCatching { systemResolveAll(clean, port, timeoutMs) }
+            .getOrElse { emptyList() }
+        if (all.isEmpty()) throw IOException("DNS gagal untuk $host")
+        return all
     }
 
     /** Hapus cache resolve (dipakai tes). */
@@ -329,6 +370,26 @@ object DnsResolver {
         if (t.isAlive) throw SocketTimeoutException("DNS sistem timeout untuk $host")
         error?.let { throw it }
         return result ?: throw UnknownHostException(host)
+    }
+
+    /** Seperti [systemResolve], tapi mengembalikan SEMUA alamat
+     *  (getAllByName), IPv4 dulu lalu IPv6 — untuk dial yang harus
+     *  mencoba v4 dulu baru v6 (prime dial). */
+    private fun systemResolveAll(host: String, port: Int, timeoutMs: Int): List<InetAddress> {
+        var result: List<InetAddress>? = null
+        var error: Throwable? = null
+        val t = thread(name = "sys-dns-all", isDaemon = true) {
+            try {
+                result = InetAddress.getAllByName(host)
+                    .sortedBy { if (it is Inet4Address) 0 else 1 }
+            } catch (e: Throwable) {
+                error = e
+            }
+        }
+        t.join(timeoutMs.toLong())
+        if (t.isAlive) throw SocketTimeoutException("DNS sistem timeout untuk $host")
+        error?.let { throw it }
+        return result ?: emptyList()
     }
 
     /** Alamat server DNS. Literal IPv4 diparse manual (tanpa lookup);

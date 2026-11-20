@@ -11,6 +11,7 @@ import androidx.core.app.NotificationCompat
 import com.taptap.x.R
 import com.taptap.x.core.DialLog
 import com.taptap.x.core.DnsResolver
+import com.taptap.x.core.PemicuManager
 import com.taptap.x.core.ServerTester
 import com.taptap.x.core.TunnelState
 import com.taptap.x.core.proto.DialWatchdog
@@ -261,6 +262,12 @@ class TaptapVpnService : VpnService() {
     private fun runStart(client: ProxyClient, item: ProfileItem, label: String, gen: Int) {
         try {
             installProtectHooks()
+            // v1.0.24 (M5): prime dulu, baru probe — prime dial in-app
+            // membuka jendela operator, lalu dial utama memakai jendela
+            // yang sudah buka. Best-effort: primeNowSync tidak pernah
+            // throw dan kegagalannya hanya tercatat di Log (PRIME
+            // GAGAL), jadi start tidak pernah gagal karena primenya.
+            PemicuManager.primeNowSync(item)
             probeDial(client, item, label)
             val established = synchronized(tunnelLock) {
                 if (!isCurrentStart(gen)) {
@@ -276,6 +283,13 @@ class TaptapVpnService : VpnService() {
                 return
             }
             connection.reportConnected(label)
+            // v1.0.24 (M5): jaga jendela tetap buka selama VPN jalan
+            // — auto-prime tiap interval entry. Hanya bila entry ini
+            // memang punya target prime (chip nyala + domain terisi);
+            // tanpa target tidak ada loop yang jalan.
+            PemicuManager.targetFromProfile(item)?.let { target ->
+                PemicuManager.start { listOf(target) }
+            }
         } catch (e: Exception) {
             if (isCurrentStart(gen)) {
                 DialLog.failure("START", e)
@@ -454,6 +468,9 @@ class TaptapVpnService : VpnService() {
         // ServerTester: pre-TUN protect() returns false, so the
         // probe dials direct instead of failing instantly (v1.0.7).
         Transport.protectSocket = { socket -> protect(socket) }
+        // Same for the prime dials (v1.0.24, M5): a prime socket
+        // must bypass the TUN exactly like a probe dial.
+        PemicuManager.protectSocket = { socket -> protect(socket) }
         // Same for delay-test sockets (v1.0.4): without this, a test
         // run while the VPN is up dials through the tunnel and
         // reports a false "Timeout" (see ServerTester).
@@ -474,6 +491,9 @@ class TaptapVpnService : VpnService() {
         // bypass again, so protect enforcement switches off first.
         TunnelState.up = false
         TunnelState.appBypass = false
+        // v1.0.24 (M5): hentikan loop prime dulu — tidak ada lagi
+        // prime dial yang boleh mulai saat TUN dibongkar.
+        PemicuManager.stop()
         probeWatchdog?.cancel()
         probeWatchdog = null
         synchronized(tunnelLock) {
@@ -487,6 +507,7 @@ class TaptapVpnService : VpnService() {
             currentClient = null
         }
         Transport.protectSocket = null
+        PemicuManager.protectSocket = null
         ServerTester.protectSocket = null
         DnsResolver.protectUdp = null
     }

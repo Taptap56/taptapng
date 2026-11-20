@@ -540,6 +540,14 @@ class ServerEditorActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.toast_slowdns_required, Toast.LENGTH_SHORT).show()
             return
         }
+        // v1.0.24 (M5): chip Pemicu nyala tapi Domain pemicu kosong =
+        // entry tidak akan pernah di-prime — tolak save seperti
+        // SlowDNS (NS + pubkey wajib) supaya tidak ada entry yang
+        // "pemicunya nyala" tapi diam-diam tidak di-prime.
+        if (chip(R.id.chip_pemicu).isChecked && text(R.id.input_pemicu_domain).isBlank()) {
+            Toast.makeText(this, R.string.toast_pemicu_required, Toast.LENGTH_SHORT).show()
+            return
+        }
 
         val network = dropdownValue(R.id.input_network).ifBlank { "tcp" }
         val streamSecurity = dropdownValue(R.id.input_stream_security)

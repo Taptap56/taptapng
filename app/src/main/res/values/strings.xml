@@ -106,6 +106,10 @@
     <string name="field_pemicu_domain">Domain pemicu (wajib diisi)</string>
     <string name="field_pemicu_port">Port pemicu (kosong = 443)</string>
     <string name="field_pemicu_interval">Interval pemicu (detik)</string>
+    <string name="more_prime_now">Prime sekarang</string>
+    <string name="toast_pemicu_required">Domain pemicu wajib diisi saat chip Pemicu nyala</string>
+    <string name="toast_prime_no_domain">Entry ini tidak punya Domain pemicu — isi dulu di editor</string>
+    <string name="toast_prime_sent">Prime dikirim — lihat Log untuk hasilnya</string>
 
     <!-- Share dialog. -->
     <string name="share_qrcode">Share QR code</string>

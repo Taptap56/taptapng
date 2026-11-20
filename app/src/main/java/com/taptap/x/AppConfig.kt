@@ -3,7 +3,7 @@ package com.taptap.x
 /** App-wide constants (Phase 1). */
 object AppConfig {
     const val APP_NAME = "TaptapX"
-    const val VERSION_NAME = "1.0.23"
+    const val VERSION_NAME = "1.0.24"
 
     /** Profiles are stored as one JSON file in the app's private files dir. */
     const val PROFILES_FILE = "profiles.json"
@@ -13,7 +13,9 @@ object AppConfig {
     const val SSH_CONNECT_TIMEOUT_MS = 10_000
     const val SSH_CHANNEL_TIMEOUT_MS = 10_000
 
-    /** Pemicu (built-in primer) defaults — engine lands in a later milestone. */
+    /** Pemicu (built-in primer, M5 v1.0.24): engine in-app
+     *  (PemicuManager) — dial SSLSocket + protect(), prime segera
+     *  saat konek + auto-prime tiap interval selama VPN jalan. */
     const val PEMICU_DEFAULT_PORT = 443
     const val PEMICU_DEFAULT_INTERVAL = 15
     const val PEMICU_MIN_INTERVAL = 5
