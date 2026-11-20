@@ -16,4 +16,11 @@
     <color name="onSurface">#FFE6E1E5</color>
     <color name="onSurfaceVariant">#FFCAC4D0</color>
     <color name="divider">#FF424242</color>
+    <!-- v1.0.26: warna M3 FilterChip + Switch v2rayNG (Theme.kt,
+         dark): secondaryContainer coklat, onSecondaryContainer oranye
+         pucat, outline abu-abu keunguan, onSecondary coklat tua. -->
+    <color name="chip_selected_background">#FF6F3800</color>
+    <color name="chip_selected_text">#FFFFE8D6</color>
+    <color name="chip_outline">#FF938F99</color>
+    <color name="switch_thumb_checked">#FF4E2600</color>
 </resources>

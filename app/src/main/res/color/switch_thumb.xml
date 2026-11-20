@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v1.0.26: jempol switch ala M3 Switch v2rayNG
+     (SettingsSwitchItem: checkedThumbColor = onSecondary) —
+     nyala = onSecondary, mati = outline. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="@color/switch_thumb_checked" />
+    <item android:color="@color/chip_outline" />
+</selector>

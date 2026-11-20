@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v1.0.26: teks chip ala M3 FilterChip v2rayNG — terpilih =
+     onSecondaryContainer, tidak terpilih = onSurface. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="@color/chip_selected_text" />
+    <item android:color="?attr/colorOnSurface" />
+</selector>

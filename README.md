@@ -1,4 +1,4 @@
-# TaptapX v1.0.25
+# TaptapX v1.0.26
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.25 (vc26)
+- **id** `com.taptap.x`, **versi** 1.0.26 (vc27)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,96 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.26 — Editor "Edit server" dirapikan ala v2rayNG
+
+**Kenapa.** Screenshot editor 2026-11-21 02:21 (entry "81", VMess):
+chip protokol (SSH/VMess/VLESS/Trojan/SS) dan chip Xray method
+(SlowDNS/Onering/Pemicu) semuanya abu-abu gelap yang sama — chip
+VMess yang terpilih TIDAK kelihatan bedanya; teks dropdown
+("auto"/"ws"/"tls") menempel ke tepi kiri kotak, tidak sejajar
+dengan teks field biasa; field FinalMask menampilkan dua teks
+bertumpuk (`{"key":"value"}` + `JSON, format: { FinalMaskOb...`);
+switch "Allow insecure" gaya M2, bukan M3 seperti v2rayNG; dan
+jarak antar-field (8dp) lebih rapat dari v2rayNG.
+
+**Yang diubah** (hanya tampilan layar Edit server — perilaku,
+field, nilai tersimpan, dan logika protokol TIDAK berubah):
+
+1. **Chip = gaya M3 FilterChip v2rayNG** (semua 12 chip: protokol,
+   SSH method, Xray method — satu komponen yang sama, seperti
+   `FilterChip` + `FlowRow` di `XrayMethodFields` v2rayNG):
+   tidak terpilih = isi transparan + garis outline 1dp, terpilih
+   = isi secondaryContainer + ikon centang + teks
+   onSecondaryContainer. Tema TaptapX adalah M2 (tidak punya
+   peran warna M3), jadi nilai persis dari v2rayNG (`Theme.kt`)
+   disalin sebagai warna tetap (light + night): isi terpilih
+   `#FFE8D6` / `#6F3800`, teks terpilih `#2B1700` / `#FFE8D6`,
+   outline `#79747E` / `#938F99`. Style baru
+   `Widget.TaptapX.Chip.Filter` (turunan M2
+   `Widget.MaterialComponents.Chip.Filter`) + 3 color-state-list
+   (`chip_background`, `chip_stroke`, `chip_text`). Jarak
+   antar-chip 8dp (`chipSpacingHorizontal/Vertical`), seperti
+   `spacedBy(8.dp)` FlowRow v2rayNG. Ini memperbaiki cacat
+   utamanya: chip yang terpilih sekarang kelihatan.
+2. **Ritme vertikal = v2rayNG (16dp)**: di v2rayNG tiap field
+   punya padding vertikal 4dp dalam Column `spacedBy(8.dp)` —
+   jadi jarak antar-kotak 16dp. Semua `marginTop` 8dp di editor
+   jadi 16dp; label seksi → chip/field juga 16dp; padding atas
+   wadah 4dp; spacer bawah 24dp → 36dp (padding bawah scaffold
+   v2rayNG).
+3. **Label seksi 14sp → 16sp** (`textAppearanceBodyLarge`),
+   seperti `Text()` default v2rayNG (label "Xray method" dkk).
+4. **Dropdown = `OutlinedBox.ExposedDropdownMenu`** (13 layout):
+   pola resmi untuk `AutoCompleteTextView` — memperbaiki teks
+   dropdown yang menempel ke tepi kiri kotak.
+5. **"Allow insecure" = baris `SettingsSwitchItem` v2rayNG**:
+   baris penuh (padding 16dp, teks 16sp `bodyLarge`, bisa
+   diklik satu baris) + `SwitchMaterial` skala 0,8, rel nyala =
+   secondary (oranye), jempol nyala = onSecondary (putih di
+   light / coklat tua di dark). Diterapkan juga ke switch yang
+   sama di seksi SSH. Satu-satunya perubahan Kotlin: dua
+   listener klik baris (`row_insecure`, `row_ssh_insecure`)
+   yang memanggil `switch.toggle()` — nilai yang disimpan
+   (`insecure`, `sshInsecure`) tidak berubah.
+6. **Hint ganda dihapus**: `finalMask` dan `xhttpExtra` punya
+   hint di layout DAN di EditText — saat kosong, keduanya
+   digambar di posisi yang sama sehingga bertumpuk. v2rayNG
+   tidak punya placeholder di kedua field itu, jadi hint
+   EditText-nya dihapus. Resolver DNSTT tetap punya placeholder
+   (`1.1.1.1:53`, sama seperti v2rayNG) tapi dipindah ke
+   `app:placeholderText` pada layout — cara Views yang benar,
+   tidak menumpuk dengan label.
+
+**Yang TIDAK bisa sama persis dengan v2rayNG** (dicatat jujur):
+
+- v2rayNG memakai Compose + Material 3; TaptapX memakai Views +
+  tema M2 — chip di atas adalah M2 `Chip` dengan warna M3,
+  bukan komponen M3 `FilterChip` asli. Bentuk, ripple, dan
+  animasi centang bisa beda sedikit.
+- v2rayNG TIDAK punya baris chip protokol (tiap protokol punya
+  layar editor sendiri); TaptapX tetap satu editor dengan baris
+  chip protokol, hanya gayanya yang disamakan dengan chip Xray
+  method v2rayNG.
+- v2rayNG TIDAK punya label seksi "Network" / "Stream Security"
+  (field mengalir terus); TaptapX mempertahankan labelnya
+  (dirapikan ke 16sp) karena satu editor menampung semua field
+  protokol + SSH.
+- Switch v2rayNG adalah M3 `Switch`; TaptapX memakai M2
+  `SwitchMaterial` skala 0,8 dengan tint yang sama — geometri
+  jempol/rel bisa beda sedikit.
+- Perataan teks dropdown (`ExposedDropdownMenu`) belum bisa
+  dibuktikan di VM ini — verifikasi lewat screenshot HP sesudah
+  pasang (teks "auto"/"ws"/"tls" harus sejajar dengan teks
+  field biasa, 16dp dari tepi kotak).
+
+**Verifikasi di HP.** Buka Edit server entry "81": chip VMess
+harus kelihatan terpilih (oranye pucat + centang, di dark:
+coklat + centang); chip Xray method yang mati harus berupa
+kotak outline, bukan pil abu-abu penuh; teks dropdown sejajar
+dengan teks field; field FinalMask hanya menampilkan label
+(tanpa teks bertumpuk); baris "Allow insecure" bisa diketuk
+di teksnya dan switch berubah (rel oranye saat nyala).
 
 ## v1.0.25 — Paket hemat baterai (loop prime + writer + cache DNS)
 

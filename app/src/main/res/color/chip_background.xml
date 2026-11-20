@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v1.0.26: latar chip ala M3 FilterChip v2rayNG — terpilih =
+     secondaryContainer, tidak terpilih = transparan. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="@color/chip_selected_background" />
+    <item android:color="@android:color/transparent" />
+</selector>

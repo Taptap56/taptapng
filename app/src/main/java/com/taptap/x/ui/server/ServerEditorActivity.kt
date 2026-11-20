@@ -100,8 +100,23 @@ class ServerEditorActivity : AppCompatActivity() {
         bindDropdowns()
         fillFields()
         bindChips()
+        bindSwitchRows()
         bindFetchButton()
         updateSections()
+    }
+
+    /**
+     * "Allow insecure" rows (v1.0.26): the whole row toggles the
+     * switch, like v2rayNG's SettingsSwitchItem — the switch itself
+     * is not clickable, its label lives in the row (TextView).
+     */
+    private fun bindSwitchRows() {
+        findViewById<View>(R.id.row_insecure).setOnClickListener {
+            switch(R.id.switch_insecure).toggle()
+        }
+        findViewById<View>(R.id.row_ssh_insecure).setOnClickListener {
+            switch(R.id.switch_ssh_insecure).toggle()
+        }
     }
 
     // ---- view helpers ----

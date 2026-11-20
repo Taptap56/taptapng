@@ -65,6 +65,28 @@
         <item name="android:textColor">?attr/colorOnSurface</item>
     </style>
 
+    <!-- M3 FilterChip v2rayNG di atas tema M2 (v1.0.26): v2rayNG
+         memakai M3 FilterChip dalam FlowRow (jarak 8dp) — tidak
+         terpilih = isi transparan + garis outline 1dp, terpilih =
+         isi secondaryContainer + ikon centang + teks
+         onSecondaryContainer. Tema M2 tidak punya peran warna M3,
+         jadi nilai persis dari v2rayNG (Theme.kt, light + night)
+         disalin sebagai warna tetap di colors.xml. Dipakai semua
+         chip di layar Edit server (protokol, SSH method, Xray
+         method) supaya satu komponen yang sama seperti v2rayNG. -->
+    <style name="Widget.TaptapX.Chip.Filter" parent="Widget.MaterialComponents.Chip.Filter">
+        <item name="chipBackgroundColor">@color/chip_background</item>
+        <item name="chipStrokeColor">@color/chip_stroke</item>
+        <item name="chipStrokeWidth">1dp</item>
+        <item name="android:textColor">@color/chip_text</item>
+        <item name="checkedIconVisible">true</item>
+        <item name="checkedIcon">@drawable/ic_action_done</item>
+        <item name="checkedIconTint">@color/chip_selected_text</item>
+        <item name="chipMinHeight">32dp</item>
+        <item name="chipIconVisible">false</item>
+        <item name="closeIconVisible">false</item>
+    </style>
+
     <!-- Intentionally EMPTY overlay for dynamicColorThemeOverlay (see
          above): DynamicColors applies this to every activity theme at
          creation. Empty = no color changes, only the missing-attribute
