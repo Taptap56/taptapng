@@ -15,7 +15,6 @@ import java.util.Enumeration
 import java.util.Hashtable
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
-import org.bouncycastle.tls.Certificate
 import org.bouncycastle.tls.CertificateRequest
 import org.bouncycastle.tls.DefaultTlsClient
 import org.bouncycastle.tls.NameType
@@ -24,6 +23,7 @@ import org.bouncycastle.tls.ServerName
 import org.bouncycastle.tls.TlsAuthentication
 import org.bouncycastle.tls.TlsClientProtocol
 import org.bouncycastle.tls.TlsCredentials
+import org.bouncycastle.tls.TlsServerCertificate
 import org.bouncycastle.tls.crypto.impl.jcajce.JcaTlsCryptoProvider
 
 /**
@@ -178,9 +178,9 @@ internal class OneringTlsClient(
 
     override fun getAuthentication(): TlsAuthentication {
         return object : TlsAuthentication {
-            override fun notifyServerCertificate(serverCertificate: Certificate) {
+            override fun notifyServerCertificate(serverCertificate: TlsServerCertificate) {
                 if (insecure) return
-                val chain = serverCertificate.certificateList
+                val chain = serverCertificate.certificate.certificateList
                 if (chain.isEmpty()) throw IOException("Sertifikat server kosong")
                 val cf = CertificateFactory.getInstance("X.509")
                 val x509 = chain.map { tlsCert ->
