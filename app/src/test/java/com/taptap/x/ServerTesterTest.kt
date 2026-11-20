@@ -302,7 +302,7 @@ override fun dial(
             targetHost: String,
             targetPort: Int,
             probeBody: ByteArray?,
-            stats: SpeedStats? = null,
+            stats: SpeedStats?,
         ): ProxyStream {
             dialed.add(targetHost to targetPort)
             val input = ByteArrayInputStream(response.toByteArray(Charsets.UTF_8))
@@ -355,7 +355,7 @@ override fun dial(
                 targetHost: String,
                 targetPort: Int,
                 probeBody: ByteArray?,
-                stats: SpeedStats? = null,
+                stats: SpeedStats?,
             ): ProxyStream =
                 throw SocketTimeoutException("VMess gagal: Read timed out")
 

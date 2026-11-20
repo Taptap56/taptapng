@@ -30,7 +30,7 @@ class TrojanClient(private val item: ProfileItem) : ProxyClient {
         targetHost: String,
         targetPort: Int,
         probeBody: ByteArray?,
-        stats: SpeedStats? = null,
+        stats: SpeedStats?,
     ): ProxyStream {
         // Validate eagerly, before opening the TCP connection — like
         // VlessClient/SsClient. (Otherwise an empty password only

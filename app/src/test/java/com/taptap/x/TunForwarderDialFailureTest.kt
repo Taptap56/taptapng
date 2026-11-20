@@ -42,7 +42,7 @@ override fun dial(
             targetHost: String,
             targetPort: Int,
             probeBody: ByteArray?,
-            stats: SpeedStats? = null,
+            stats: SpeedStats?,
         ): ProxyStream {
             throw error
         }
@@ -58,7 +58,7 @@ override fun dial(
             targetHost: String,
             targetPort: Int,
             probeBody: ByteArray?,
-            stats: SpeedStats? = null,
+            stats: SpeedStats?,
         ): ProxyStream {
             val input = PipedInputStream()
             return object : ProxyStream {

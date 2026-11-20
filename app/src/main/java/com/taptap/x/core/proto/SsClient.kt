@@ -35,7 +35,7 @@ class SsClient(private val item: ProfileItem) : ProxyClient {
         targetHost: String,
         targetPort: Int,
         probeBody: ByteArray?,
-        stats: SpeedStats? = null,
+        stats: SpeedStats?,
     ): ProxyStream {
         // probeBody is ignored: Shadowsocks has no response
         // handshake to unblock — the stream is raw right after the

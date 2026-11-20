@@ -252,7 +252,7 @@ class SpeedStatsTest {
             targetHost: String,
             targetPort: Int,
             probeBody: ByteArray?,
-            stats: SpeedStats? = null,
+            stats: SpeedStats?,
         ): ProxyStream = stream
 
         override fun close() = Unit

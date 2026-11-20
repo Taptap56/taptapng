@@ -59,7 +59,7 @@ override fun dial(
             targetHost: String,
             targetPort: Int,
             probeBody: ByteArray?,
-            stats: SpeedStats? = null,
+            stats: SpeedStats?,
         ): ProxyStream =
             last
 
@@ -73,7 +73,7 @@ override fun dial(
             targetHost: String,
             targetPort: Int,
             probeBody: ByteArray?,
-            stats: SpeedStats? = null,
+            stats: SpeedStats?,
         ): ProxyStream {
             latch.await(10, TimeUnit.SECONDS)
             return stream

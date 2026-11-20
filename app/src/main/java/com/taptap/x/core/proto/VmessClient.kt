@@ -66,7 +66,7 @@ class VmessClient(
         targetHost: String,
         targetPort: Int,
         probeBody: ByteArray?,
-        stats: SpeedStats? = null,
+        stats: SpeedStats?,
     ): ProxyStream {
         // M3: the ladder is a socket (TCP → TLS → WS) for a plain
         // entry, or a DNSTT smux stream (→ TLS → WS) for a SlowDNS

@@ -47,7 +47,7 @@ override fun dial(
             targetHost: String,
             targetPort: Int,
             probeBody: ByteArray?,
-            stats: SpeedStats? = null,
+            stats: SpeedStats?,
         ): ProxyStream =
             BlockingStream()
 

@@ -38,7 +38,7 @@ class VlessClient(
         targetHost: String,
         targetPort: Int,
         probeBody: ByteArray?,
-        stats: SpeedStats? = null,
+        stats: SpeedStats?,
     ): ProxyStream {
         val encryption = item.method.ifBlank { "none" }.lowercase()
         require(encryption == "none") {
