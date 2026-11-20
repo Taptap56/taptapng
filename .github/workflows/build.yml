@@ -1,6 +1,6 @@
-name: Build TaptapX (release, arm64)
+name: Build TaptapNG (release, arm64)
 
-# Release build of TaptapX — a new Android app from scratch.
+# Release build of TaptapNG — a new Android app from scratch.
 # UI mirrors v2rayNG 2.3.15 with Android Views (XML layouts +
 # RecyclerView + Material Components, no Compose); protocols are
 # in-app (Kotlin/Java, no bundled xray-core), so there is no native

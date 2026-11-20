@@ -5,7 +5,7 @@
      floating label; dropdowns are exposed AutoCompleteTextViews.
      Save lives in the top bar (checkmark), like v2rayNG.
      v1.0.26: chips = gaya M3 FilterChip v2rayNG
-     (Widget.TaptapX.Chip.Filter); ritme vertikal 16dp seperti
+     (Widget.TaptapNG.Chip.Filter); ritme vertikal 16dp seperti
      v2rayNG (FormTextField padding 4dp + spacedBy 8dp); dropdown =
      OutlinedBox.ExposedDropdownMenu supaya teks tidak menempel ke
      tepi kiri; "Allow insecure" = baris SettingsSwitchItem (teks
@@ -83,31 +83,31 @@
 
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_ssh"
-                    style="@style/Widget.TaptapX.Chip.Filter"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="SSH" />
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_vmess"
-                    style="@style/Widget.TaptapX.Chip.Filter"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="VMess" />
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_vless"
-                    style="@style/Widget.TaptapX.Chip.Filter"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="VLESS" />
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_trojan"
-                    style="@style/Widget.TaptapX.Chip.Filter"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Trojan" />
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_ss"
-                    style="@style/Widget.TaptapX.Chip.Filter"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="SS" />
@@ -202,31 +202,31 @@
 
                     <com.google.android.material.chip.Chip
                         android:id="@+id/chip_ssh_payload"
-                        style="@style/Widget.TaptapX.Chip.Filter"
+                        style="@style/Widget.TaptapNG.Chip.Filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="Payload" />
                     <com.google.android.material.chip.Chip
                         android:id="@+id/chip_ssh_enhanced"
-                        style="@style/Widget.TaptapX.Chip.Filter"
+                        style="@style/Widget.TaptapNG.Chip.Filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="Enhanced" />
                     <com.google.android.material.chip.Chip
                         android:id="@+id/chip_ssh_tls"
-                        style="@style/Widget.TaptapX.Chip.Filter"
+                        style="@style/Widget.TaptapNG.Chip.Filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="TLS" />
                     <com.google.android.material.chip.Chip
                         android:id="@+id/chip_ssh_slowdns"
-                        style="@style/Widget.TaptapX.Chip.Filter"
+                        style="@style/Widget.TaptapNG.Chip.Filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="SlowDNS" />
                     <com.google.android.material.chip.Chip
                         android:id="@+id/chip_ssh_pemicu"
-                        style="@style/Widget.TaptapX.Chip.Filter"
+                        style="@style/Widget.TaptapNG.Chip.Filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="Pemicu" />
@@ -851,19 +851,19 @@
 
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_slowdns"
-                    style="@style/Widget.TaptapX.Chip.Filter"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="SlowDNS" />
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_onering"
-                    style="@style/Widget.TaptapX.Chip.Filter"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Onering" />
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_pemicu"
-                    style="@style/Widget.TaptapX.Chip.Filter"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Pemicu" />

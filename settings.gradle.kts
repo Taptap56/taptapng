@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "taptapx"
+rootProject.name = "taptapng"
 include(":app")

@@ -1,4 +1,4 @@
-# TaptapX agent guide
+# TaptapNG agent guide
 
 ## Scope
 

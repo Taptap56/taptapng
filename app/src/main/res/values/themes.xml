@@ -4,7 +4,7 @@
          (TB/TC accent: #22e6a8 dark / #0fb88a light, v1.0.28 — dulu
          oranye #f97910), green tertiary (#009966). Material Components
          DayNight so the stored theme mode (system/light/dark) applies. -->
-    <style name="Theme.TaptapX" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.TaptapNG" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
         <item name="colorSecondary">@color/colorSecondary</item>
@@ -23,13 +23,13 @@
              ID 0x00000000" (the Settings flood) and fell back to the
              small default size. Defining them here (M3-standard sizes
              + theme-adaptive colors) fixes both. -->
-        <item name="textAppearanceBodyLarge">@style/TextAppearance.TaptapX.BodyLarge</item>
-        <item name="textAppearanceBodyMedium">@style/TextAppearance.TaptapX.BodyMedium</item>
-        <item name="textAppearanceBodySmall">@style/TextAppearance.TaptapX.BodySmall</item>
-        <item name="textAppearanceTitleLarge">@style/TextAppearance.TaptapX.TitleLarge</item>
+        <item name="textAppearanceBodyLarge">@style/TextAppearance.TaptapNG.BodyLarge</item>
+        <item name="textAppearanceBodyMedium">@style/TextAppearance.TaptapNG.BodyMedium</item>
+        <item name="textAppearanceBodySmall">@style/TextAppearance.TaptapNG.BodySmall</item>
+        <item name="textAppearanceTitleLarge">@style/TextAppearance.TaptapNG.TitleLarge</item>
         <!-- dynamicColorThemeOverlay (v1.0.5): Theme.MaterialComponents
              (M2) does NOT define this attribute — only M3 themes do —
-             but TaptapXApp registers DynamicColors.applyToActivitiesIfAvailable
+             but TaptapNGApp registers DynamicColors.applyToActivitiesIfAvailable
              (dynamic_color default ON, SDK 31+). Material 1.13.0 resolves
              the overlay from this attribute and calls
              theme.applyStyle(id, true) WITHOUT a zero check, so the
@@ -44,24 +44,24 @@
              untouched. Do NOT point this at
              ThemeOverlay.Material3.DynamicColors — that would recolor
              the app with wallpaper-derived Material You colors. -->
-        <item name="dynamicColorThemeOverlay">@style/ThemeOverlay.TaptapX.DynamicColors</item>
+        <item name="dynamicColorThemeOverlay">@style/ThemeOverlay.TaptapNG.DynamicColors</item>
     </style>
 
     <!-- M3 typography tokens for the M2 theme (see above). Colors use
          ?attr/colorOnSurface(Variant) so they adapt to light/dark. -->
-    <style name="TextAppearance.TaptapX.BodyLarge" parent="TextAppearance.AppCompat.Body1">
+    <style name="TextAppearance.TaptapNG.BodyLarge" parent="TextAppearance.AppCompat.Body1">
         <item name="android:textSize">16sp</item>
         <item name="android:textColor">?attr/colorOnSurface</item>
     </style>
-    <style name="TextAppearance.TaptapX.BodyMedium" parent="TextAppearance.AppCompat.Body2">
+    <style name="TextAppearance.TaptapNG.BodyMedium" parent="TextAppearance.AppCompat.Body2">
         <item name="android:textSize">14sp</item>
         <item name="android:textColor">?attr/colorOnSurface</item>
     </style>
-    <style name="TextAppearance.TaptapX.BodySmall" parent="TextAppearance.AppCompat.Caption">
+    <style name="TextAppearance.TaptapNG.BodySmall" parent="TextAppearance.AppCompat.Caption">
         <item name="android:textSize">12sp</item>
         <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
     </style>
-    <style name="TextAppearance.TaptapX.TitleLarge" parent="TextAppearance.AppCompat.Headline">
+    <style name="TextAppearance.TaptapNG.TitleLarge" parent="TextAppearance.AppCompat.Headline">
         <item name="android:textSize">22sp</item>
         <item name="android:textColor">?attr/colorOnSurface</item>
     </style>
@@ -75,7 +75,7 @@
          (v1.0.28: hijau TB/TC, dulu oranye v2rayNG). Dipakai semua
          chip di layar Edit server (protokol, SSH method, Xray
          method) supaya satu komponen yang sama seperti v2rayNG. -->
-    <style name="Widget.TaptapX.Chip.Filter" parent="Widget.MaterialComponents.Chip.Filter">
+    <style name="Widget.TaptapNG.Chip.Filter" parent="Widget.MaterialComponents.Chip.Filter">
         <item name="chipBackgroundColor">@color/chip_background</item>
         <item name="chipStrokeColor">@color/chip_stroke</item>
         <item name="chipStrokeWidth">1dp</item>
@@ -93,6 +93,6 @@
          creation. Empty = no color changes, only the missing-attribute
          error goes away. parent="" means no parent on purpose — any
          parent with items would leak its attributes into the theme. -->
-    <style name="ThemeOverlay.TaptapX.DynamicColors" parent="">
+    <style name="ThemeOverlay.TaptapNG.DynamicColors" parent="">
     </style>
 </resources>

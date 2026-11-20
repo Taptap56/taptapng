@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.29 (vc30)
+- **id** `com.taptap.ng`, **versi** 1.0.29 (vc30)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -64,7 +64,7 @@ seperti TB/TC dan bergerak; 3 tombol aksi tiap baris terlalu
 rapat; tombol hapus langsung menghapus tanpa konfirmasi; tekan
 lama entry di v2rayNG bisa mengurutkan; export config minta ke
 clipboard saja seperti v2rayNG. Plus: nama aplikasi jadi
-**TaptapNG** (sebelumnya TaptapX).
+**TaptapNG** (sebelumnya TaptapNG).
 
 **1. Aksen oranye → hijau TB/TC.** Sumber hijau: WebUI TB/TC
 (`style.css` baris 1): `:root{--acc:#22e6a8; --acc2:#0fb88a;
@@ -137,13 +137,13 @@ ClipboardManager; kosong = toast "Nothing to export".
 `fileExportLauncher` (CreateDocument) dan `exportProfilesJson()`
 dihapus — tidak ada lagi export ke file.
 
-**Rename TaptapX → TaptapNG.** Yang berubah HANYA string
+**Rename TaptapNG → TaptapNG.** Yang berubah HANYA string
 terlihat user: `app_name`, `toast_not_available`, `about_text`,
 channel notifikasi "TaptapNG VPN", judul notifikasi, label
-clipboard, `AppConfig.APP_NAME`. Tetap: package `com.taptap.x`
+clipboard, `AppConfig.APP_NAME`. Tetap: package `com.taptap.ng`
 (update di tempat, profil/entry kebawa), nama repo, nama class
-Kotlin (`TaptapXApp`, `Theme.TaptapX`, `Widget.TaptapX.Chip.
-Filter`), `DialLog.TAG = "TaptapX-Dial"`. Bonus: `AppConfig.
+Kotlin (`TaptapNGApp`, `Theme.TaptapNG`, `Widget.TaptapNG.Chip.
+Filter`), `DialLog.TAG = "TaptapNG-Dial"`. Bonus: `AppConfig.
 VERSION_NAME` yang tertinggal "1.0.25" sejak v1.0.26 kini
 "1.0.28" — About selama ini menampilkan versi salah.
 
@@ -211,7 +211,7 @@ nilai default, dan nilai tersimpan setting TIDAK berubah):
 
 **Yang TIDAK bisa sama persis dengan v2rayNG** (dicatat jujur):
 
-- v2rayNG memakai Compose + Material 3; TaptapX memakai Views +
+- v2rayNG memakai Compose + Material 3; TaptapNG memakai Views +
   tema M2 — switch di atas adalah M2 `SwitchMaterial` skala 0,8
   dengan tint yang sama, bukan komponen M3 `Switch` asli.
   Geometri jempol/rel bisa beda sedikit.
@@ -251,12 +251,12 @@ field, nilai tersimpan, dan logika protokol TIDAK berubah):
    `FilterChip` + `FlowRow` di `XrayMethodFields` v2rayNG):
    tidak terpilih = isi transparan + garis outline 1dp, terpilih
    = isi secondaryContainer + ikon centang + teks
-   onSecondaryContainer. Tema TaptapX adalah M2 (tidak punya
+   onSecondaryContainer. Tema TaptapNG adalah M2 (tidak punya
    peran warna M3), jadi nilai persis dari v2rayNG (`Theme.kt`)
    disalin sebagai warna tetap (light + night): isi terpilih
    `#FFE8D6` / `#6F3800`, teks terpilih `#2B1700` / `#FFE8D6`,
    outline `#79747E` / `#938F99`. Style baru
-   `Widget.TaptapX.Chip.Filter` (turunan M2
+   `Widget.TaptapNG.Chip.Filter` (turunan M2
    `Widget.MaterialComponents.Chip.Filter`) + 3 color-state-list
    (`chip_background`, `chip_stroke`, `chip_text`). Jarak
    antar-chip 8dp (`chipSpacingHorizontal/Vertical`), seperti
@@ -293,19 +293,19 @@ field, nilai tersimpan, dan logika protokol TIDAK berubah):
 
 **Yang TIDAK bisa sama persis dengan v2rayNG** (dicatat jujur):
 
-- v2rayNG memakai Compose + Material 3; TaptapX memakai Views +
+- v2rayNG memakai Compose + Material 3; TaptapNG memakai Views +
   tema M2 — chip di atas adalah M2 `Chip` dengan warna M3,
   bukan komponen M3 `FilterChip` asli. Bentuk, ripple, dan
   animasi centang bisa beda sedikit.
 - v2rayNG TIDAK punya baris chip protokol (tiap protokol punya
-  layar editor sendiri); TaptapX tetap satu editor dengan baris
+  layar editor sendiri); TaptapNG tetap satu editor dengan baris
   chip protokol, hanya gayanya yang disamakan dengan chip Xray
   method v2rayNG.
 - v2rayNG TIDAK punya label seksi "Network" / "Stream Security"
-  (field mengalir terus); TaptapX mempertahankan labelnya
+  (field mengalir terus); TaptapNG mempertahankan labelnya
   (dirapikan ke 16sp) karena satu editor menampung semua field
   protokol + SSH.
-- Switch v2rayNG adalah M3 `Switch`; TaptapX memakai M2
+- Switch v2rayNG adalah M3 `Switch`; TaptapNG memakai M2
   `SwitchMaterial` skala 0,8 dengan tint yang sama — geometri
   jempol/rel bisa beda sedikit.
 - Perataan teks dropdown (`ExposedDropdownMenu`) belum bisa
@@ -324,10 +324,10 @@ di teksnya dan switch berubah (rel oranye saat nyala).
 ## v1.0.25 — Paket hemat baterai (loop prime + writer + cache DNS)
 
 **Kenapa.** Screenshot baterai 2026-11-21 01:55 (MIUI, VPN nyala
-~21:00–01:55): TaptapX 60,89% — tertinggi. Audit READ-ONLY
+~21:00–01:55): TaptapNG 60,89% — tertinggi. Audit READ-ONLY
 (2026-11-21 02:01, tanpa ubah kode) menemukan: sebagian besar
 angka itu kerja relay yang SAH (semua trafik app lain lewat relay
-Java TaptapX dan MIUI menghitungnya ke TaptapX), TIDAK ada
+Java TaptapNG dan MIUI menghitungnya ke TaptapNG), TIDAK ada
 WakeLock/WifiLock sama sekali — tapi ada tiga pemboros saat IDLE
 yang bisa dipangkas tanpa mengubah perilaku:
 
@@ -352,13 +352,13 @@ primer bawaan sendiri belum terbukti di HP. KCP SlowDNS, poll
 MainActivity, dan poller NIO juga tidak disentuh.
 
 **Verifikasi di HP.** VPN nyala semalaman (idle, layar mati),
-bandingkan pangsa baterai TaptapX dengan 60,89% sebelumnya.
+bandingkan pangsa baterai TaptapNG dengan 60,89% sebelumnya.
 Screenshot kedua 02:06 menegaskan diagnosis: saat user AKTIF
-pakai HP, pangsa TaptapX cuma 7,66% (YouTube 31,05%) — TaptapX
+pakai HP, pangsa TaptapNG cuma 7,66% (YouTube 31,05%) — TaptapNG
 mendominasi HANYA saat idle. Log `PRIME OK` harus tetap tepat
 waktu tiap interval (tidak telat karena loop tidur).
 
-## v1.0.24 — MILESTONE M5: Pemicu bawaan (primer di dalam TaptapX)
+## v1.0.24 — MILESTONE M5: Pemicu bawaan (primer di dalam TaptapNG)
 
 **Cara pakai.** Di editor entry, seksi Xray method: nyalakan chip
 **Pemicu**, isi **Domain pemicu** (wajib — mis. `chat.sociomile.com`
@@ -381,7 +381,7 @@ Hasilnya di Log: `PRIME OK <host>:<port> <ms>` / `PRIME GAGAL
 VPN — hanya tercatat di Log.
 
 **Tes HP penentu.** Matikan TB + pemicu.apk (jangan jalan bareng),
-diamkan ~14 menit tanpa prime (jendela tutup), lalu konek TaptapX
+diamkan ~14 menit tanpa prime (jendela tutup), lalu konek TaptapNG
 dengan entry yang Domain pemicunya sudah diisi. Bila entry konek,
 primer bawaan sendiri yang membuka jendela. Log harus ada baris
 `PRIME OK` sebelum dial utama. Bila entry timeout padahal Log sudah
@@ -391,7 +391,7 @@ primer bawaan sendiri yang membuka jendela. Log harus ada baris
 (domain yang diisi); entry tanpa Domain pemicu tidak di-prime sama
 sekali. Prime loop hanya jalan untuk entry yang sedang konek — entry
 lain yang Pemicu-nya nyala tidak ikut di-prime selama VPN jalan
-(model v2rayNG mem-prime SEMUA entry; TaptapX M5 mem-prime entry
+(model v2rayNG mem-prime SEMUA entry; TaptapNG M5 mem-prime entry
 yang konek saja).
 
 ## v1.0.23 — MILESTONE M4: Onering (ext TLS 0xff00 via Bouncy Castle)
@@ -400,7 +400,7 @@ yang konek saja).
 **Onering**, isi **Bug domain** (mis. `live.iflix.com`). SNI entry
 tetap domain asli (mis. `support.zoom.us`) — chip yang mengatur
 format `onering:<real>:<bug>` di link, jadi saling copy
-v2rayNG↔TaptapX tetap jalan. Syarat: VMess/VLESS/Trojan + TLS nyala
+v2rayNG↔TaptapNG tetap jalan. Syarat: VMess/VLESS/Trojan + TLS nyala
 + network WS + Bug domain terisi. SS/SSH, Onering tanpa TLS/WS/bug,
 dan Onering+SlowDNS tetap ditolak guard dengan pesan yang jelas.
 
@@ -465,7 +465,7 @@ dicatat untuk versi berikutnya — belum diubah karena butuh tes HP.
 ## v1.0.21 — MTU TUN 9000 + MSS 8960: segmen lebih besar, tulis lebih sedikit (eksperimen)
 
 **Hipotesis — dari log HP v1.0.20, bukan tebakan.** Histogram
-v1.0.20 (taptapx-77d1f821.txt) menjawab pertanyaan v1.0.20:
+v1.0.20 (taptapng-77d1f821.txt) menjawab pertanyaan v1.0.20:
 distribusinya RAPAT di `sedang` (91–96% write 50–500 us,
 rata-rata ~140 us), BUKAN bimodal — jadi bukan beberapa write
 yang nge-blok lama, melainkan hampir SETIAP write makan ~140 us
@@ -522,7 +522,7 @@ histogram TUNWRITER menunjukkan apakah laju tulis turun
 ## v1.0.20 — Selidiki penulis TUN: histogram durasi write (bukan tebakan)
 
 **Pertanyaan yang harus dijawab — dari log HP v1.0.19, bukan
-tebakan.** Log v1.0.19 (taptapx-f3e2b3f2.txt, Speedtest 16:15,
+tebakan.** Log v1.0.19 (taptapng-f3e2b3f2.txt, Speedtest 16:15,
 52,4 Mbps) membuktikan buffer socket bekerja: `SOCKET
 rcv=2097152 snd=524288` (penuh dikabulkan, kernel gandakan), data
 dari proxy datang 12× lebih cepat (`tls+net` 15170ms → 1281ms per
@@ -587,7 +587,7 @@ membatasi — dan v1.0.20 tidak mengklaim menaikkan angka.
 ## v1.0.19 — Buffer socket proxy naik (hipotesis window/RTT)
 
 **Bottleneck PINDAH — dari log HP v1.0.18, bukan tebakan.** Log
-v1.0.18 (taptapx-498628e3.txt, Speedtest 16:01) membuktikan tulis
+v1.0.18 (taptapng-498628e3.txt, Speedtest 16:01) membuktikan tulis
 TUN sudah beres: `TUNWRITER` tulisMs cuma 150–500ms per jendela 5
 dtk, `tun` per koneksi 10–190ms (dulu 6046ms). Tapi relay kini
 93–95% waktunya MENUNGGU data: TUTUP koneksi Speedtest
@@ -628,7 +628,7 @@ log-nya tetap yang bicara — bukan tebakan.
 ## v1.0.18 — Thread penulis TUN khusus + antrean
 
 **Perbaikan bottleneck yang TERBUKTI dari log HP.** Log v1.0.17
-(taptapx-0d94e353.txt, Speedtest 15:27, 16,1 Mbps) menunjukkan tiap
+(taptapng-0d94e353.txt, Speedtest 15:27, 16,1 Mbps) menunjukkan tiap
 koneksi Speedtest menghabiskan ~6 detik dari 8 detik cuma buat nulis
 ke TUN (`tun=6046ms`, 1622 writes untuk 2,06 MB, ~3,7ms per write)
 — 70-75% waktu relay thread — sementara WS (~20ms), dekrip VMess
@@ -676,9 +676,9 @@ log-nya tetap yang bicara — bukan tebakan.
 **Satu perubahan kecil, bukan perbaikan kecepatan.** `DialLog`
 menyimpan log di ring buffer 500 baris — baris lama dibuang begitu
 penuh. Dua log HP membuktikan fase download Speedtest terbuang
-sebelum sempat di-export: log 14:01 (taptapx-40774e0e.txt) cuma
+sebelum sempat di-export: log 14:01 (taptapng-40774e0e.txt) cuma
 menyimpan fase upload (lebih baru, 8,11 MB), log 14:07
-(taptapx-9c8c1aca.txt) cuma traffic background. Urutan export user
+(taptapng-9c8c1aca.txt) cuma traffic background. Urutan export user
 sudah benar — buffer-nya yang kekecilan. Sekarang buffer menahan
 5000 baris (~500 KB memori), cukup untuk satu Speedtest penuh
 beserta traffic background. Tidak ada perubahan lain: protokol,
@@ -686,7 +686,7 @@ relay, instrumentasi SPEED, dan UI tetap seperti v1.0.16.
 
 **Tes HP** — konek entry biasa (VMess yang sama dengan tes
 sebelumnya), jalankan SATU Speedtest sampai SELESAI (angka download
-dan upload muncul di layar), BARU buka TaptapX → Log → export, lalu
+dan upload muncul di layar), BARU buka TaptapNG → Log → export, lalu
 kirim file log + screenshot hasil Speedtest. Fase download sekarang
 harusnya utuh di log: cari baris `SPEED` koneksi Speedtest
 (`:8080`) — tahap dengan angka terbesar di tiap jendela 5 detik
@@ -749,7 +749,7 @@ besar di tiap jendela 5 detik, dan baris `TUTUP`-nya.
 ## v1.0.15 — Kecepatan relay
 
 Speedtest 2026-11-20 back-to-back (entry sama, kondisi sama):
-v2rayNG 133 Mbps, XVEON ~32 Mbps, TaptapX ~30,9 Mbps. Dua app
+v2rayNG 133 Mbps, XVEON ~32 Mbps, TaptapNG ~30,9 Mbps. Dua app
 tanpa core mentok di ~30 Mbps — batasnya di relay in-app, bukan
 di server. Perbaikan (tanpa ubah protokol, tanpa core, APK tetap
 ~2 MB):
@@ -777,8 +777,8 @@ di server. Perbaikan (tanpa ubah protokol, tanpa core, APK tetap
 
 **Tes HP (yang menentukan — angka lokal tidak membuktikan
 kenaikan di HP):** Speedtest back-to-back, entry sama, kondisi
-sama, lawan v2rayNG: (1) TaptapX, (2) v2rayNG, (3) TaptapX lagi.
-Laporkan download/upload ketiganya. Target: TaptapX naik dari
+sama, lawan v2rayNG: (1) TaptapNG, (2) v2rayNG, (3) TaptapNG lagi.
+Laporkan download/upload ketiganya. Target: TaptapNG naik dari
 ~31 Mbps (tidak dijamin samakan 133 Mbps v2rayNG — jalur data
 native Go tetap lebih cepat dari relay Java tulisan tangan).
 
@@ -836,7 +836,7 @@ native Go tetap lebih cepat dari relay Java tulisan tangan).
 ```
 
 CI: `.github/workflows/build.yml` (release, arm64-v8a).
-Repo: https://github.com/Taptap56/taptapx
+Repo: https://github.com/Taptap56/taptapng
 
 ## Yang belum terverifikasi (butuh HP)
 

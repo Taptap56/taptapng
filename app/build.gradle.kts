@@ -4,14 +4,14 @@ plugins {
 }
 
 android {
-    namespace = "com.taptap.x"
+    namespace = "com.taptap.ng"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.taptap.x"
+        applicationId = "com.taptap.ng"
         minSdk = 24
         targetSdk = 37
-        versionCode = 35
+        versionCode = 1
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

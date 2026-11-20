@@ -1,0 +1,137 @@
+package com.taptap.ng
+
+import com.taptap.ng.core.DialLog
+import java.net.SocketTimeoutException
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+
+/**
+ * Regression test for the v1.0.5 phone report (taptapng-3.txt,
+ * 2026-11-20 02:47): the log contained ZERO dial lines — the app
+ * never logged a dial stage anywhere, so a failed connect left no
+ * trace. v1.0.6 logs every stage to DialLog (logcat + in-app ring
+ * buffer), and the log must never carry credentials.
+ */
+class DialLogTest {
+
+    @Test
+    fun `lines are stored and returned in order`() {
+        DialLog.clear()
+        try {
+            DialLog.log("DNS", "example.com -> 1.2.3.4")
+            DialLog.log("TCP", "example.com:443 ok")
+            val lines = DialLog.lines()
+            assertEquals(2, lines.size)
+            assertTrue(lines[0].contains("DNS example.com -> 1.2.3.4"), lines[0])
+            assertTrue(lines[1].contains("TCP example.com:443 ok"), lines[1])
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `ring buffer caps at MAX_LINES`() {
+        DialLog.clear()
+        try {
+            repeat(DialLog.MAX_LINES + 10) { DialLog.log("TEST", "line $it") }
+            assertEquals(DialLog.MAX_LINES, DialLog.lines().size)
+            assertTrue(DialLog.lines().last().contains("line ${DialLog.MAX_LINES + 9}"))
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `ring buffer holds 5000 lines`() {
+        // Phone logs taptapng-40774e0e.txt / taptapng-9c8c1aca.txt
+        // (2026-11-20): a Speedtest + background traffic produces
+        // well over 500 lines, so the 500-line buffer evicted the
+        // whole download phase before the user exported the log.
+        // 5000 lines must hold a full Speedtest run.
+        assertEquals(5000, DialLog.MAX_LINES)
+        DialLog.clear()
+        try {
+            repeat(5001) { DialLog.log("TEST", "line $it") }
+            val lines = DialLog.lines()
+            assertEquals(5000, lines.size)
+            assertTrue(lines.first().contains("line 1"), lines.first())
+            assertTrue(lines.last().contains("line 5000"), lines.last())
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `failure never logs a UUID or other credential`() {
+        DialLog.clear()
+        try {
+            val uuid = "de305d54-75b4-431b-adb2-eb6b9e546014"
+            DialLog.failure(
+                "VMess",
+                IllegalArgumentException("bad uuid $uuid"),
+            )
+            val lines = DialLog.lines()
+            assertEquals(1, lines.size)
+            assertFalse(lines[0].contains(uuid), "UUID leaked into dial log: ${lines[0]}")
+            assertTrue(lines[0].contains("IllegalArgumentException"), lines[0])
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `failure keeps network messages with their stage tag`() {
+        DialLog.clear()
+        try {
+            DialLog.failure("TCP", SocketTimeoutException("TCP gagal: Read timed out"))
+            val lines = DialLog.lines()
+            assertEquals(1, lines.size)
+            assertTrue(lines[0].contains("TCP gagal: Read timed out"), lines[0])
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `failure includes the message for IllegalStateException`() {
+        // v1.0.7 (taptapng-4.txt, 2026-11-20 03:19): the phone log
+        // only ever said "IllegalStateException" — the message
+        // ("protect() gagal — dial tidak bisa bypass VPN") only
+        // appeared in the status bar, so the DialLog alone could
+        // not say where the dial died. On v1.0.6 code this line
+        // carries the class name only.
+        DialLog.clear()
+        try {
+            DialLog.failure(
+                "PROBE",
+                IllegalStateException("protect() gagal — dial tidak bisa bypass VPN"),
+            )
+            val lines = DialLog.lines()
+            assertEquals(1, lines.size)
+            assertTrue(
+                lines[0].contains("protect() gagal — dial tidak bisa bypass VPN"),
+                lines[0],
+            )
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `logcat sink receives every line`() {
+        DialLog.clear()
+        val seen = mutableListOf<Pair<String, String>>()
+        DialLog.logcatSink = { tag, msg -> seen.add(tag to msg) }
+        try {
+            DialLog.log("PROBE", "dial test ok")
+            assertEquals(1, seen.size)
+            assertEquals(DialLog.TAG, seen[0].first)
+            assertTrue(seen[0].second.contains("PROBE dial test ok"), seen[0].second)
+        } finally {
+            DialLog.logcatSink = null
+            DialLog.clear()
+        }
+    }
+}

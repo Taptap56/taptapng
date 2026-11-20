@@ -1,4 +1,4 @@
-// Top-level build file for TaptapX.
+// Top-level build file for TaptapNG.
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false

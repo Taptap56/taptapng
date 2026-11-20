@@ -25,18 +25,18 @@
         android:required="false" />
 
     <application
-        android:name=".TaptapXApp"
+        android:name=".TaptapNGApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.TaptapX">
+        android:theme="@style/Theme.TaptapNG">
 
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.TaptapX">
+            android:theme="@style/Theme.TaptapNG">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -46,23 +46,23 @@
         <activity
             android:name=".ui.server.ServerEditorActivity"
             android:exported="false"
-            android:theme="@style/Theme.TaptapX" />
+            android:theme="@style/Theme.TaptapNG" />
 
         <activity
             android:name=".ui.settings.SettingsActivity"
             android:exported="false"
-            android:theme="@style/Theme.TaptapX" />
+            android:theme="@style/Theme.TaptapNG" />
 
         <activity
             android:name=".ui.log.LogActivity"
             android:exported="false"
-            android:theme="@style/Theme.TaptapX" />
+            android:theme="@style/Theme.TaptapNG" />
 
         <activity
             android:name=".ui.scanner.ScannerActivity"
             android:exported="false"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.TaptapX" />
+            android:theme="@style/Theme.TaptapNG" />
 
         <receiver
             android:name=".service.BootReceiver"

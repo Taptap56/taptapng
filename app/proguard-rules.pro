@@ -1,4 +1,4 @@
-# TaptapX ProGuard/R8 rules (release build).
+# TaptapNG ProGuard/R8 rules (release build).
 # R8 must not break: Gson (ProfileItem/ProfileStore), JSch, ZXing,
 # the VpnService, or the preference/settings keys.
 
@@ -6,10 +6,10 @@
 
 # Gson: the profile model is serialized by field name; keep it whole,
 # plus the TypeToken subclass used by ProfileStore.load().
--keep class com.taptap.x.data.ProfileItem { *; }
--keep class com.taptap.x.data.ConfigType { *; }
--keepclassmembers enum com.taptap.x.data.ConfigType { *; }
--keep class com.taptap.x.data.ProfileStore { *; }
+-keep class com.taptap.ng.data.ProfileItem { *; }
+-keep class com.taptap.ng.data.ConfigType { *; }
+-keepclassmembers enum com.taptap.ng.data.ConfigType { *; }
+-keep class com.taptap.ng.data.ProfileStore { *; }
 -keep class * extends com.google.gson.reflect.TypeToken
 -keep class com.google.gson.reflect.TypeToken { *; }
 
@@ -34,6 +34,6 @@
 -keep class com.google.zxing.** { *; }
 
 # Android entry points referenced from the manifest.
--keep class com.taptap.x.TaptapXApp { *; }
--keep class com.taptap.x.service.TaptapVpnService { *; }
--keep class com.taptap.x.service.BootReceiver { *; }
+-keep class com.taptap.ng.TaptapNGApp { *; }
+-keep class com.taptap.ng.service.TaptapVpnService { *; }
+-keep class com.taptap.ng.service.BootReceiver { *; }
