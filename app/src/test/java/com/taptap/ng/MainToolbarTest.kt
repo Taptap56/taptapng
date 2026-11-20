@@ -79,7 +79,7 @@ class MainToolbarTest {
         val xml = read("app/src/main/res/menu/editor_toolbar.xml")
         assertTrue(xml.contains("android:id=\"@+id/action_delete\""), "delete item missing")
         assertTrue(xml.contains("android:icon=\"@drawable/ic_delete_24dp\""), "delete icon missing")
-        val src = read("app/src/main/java/com/taptap/x/ui/server/ServerEditorActivity.kt")
+        val src = read("app/src/main/java/com/taptap/ng/ui/server/ServerEditorActivity.kt")
         assertTrue(
             src.contains("menu.findItem(R.id.action_delete)?.isVisible = existing != null"),
             "delete must only show when editing an existing server",
@@ -110,7 +110,7 @@ class MainToolbarTest {
 
     @Test
     fun `main activity inflates menu in onCreateOptionsMenu`() {
-        val src = read("app/src/main/java/com/taptap/x/ui/MainActivity.kt")
+        val src = read("app/src/main/java/com/taptap/ng/ui/MainActivity.kt")
         assertTrue(
             src.contains("override fun onCreateOptionsMenu(menu: Menu): Boolean"),
             "MainActivity must override onCreateOptionsMenu",
@@ -139,7 +139,7 @@ class MainToolbarTest {
 
     @Test
     fun `editor activity inflates menu in onCreateOptionsMenu`() {
-        val src = read("app/src/main/java/com/taptap/x/ui/server/ServerEditorActivity.kt")
+        val src = read("app/src/main/java/com/taptap/ng/ui/server/ServerEditorActivity.kt")
         assertTrue(
             src.contains("override fun onCreateOptionsMenu(menu: Menu): Boolean"),
             "ServerEditorActivity must override onCreateOptionsMenu",

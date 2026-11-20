@@ -96,7 +96,7 @@ class DynamicColorsThemeTest {
         // test and `theme defines dynamicColorThemeOverlay` go away
         // together (deliberate removal of the registration is the only
         // other correct fix, and it must be a conscious decision).
-        val src = read("app/src/main/java/com/taptap/x/TaptapNGApp.kt")
+        val src = read("app/src/main/java/com/taptap/ng/TaptapNGApp.kt")
         assertTrue(
             src.contains("DynamicColors.applyToActivitiesIfAvailable"),
             "TaptapNGApp must still register DynamicColors — the error " +

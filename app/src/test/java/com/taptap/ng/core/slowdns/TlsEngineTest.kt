@@ -17,7 +17,7 @@ import javax.net.ssl.SSLContext
  * TlsEngine tests (M3): the engine must complete a real TLS handshake
  * over a plain stream pair and then carry application data both ways.
  * The server is a real SSLEngine (server mode) with a self-signed
- * test certificate (test-tls.p12, test-only password "taptapng-test");
+ * test certificate (test-tls.p12, test-only password "taptapx-test");
  * the client trusts all (insecure=true, like a SlowDNS entry with
  * "allow insecure"). The pair is cross-wired piped streams, never a
  * socket: JVM loopback TLS is intercepted in the dev VM and the same
@@ -38,9 +38,9 @@ class TlsEngineTest {
         val res: InputStream = javaClass.classLoader
             .getResourceAsStream("test-tls.p12")
             ?: throw IllegalStateException("test-tls.p12 tidak ada di test resources")
-        res.use { ks.load(it, "taptapng-test".toCharArray()) }
+        res.use { ks.load(it, "taptapx-test".toCharArray()) }
         val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-        kmf.init(ks, "taptapng-test".toCharArray())
+        kmf.init(ks, "taptapx-test".toCharArray())
         return SSLContext.getInstance("TLS").apply {
             init(kmf.keyManagers, null, null)
         }

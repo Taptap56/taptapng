@@ -49,13 +49,13 @@ class OneringTlsTest {
         val res: InputStream = javaClass.classLoader
             .getResourceAsStream("test-tls.p12")
             ?: throw IllegalStateException("test-tls.p12 tidak ada di test resources")
-        res.use { ks.load(it, "taptapng-test".toCharArray()) }
+        res.use { ks.load(it, "taptapx-test".toCharArray()) }
         return ks
     }
 
     private fun serverContext(): SSLContext {
         val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-        kmf.init(loadKeystore(), "taptapng-test".toCharArray())
+        kmf.init(loadKeystore(), "taptapx-test".toCharArray())
         return SSLContext.getInstance("TLS").apply {
             init(kmf.keyManagers, null, null)
         }

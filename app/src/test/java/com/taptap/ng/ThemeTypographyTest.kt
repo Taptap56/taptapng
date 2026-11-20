@@ -164,7 +164,7 @@ class ThemeTypographyTest {
 
     @Test
     fun `server remarks are always bold like v2rayNG`() {
-        val src = read("app/src/main/java/com/taptap/x/ui/main/ServerAdapter.kt")
+        val src = read("app/src/main/java/com/taptap/ng/ui/main/ServerAdapter.kt")
         assertTrue(
             src.contains("holder.remarks.setTypeface(null, Typeface.BOLD)"),
             "remarks must be bold on every row, not only the selected one",
