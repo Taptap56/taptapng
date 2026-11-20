@@ -31,6 +31,49 @@ object Transport {
     const val HANDSHAKE_TIMEOUT_MS = 10_000
 
     /**
+     * Proxy socket buffers (v1.0.19). Phone evidence (v1.0.18 log,
+     * Speedtest 16:01): the relay spent 93-95% of its time WAITING
+     * for data (tls+net=15170ms of 16,0 s, 0,50 MB/s per connection)
+     * while every app-side stage was tiny — throughput per
+     * connection ≈ TCP window / RTT, and the socket was never tuned
+     * (plain Socket() defaults). xray-core sets large buffers and
+     * reaches 133 Mbps over the same proxy/path, so the window is
+     * the prime suspect — the phone test decides.
+     *
+     * Linux doubles SO_RCVBUF/SO_SNDBUF on read-back and clamps
+     * them to net.core.rmem_max/wmem_max, so the effective values
+     * can be smaller than requested (the SOCKET log line after
+     * connect shows what the kernel actually granted).
+     */
+    const val SOCKET_RECV_BUFFER_SIZE = 1024 * 1024
+    const val SOCKET_SEND_BUFFER_SIZE = 256 * 1024
+
+    /**
+     * Raise the proxy socket buffers BEFORE connect() so the kernel
+     * uses them for the initial TCP window. A refused setting must
+     * never kill the dial — it only falls back to the defaults.
+     * The sizes are parameters (defaulting to the production
+     * values) so tests can use values below the kernel's
+     * rmem_max/wmem_max clamp and assert on them.
+     */
+    internal fun tuneSocketBuffers(
+        socket: Socket,
+        recvSize: Int = SOCKET_RECV_BUFFER_SIZE,
+        sendSize: Int = SOCKET_SEND_BUFFER_SIZE,
+    ) {
+        runCatching {
+            socket.receiveBufferSize = recvSize
+            socket.sendBufferSize = sendSize
+            socket.tcpNoDelay = true
+        }.onFailure {
+            DialLog.log(
+                "SOCKET",
+                "setel buffer gagal (${it.javaClass.simpleName}) — lanjut default",
+            )
+        }
+    }
+
+    /**
      * Hook set by [com.taptap.x.service.TaptapVpnService] so dial
      * sockets bypass the TUN (VpnService.protect). Null = no
      * protection (unit tests, direct use). Returning false aborts
@@ -126,6 +169,9 @@ object Transport {
             // that blocks past the watchdog is killed the same way
             // as a stuck read (see DialWatchdog).
             wd?.arm(plain)
+            // v1.0.19: raise the buffers BEFORE connect() so the
+            // kernel uses them for the initial TCP window.
+            tuneSocketBuffers(plain)
             val protect = protectSocket
             if (protect != null && TunnelState.up && !protect(plain)) {
                 if (TunnelState.appBypass) {
@@ -176,6 +222,15 @@ object Transport {
                 throw IOException("TCP gagal: ${e.message}", e)
             }
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
+            // v1.0.19: log the EFFECTIVE values the kernel granted
+            // (Linux doubles and clamps to rmem_max/wmem_max — the
+            // phone log shows whether the 1 MB request survived).
+            runCatching {
+                DialLog.log(
+                    "SOCKET",
+                    "rcv=${plain.receiveBufferSize} snd=${plain.sendBufferSize}",
+                )
+            }
             DialLog.log("TCP", "${item.address}:${item.port} ok")
         } catch (e: Exception) {
             runCatching { plain.close() }

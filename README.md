@@ -1,4 +1,4 @@
-# TaptapX v1.0.18
+# TaptapX v1.0.19
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.18 (vc19)
+- **id** `com.taptap.x`, **versi** 1.0.19 (vc20)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,47 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.19 — Buffer socket proxy naik (hipotesis window/RTT)
+
+**Bottleneck PINDAH — dari log HP v1.0.18, bukan tebakan.** Log
+v1.0.18 (taptapx-498628e3.txt, Speedtest 16:01) membuktikan tulis
+TUN sudah beres: `TUNWRITER` tulisMs cuma 150–500ms per jendela 5
+dtk, `tun` per koneksi 10–190ms (dulu 6046ms). Tapi relay kini
+93–95% waktunya MENUNGGU data: TUTUP koneksi Speedtest
+`tls+net=15170ms` dari 16,0 dtk, ws 111ms, vmess 585ms, build 96ms,
+tun 154ms; down 8,04 MB = 0,50 MB/s per koneksi; total ~25 Mbps —
+cocok dengan laporan "Masih sama". Semua tahap di app sudah kecil;
+data dari proxy datangnya pelan.
+
+Tersangkanya: buffer socket proxy **tidak pernah disetel** —
+`Transport.open()` membuat `Socket()` polos tanpa
+`receiveBufferSize`/`sendBufferSize`/`tcpNoDelay`. Kecepatan per
+koneksi ≈ window TCP / RTT; dengan RTT ~150ms (ping Speedtest
+164ms) + window default ~64–128KB → ~0,4–0,85 MB/s, cocok dengan
+0,50 MB/s yang terukur. v2rayNG (xray-core, Go) setel buffer besar
+→ 133 Mbps lewat proxy/server/jalur yang sama. **Ini perbaikan
+hipotesis window/RTT — tes HP yang memutuskan.**
+
+Perbaikannya (satu tempat, `Transport.open()`): SEBELUM `connect()`
+setel `receiveBufferSize = 1 MB`, `sendBufferSize = 256 KB`,
+`tcpNoDelay = true` (dibungkus `runCatching` + log bila gagal —
+setelan gagal tidak boleh menggagalkan dial). Sesudah connect, log
+nilai EFEKTIF yang dikabulkan kernel (baris DialLog `SOCKET rcv=…
+snd=…`) — Linux melipatgandakan dan membatasi nilai ke
+`rmem_max`/`wmem_max`, jadi baris ini penting untuk diagnosa log
+berikutnya. SSLSocket membungkus socket yang sama, jadi buffer
+terbawa — tidak perlu setel ulang di `TlsUtil`. Tidak ada perubahan
+lain: protokol, relay, TunWriter, MSS/chunk, UI tetap seperti
+v1.0.18.
+
+**Tes HP** — konek entry biasa (VMess yang sama), jalankan SATU
+Speedtest sampai SELESAI, BARU export Log + kirim file log +
+screenshot hasil. Yang menentukan: angka download (bandingkan
+langsung dengan v1.0.18); baris `SOCKET` di log menunjukkan buffer
+efektif yang dikabulkan kernel; baris `SPEED` `tls+net` harusnya
+turun bila window memang penyebabnya. Bila angka tidak naik,
+log-nya tetap yang bicara — bukan tebakan.
 
 ## v1.0.18 — Thread penulis TUN khusus + antrean
 
