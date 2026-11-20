@@ -11,8 +11,8 @@ android {
         applicationId = "com.taptap.x"
         minSdk = 24
         targetSdk = 37
-        versionCode = 34
-        versionName = "1.0.33"
+        versionCode = 35
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
