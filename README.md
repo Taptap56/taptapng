@@ -1,4 +1,4 @@
-# TaptapNG v1.0.28
+# TaptapNG v1.0.29
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.28 (vc29)
+- **id** `com.taptap.x`, **versi** 1.0.29 (vc30)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,36 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.29 — Ikon launcher jadi logo kue TB/TC
+
+**Kenapa.** Screenshot launcher user 2026-11-21 03:31/03:32: label
+sudah benar "TaptapNG" (rename v1.0.28 terbukti), TAPI ikon launcher
+masih X oranye lama, sementara TaptapClash-Go dan TaptapBox di folder
+yang sama memakai logo kue TB/TC. Di v1.0.28 ikon launcher sengaja
+belum diganti (di luar cakupan); sekarang disamakan.
+
+**Cara.** Ikon diambil LANGSUNG dari aset TB/TC, bukan digambar ulang:
+master `~/workspace/build/taptapbox-v1063/webui/icons/icon-512.png`
+(md5 `e253b8c858c8dc6cd9be1c1783de41d8` — byte-identik dengan
+`taptapclash-v1060/webui/icons/icon-512.png`; keduanya aset yang sama:
+kue di atas cakram hijau gelap, sudut transparan). Script
+`gen_launcher_icon.py` (disimpan di `~/workspace/build/tmp/`, bukan
+di repo) me-downscale master itu dengan PIL LANCZOS ke 5 densitas —
+mdpi 48, hdpi 72, xhdpi 96, xxhdpi 144, xxxhdpi 192 — dan menulis
+`mipmap-*/ic_launcher.png` + `mipmap-*/ic_launcher_round.png`
+(isi identik: ikonnya memang sudah melingkar, jadi varian round =
+gambar yang sama). Tidak ada adaptive icon `mipmap-anydpi-v26` di
+aplikasi ini (dari awal hanya PNG legacy) — jadi yang dipakai launcher
+adalah PNG ini; sengaja tidak ditambah adaptive icon supaya yang
+tampil persis hasil render di atas tanpa risiko terpotong mask.
+Satu-satunya perubahan di versi ini: 10 file PNG + bump versi.
+Perilaku/field/nilai/warna lain TIDAK berubah.
+
+**Batas.** Tampilan ikon launcher tidak bisa dibuktikan di VM ini
+(tidak ada emulator/launcher) — verifikasi lewat screenshot HP user.
+Catatan: launcher kadang masih menampilkan ikon lama dari cache;
+bila begitu, restart launcher atau hapus-pasang ulang ikon.
 
 ## v1.0.28 — Hijau TB/TC + logo kue bergerak + reorder + export clipboard + TaptapNG
 
