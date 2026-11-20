@@ -5,21 +5,24 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.InputStream
+import java.io.PipedInputStream
+import java.io.PipedOutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.KeyStore
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLServerSocket
 
 /**
  * TlsEngine tests (M3): the engine must complete a real TLS handshake
  * over a plain stream pair and then carry application data both ways.
- * The server is a local SSLSocket with a self-signed test certificate
- * (test-tls.p12, test-only password "taptapx-test"); the client trusts
- * all (insecure=true, like a SlowDNS entry with "allow insecure").
- * Runs on CI loopback (JVM loopback TCP works there).
+ * The server is a real SSLEngine (server mode) with a self-signed
+ * test certificate (test-tls.p12, test-only password "taptapx-test");
+ * the client trusts all (insecure=true, like a SlowDNS entry with
+ * "allow insecure"). The pair is cross-wired piped streams, never a
+ * socket: JVM loopback TLS is intercepted in the dev VM and the same
+ * test failed on the CI runner over a socket pair.
  */
 class TlsEngineTest {
 
@@ -45,31 +48,34 @@ class TlsEngineTest {
     }
 
     @Test
-    fun `handshake and echo over a socket stream pair`() {
-        val serverSocket = serverContext().serverSocketFactory.createServerSocket(0) as SSLServerSocket
-        val port = serverSocket.localPort
+    fun `handshake and echo over a stream pair`() {
+        // No sockets: JVM loopback TLS is intercepted (the dev VM
+        // resets even a plain SSLSocket handshake, and the CI runner
+        // fails the same test at the read). TlsEngine only needs a
+        // stream pair, so drive it over cross-wired piped streams;
+        // the server side is a real SSLEngine (server mode, test
+        // certificate) driven by the same TlsSession wrapper.
+        val clientToServer = PipedInputStream(65536)
+        val clientOut = PipedOutputStream(clientToServer)
+        val serverToClient = PipedInputStream(65536)
+        val serverOut = PipedOutputStream(serverToClient)
+        val serverEngine = serverContext().createSSLEngine()
+        serverEngine.useClientMode = false
+        val serverSession = TlsEngine.TlsSession(serverEngine, clientToServer, serverOut)
         var serverReceived = ""
         val serverThread = Thread({
-            serverSocket.use { ss ->
-                val s = ss.accept()
-                s.use { sock ->
-                    sock.soTimeout = 10_000
-                    val input = sock.getInputStream()
-                    val output = sock.getOutputStream()
-                    val buf = ByteArray(1024)
-                    val n = input.read(buf)
-                    serverReceived = buf.copyOf(n).toString(Charsets.UTF_8)
-                    output.write("balasan:$serverReceived".toByteArray(Charsets.UTF_8))
-                    output.flush()
-                }
-            }
+            serverSession.handshake()
+            val buf = ByteArray(1024)
+            val n = serverSession.inputStream.read(buf)
+            serverReceived = buf.copyOf(n).toString(Charsets.UTF_8)
+            serverSession.outputStream.write(
+                "balasan:$serverReceived".toByteArray(Charsets.UTF_8),
+            )
+            serverSession.outputStream.flush()
         }, "tls-test-server").apply { isDaemon = true }
         serverThread.start()
 
-        val client = Socket()
-        client.connect(InetSocketAddress("127.0.0.1", port), 5_000)
-        client.soTimeout = 10_000
-        val (tlsIn, tlsOut) = TlsEngine.wrap(client.getInputStream(), client.getOutputStream(), testItem())
+        val (tlsIn, tlsOut) = TlsEngine.wrap(serverToClient, clientOut, testItem())
         tlsOut.write("halo-tls".toByteArray(Charsets.UTF_8))
         tlsOut.flush()
         val reply = ByteArray(1024)
@@ -79,7 +85,6 @@ class TlsEngineTest {
         assertEquals("halo-tls", serverReceived)
         tlsIn.close()
         tlsOut.close()
-        client.close()
         serverThread.join(5_000)
         assertTrue(!serverThread.isAlive)
     }

@@ -538,7 +538,7 @@ class SlowDnsRoundTripTest {
             openThread.join(30_000)
             assertTrue(!openThread.isAlive, "Buka stream SlowDNS menggantung > 30 dtk")
             if (openError != null) throw AssertionError("Buka stream SlowDNS gagal: $openError", openError)
-            assertTrue(stream != null, "Buka stream SlowDNS tidak menghasilkan stream")
+            val s = requireNotNull(stream) { "Buka stream SlowDNS tidak menghasilkan stream" }
             // openStream() returns once the SYN is SENT; the server
             // accepts asynchronously — wait for it (up to 5 s).
             val acceptDeadline = System.currentTimeMillis() + 5_000
@@ -546,14 +546,14 @@ class SlowDnsRoundTripTest {
                 Thread.sleep(50)
             }
             assertTrue(server.streamsAccepted >= 1, "Mock server tidak menerima stream smux")
-            stream!!.readDeadlineMs = 10_000
+            s.readDeadlineMs = 10_000
             val payload = "hello-tunnel".toByteArray(Charsets.UTF_8)
-            stream!!.output.write(payload)
-            stream!!.output.flush()
-            val echo = stream!!.input.readExactBytes(payload.size)
+            s.output.write(payload)
+            s.output.flush()
+            val echo = s.input.readExactBytes(payload.size)
             assertTrue(echo.contentEquals(payload), "Echo mentah tidak sama dengan yang dikirim")
             assertTrue(server.vmessEchoed >= 1, "Mock server tidak meng-echo mentah")
-            stream!!.close()
+            s.close()
             pool.close()
         } finally {
             server.stop()
@@ -602,24 +602,24 @@ class SlowDnsRoundTripTest {
             dialThread.join(30_000)
             assertTrue(!dialThread.isAlive, "Dial SlowDNS menggantung > 30 dtk")
             if (dialError != null) throw AssertionError("Dial SlowDNS gagal: $dialError", dialError)
-            assertTrue(stream != null, "Dial SlowDNS tidak menghasilkan stream")
+            val s = requireNotNull(stream) { "Dial SlowDNS tidak menghasilkan stream" }
             assertTrue(server.streamsAccepted >= 1, "Mock server tidak menerima stream smux")
 
             // Round trip: write through the tunnel, read the echo back.
             // The probe body is part of the body stream, so the server
             // echoes it first — drain the probe echo before the ping.
-            val probeEcho = stream!!.input.readExactBytes(probe.size)
+            val probeEcho = s.input.readExactBytes(probe.size)
             assertTrue(
                 probeEcho.contentEquals(probe),
                 "Echo probe body tidak sama dengan yang dikirim",
             )
             val payload = "ping-slowdns".toByteArray(Charsets.UTF_8)
-            stream!!.output.write(payload)
-            stream.output.flush()
-            val echo = stream.input.readExactBytes(payload.size)
+            s.output.write(payload)
+            s.output.flush()
+            val echo = s.input.readExactBytes(payload.size)
             assertTrue(echo.contentEquals(payload), "Echo tidak sama dengan yang dikirim")
             assertTrue(server.vmessEchoed >= 1, "Mock VMess server tidak meng-echo")
-            stream.close()
+            s.close()
             client.close()
         } finally {
             server.stop()
