@@ -1,102 +1,248 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Chip 4 logo kue TB/TC (v1.0.32): ckrun + ckhop CSS (6 dtk) digabung, port VERBATIM dari style.css TB/TC. Nilai ABSOLUT di sekitar transform dasar grup (translate 7.6,6.3 rot 10 scale 0.45). <objectAnimator> (bukan <animator>): AVD hanya mengikat ObjectAnimator ke target grup. -->
+<!-- Chip 4 logo kue TB/TC (v1.0.33): ckrun + ckhop CSS (6 dtk) digabung, port VERBATIM dari style.css TB/TC. Komposisi matriks penuh per sampel dengan poros CSS (transform-origin 50% 100% bottom-center; c1 run 50% 55%): O_run=(7.584,7.744) O_hop=(7.584,7.744); easing CSS dibakar ke keyframe rapat. Nilai ABSOLUT di sekitar transform dasar grup (translate 7.6,6.3 rot 10 scale 0.45). <objectAnimator> (bukan <animator>): AVD hanya mengikat ObjectAnimator ke target grup. -->
 <objectAnimator xmlns:android="http://schemas.android.com/apk/res/android"
     android:duration="6000"
     android:repeatCount="infinite"
-    android:startOffset="3000"
+    android:startOffset="440"
     android:interpolator="@android:interpolator/linear">
     <propertyValuesHolder android:propertyName="translateX" android:valueType="floatType">
         <keyframe android:fraction="0" android:value="7.6" />
-        <keyframe android:fraction="0.06" android:value="7.35" />
-        <keyframe android:fraction="0.085" android:value="7.628" />
-        <keyframe android:fraction="0.124" android:value="8.658" />
-        <keyframe android:fraction="0.168" android:value="9.2" />
-        <keyframe android:fraction="0.212" android:value="10.416" />
-        <keyframe android:fraction="0.256" android:value="10.8" />
-        <keyframe android:fraction="0.3" android:value="12.016" />
-        <keyframe android:fraction="0.344" android:value="12.4" />
-        <keyframe android:fraction="0.388" android:value="13.616" />
-        <keyframe android:fraction="0.432" android:value="14" />
-        <keyframe android:fraction="0.476" android:value="15.216" />
-        <keyframe android:fraction="0.52" android:value="15.6" />
-        <keyframe android:fraction="0.55" android:value="16.5" />
+        <keyframe android:fraction="0.06" android:value="7.181" />
+        <keyframe android:fraction="0.08" android:value="7.62" />
+        <keyframe android:fraction="0.109" android:value="8.497" />
+        <keyframe android:fraction="0.127" android:value="8.968" />
+        <keyframe android:fraction="0.141" android:value="9.193" />
+        <keyframe android:fraction="0.148" android:value="9.264" />
+        <keyframe android:fraction="0.161" android:value="9.351" />
+        <keyframe android:fraction="0.168" android:value="9.449" />
+        <keyframe android:fraction="0.178" android:value="9.863" />
+        <keyframe android:fraction="0.198" android:value="10.425" />
+        <keyframe android:fraction="0.211" android:value="10.726" />
+        <keyframe android:fraction="0.217" android:value="10.821" />
+        <keyframe android:fraction="0.225" android:value="10.897" />
+        <keyframe android:fraction="0.234" android:value="10.941" />
+        <keyframe android:fraction="0.247" android:value="10.96" />
+        <keyframe android:fraction="0.255" android:value="11.032" />
+        <keyframe android:fraction="0.266" android:value="11.463" />
+        <keyframe android:fraction="0.295" android:value="12.244" />
+        <keyframe android:fraction="0.303" android:value="12.393" />
+        <keyframe android:fraction="0.311" android:value="12.482" />
+        <keyframe android:fraction="0.321" android:value="12.538" />
+        <keyframe android:fraction="0.336" android:value="12.565" />
+        <keyframe android:fraction="0.344" android:value="12.649" />
+        <keyframe android:fraction="0.354" android:value="13.063" />
+        <keyframe android:fraction="0.374" android:value="13.625" />
+        <keyframe android:fraction="0.388" android:value="13.945" />
+        <keyframe android:fraction="0.394" android:value="14.033" />
+        <keyframe android:fraction="0.401" android:value="14.097" />
+        <keyframe android:fraction="0.41" android:value="14.141" />
+        <keyframe android:fraction="0.424" android:value="14.165" />
+        <keyframe android:fraction="0.432" android:value="14.249" />
+        <keyframe android:fraction="0.442" android:value="14.663" />
+        <keyframe android:fraction="0.462" android:value="15.225" />
+        <keyframe android:fraction="0.476" android:value="15.545" />
+        <keyframe android:fraction="0.482" android:value="15.633" />
+        <keyframe android:fraction="0.49" android:value="15.704" />
+        <keyframe android:fraction="0.499" android:value="15.744" />
+        <keyframe android:fraction="0.51" android:value="15.756" />
+        <keyframe android:fraction="0.517" android:value="15.805" />
+        <keyframe android:fraction="0.55" android:value="16.367" />
         <keyframe android:fraction="0.6" android:value="15.6" />
-        <keyframe android:fraction="0.775" android:value="15.6" />
-        <keyframe android:fraction="0.95" android:value="6.8" />
+        <keyframe android:fraction="0.64" android:value="15.744" />
+        <keyframe android:fraction="0.68" android:value="15.465" />
+        <keyframe android:fraction="0.72" android:value="15.69" />
+        <keyframe android:fraction="0.75" android:value="15.602" />
+        <keyframe android:fraction="0.775" android:value="15.73" />
+        <keyframe android:fraction="0.795" android:value="14.732" />
+        <keyframe android:fraction="0.834" android:value="12.51" />
+        <keyframe android:fraction="0.86" android:value="11.357" />
+        <keyframe android:fraction="0.87" android:value="10.631" />
+        <keyframe android:fraction="0.9" android:value="8.936" />
+        <keyframe android:fraction="0.912" android:value="8.404" />
+        <keyframe android:fraction="0.935" android:value="7.574" />
+        <keyframe android:fraction="0.95" android:value="6.93" />
         <keyframe android:fraction="0.98" android:value="7.6" />
         <keyframe android:fraction="1" android:value="7.6" />
     </propertyValuesHolder>
     <propertyValuesHolder android:propertyName="translateY" android:valueType="floatType">
         <keyframe android:fraction="0" android:value="6.3" />
-        <keyframe android:fraction="0.08" android:value="6.3" />
-        <keyframe android:fraction="0.124" android:value="4.324" />
-        <keyframe android:fraction="0.168" android:value="6.3" />
-        <keyframe android:fraction="0.212" android:value="4.344" />
-        <keyframe android:fraction="0.256" android:value="6.3" />
-        <keyframe android:fraction="0.3" android:value="4.344" />
-        <keyframe android:fraction="0.344" android:value="6.3" />
-        <keyframe android:fraction="0.388" android:value="4.344" />
-        <keyframe android:fraction="0.432" android:value="6.3" />
-        <keyframe android:fraction="0.476" android:value="4.344" />
-        <keyframe android:fraction="0.52" android:value="6.3" />
-        <keyframe android:fraction="0.78" android:value="6.3" />
-        <keyframe android:fraction="0.82" android:value="4.703" />
-        <keyframe android:fraction="0.86" android:value="6.3" />
-        <keyframe android:fraction="0.9" android:value="4.735" />
-        <keyframe android:fraction="0.928" android:value="6.114" />
+        <keyframe android:fraction="0.043" android:value="6.496" />
+        <keyframe android:fraction="0.057" android:value="6.524" />
+        <keyframe android:fraction="0.08" android:value="6.534" />
+        <keyframe android:fraction="0.09" android:value="5.435" />
+        <keyframe android:fraction="0.11" android:value="4.498" />
+        <keyframe android:fraction="0.124" android:value="4.2" />
+        <keyframe android:fraction="0.137" android:value="4.606" />
+        <keyframe android:fraction="0.168" android:value="6.59" />
+        <keyframe android:fraction="0.179" android:value="5.422" />
+        <keyframe android:fraction="0.199" android:value="4.504" />
+        <keyframe android:fraction="0.212" android:value="4.237" />
+        <keyframe android:fraction="0.226" android:value="4.683" />
+        <keyframe android:fraction="0.256" android:value="6.59" />
+        <keyframe android:fraction="0.267" android:value="5.422" />
+        <keyframe android:fraction="0.287" android:value="4.504" />
+        <keyframe android:fraction="0.3" android:value="4.237" />
+        <keyframe android:fraction="0.314" android:value="4.683" />
+        <keyframe android:fraction="0.344" android:value="6.59" />
+        <keyframe android:fraction="0.355" android:value="5.422" />
+        <keyframe android:fraction="0.375" android:value="4.504" />
+        <keyframe android:fraction="0.388" android:value="4.237" />
+        <keyframe android:fraction="0.402" android:value="4.683" />
+        <keyframe android:fraction="0.432" android:value="6.59" />
+        <keyframe android:fraction="0.443" android:value="5.422" />
+        <keyframe android:fraction="0.463" android:value="4.504" />
+        <keyframe android:fraction="0.476" android:value="4.237" />
+        <keyframe android:fraction="0.49" android:value="4.683" />
+        <keyframe android:fraction="0.52" android:value="6.59" />
+        <keyframe android:fraction="0.55" android:value="6.624" />
+        <keyframe android:fraction="0.577" android:value="6.388" />
+        <keyframe android:fraction="0.599" android:value="6.3" />
+        <keyframe android:fraction="0.68" android:value="6.447" />
+        <keyframe android:fraction="0.72" android:value="6.494" />
+        <keyframe android:fraction="0.78" android:value="6.537" />
+        <keyframe android:fraction="0.79" android:value="5.503" />
+        <keyframe android:fraction="0.808" android:value="4.773" />
+        <keyframe android:fraction="0.82" android:value="4.561" />
+        <keyframe android:fraction="0.833" android:value="4.947" />
+        <keyframe android:fraction="0.86" android:value="6.582" />
+        <keyframe android:fraction="0.87" android:value="5.547" />
+        <keyframe android:fraction="0.888" android:value="4.834" />
+        <keyframe android:fraction="0.9" android:value="4.622" />
+        <keyframe android:fraction="0.913" android:value="4.99" />
+        <keyframe android:fraction="0.94" android:value="6.582" />
+        <keyframe android:fraction="0.95" android:value="6.54" />
+        <keyframe android:fraction="0.974" android:value="6.315" />
+        <keyframe android:fraction="0.979" android:value="6.301" />
         <keyframe android:fraction="1" android:value="6.3" />
     </propertyValuesHolder>
     <propertyValuesHolder android:propertyName="rotation" android:valueType="floatType">
         <keyframe android:fraction="0" android:value="10" />
-        <keyframe android:fraction="0.06" android:value="2" />
-        <keyframe android:fraction="0.168" android:value="22" />
-        <keyframe android:fraction="0.52" android:value="22" />
-        <keyframe android:fraction="0.55" android:value="3" />
-        <keyframe android:fraction="0.64" android:value="16" />
-        <keyframe android:fraction="0.68" android:value="4" />
-        <keyframe android:fraction="0.775" android:value="16" />
-        <keyframe android:fraction="0.86" android:value="-2" />
-        <keyframe android:fraction="0.95" android:value="16" />
+        <keyframe android:fraction="0.06" android:value="2.422" />
+        <keyframe android:fraction="0.085" android:value="16.004" />
+        <keyframe android:fraction="0.093" android:value="17.105" />
+        <keyframe android:fraction="0.158" android:value="21.278" />
+        <keyframe android:fraction="0.168" android:value="22.67" />
+        <keyframe android:fraction="0.173" android:value="22.001" />
+        <keyframe android:fraction="0.181" android:value="22.512" />
+        <keyframe android:fraction="0.207" android:value="22.141" />
+        <keyframe android:fraction="0.243" android:value="22.258" />
+        <keyframe android:fraction="0.246" android:value="22.001" />
+        <keyframe android:fraction="0.256" android:value="22.67" />
+        <keyframe android:fraction="0.261" android:value="22.001" />
+        <keyframe android:fraction="0.269" android:value="22.512" />
+        <keyframe android:fraction="0.295" android:value="22.141" />
+        <keyframe android:fraction="0.331" android:value="22.258" />
+        <keyframe android:fraction="0.334" android:value="22.001" />
+        <keyframe android:fraction="0.344" android:value="22.67" />
+        <keyframe android:fraction="0.349" android:value="22.001" />
+        <keyframe android:fraction="0.357" android:value="22.512" />
+        <keyframe android:fraction="0.383" android:value="22.141" />
+        <keyframe android:fraction="0.419" android:value="22.258" />
+        <keyframe android:fraction="0.422" android:value="22.001" />
+        <keyframe android:fraction="0.432" android:value="22.67" />
+        <keyframe android:fraction="0.437" android:value="22.001" />
+        <keyframe android:fraction="0.445" android:value="22.512" />
+        <keyframe android:fraction="0.471" android:value="22.141" />
+        <keyframe android:fraction="0.507" android:value="22.258" />
+        <keyframe android:fraction="0.51" android:value="22.001" />
+        <keyframe android:fraction="0.52" android:value="22.67" />
+        <keyframe android:fraction="0.55" android:value="4.208" />
+        <keyframe android:fraction="0.581" android:value="7.387" />
+        <keyframe android:fraction="0.64" android:value="16.053" />
+        <keyframe android:fraction="0.68" android:value="4.178" />
+        <keyframe android:fraction="0.72" android:value="14.321" />
+        <keyframe android:fraction="0.75" android:value="10.402" />
+        <keyframe android:fraction="0.775" android:value="16.497" />
+        <keyframe android:fraction="0.864" android:value="-1.996" />
+        <keyframe android:fraction="0.872" android:value="-1.488" />
+        <keyframe android:fraction="0.896" android:value="-1.861" />
+        <keyframe android:fraction="0.928" android:value="-1.742" />
+        <keyframe android:fraction="0.931" android:value="-2" />
+        <keyframe android:fraction="0.94" android:value="-1.33" />
+        <keyframe android:fraction="0.95" android:value="16.643" />
+        <keyframe android:fraction="0.98" android:value="10" />
         <keyframe android:fraction="1" android:value="10" />
     </propertyValuesHolder>
     <propertyValuesHolder android:propertyName="scaleX" android:valueType="floatType">
         <keyframe android:fraction="0" android:value="0.45" />
-        <keyframe android:fraction="0.08" android:value="0.531" />
-        <keyframe android:fraction="0.093" android:value="0.387" />
-        <keyframe android:fraction="0.168" android:value="0.54" />
-        <keyframe android:fraction="0.181" android:value="0.387" />
-        <keyframe android:fraction="0.256" android:value="0.54" />
-        <keyframe android:fraction="0.269" android:value="0.387" />
-        <keyframe android:fraction="0.344" android:value="0.54" />
-        <keyframe android:fraction="0.357" android:value="0.387" />
-        <keyframe android:fraction="0.432" android:value="0.54" />
-        <keyframe android:fraction="0.445" android:value="0.387" />
-        <keyframe android:fraction="0.55" android:value="0.585" />
+        <keyframe android:fraction="0.037" android:value="0.501" />
+        <keyframe android:fraction="0.08" android:value="0.526" />
+        <keyframe android:fraction="0.093" android:value="0.392" />
+        <keyframe android:fraction="0.123" android:value="0.421" />
+        <keyframe android:fraction="0.155" android:value="0.408" />
+        <keyframe android:fraction="0.168" android:value="0.534" />
+        <keyframe android:fraction="0.181" android:value="0.392" />
+        <keyframe android:fraction="0.211" android:value="0.421" />
+        <keyframe android:fraction="0.243" android:value="0.408" />
+        <keyframe android:fraction="0.256" android:value="0.534" />
+        <keyframe android:fraction="0.269" android:value="0.392" />
+        <keyframe android:fraction="0.299" android:value="0.421" />
+        <keyframe android:fraction="0.331" android:value="0.408" />
+        <keyframe android:fraction="0.344" android:value="0.534" />
+        <keyframe android:fraction="0.357" android:value="0.392" />
+        <keyframe android:fraction="0.387" android:value="0.421" />
+        <keyframe android:fraction="0.419" android:value="0.408" />
+        <keyframe android:fraction="0.432" android:value="0.534" />
+        <keyframe android:fraction="0.445" android:value="0.392" />
+        <keyframe android:fraction="0.475" android:value="0.421" />
+        <keyframe android:fraction="0.507" android:value="0.408" />
+        <keyframe android:fraction="0.518" android:value="0.53" />
+        <keyframe android:fraction="0.55" android:value="0.577" />
         <keyframe android:fraction="0.6" android:value="0.45" />
-        <keyframe android:fraction="0.78" android:value="0.531" />
-        <keyframe android:fraction="0.792" android:value="0.387" />
-        <keyframe android:fraction="0.95" android:value="0.549" />
+        <keyframe android:fraction="0.694" android:value="0.497" />
+        <keyframe android:fraction="0.735" android:value="0.509" />
+        <keyframe android:fraction="0.77" android:value="0.513" />
+        <keyframe android:fraction="0.78" android:value="0.526" />
+        <keyframe android:fraction="0.792" android:value="0.392" />
+        <keyframe android:fraction="0.819" android:value="0.421" />
+        <keyframe android:fraction="0.848" android:value="0.408" />
+        <keyframe android:fraction="0.86" android:value="0.534" />
+        <keyframe android:fraction="0.872" android:value="0.392" />
+        <keyframe android:fraction="0.899" android:value="0.421" />
+        <keyframe android:fraction="0.928" android:value="0.408" />
+        <keyframe android:fraction="0.95" android:value="0.543" />
+        <keyframe android:fraction="0.974" android:value="0.456" />
+        <keyframe android:fraction="0.979" android:value="0.45" />
         <keyframe android:fraction="1" android:value="0.45" />
     </propertyValuesHolder>
     <propertyValuesHolder android:propertyName="scaleY" android:valueType="floatType">
         <keyframe android:fraction="0" android:value="0.45" />
-        <keyframe android:fraction="0.08" android:value="0.378" />
-        <keyframe android:fraction="0.093" android:value="0.54" />
-        <keyframe android:fraction="0.168" android:value="0.369" />
-        <keyframe android:fraction="0.181" android:value="0.54" />
-        <keyframe android:fraction="0.256" android:value="0.369" />
-        <keyframe android:fraction="0.269" android:value="0.54" />
-        <keyframe android:fraction="0.344" android:value="0.369" />
-        <keyframe android:fraction="0.357" android:value="0.54" />
-        <keyframe android:fraction="0.432" android:value="0.369" />
-        <keyframe android:fraction="0.445" android:value="0.54" />
-        <keyframe android:fraction="0.55" android:value="0.351" />
-        <keyframe android:fraction="0.6" android:value="0.45" />
-        <keyframe android:fraction="0.78" android:value="0.378" />
-        <keyframe android:fraction="0.792" android:value="0.54" />
-        <keyframe android:fraction="0.86" android:value="0.369" />
-        <keyframe android:fraction="0.872" android:value="0.54" />
-        <keyframe android:fraction="0.94" android:value="0.369" />
+        <keyframe android:fraction="0.041" android:value="0.396" />
+        <keyframe android:fraction="0.08" android:value="0.383" />
+        <keyframe android:fraction="0.093" android:value="0.535" />
+        <keyframe android:fraction="0.124" android:value="0.493" />
+        <keyframe android:fraction="0.155" android:value="0.51" />
+        <keyframe android:fraction="0.168" android:value="0.374" />
+        <keyframe android:fraction="0.181" android:value="0.535" />
+        <keyframe android:fraction="0.212" android:value="0.493" />
+        <keyframe android:fraction="0.243" android:value="0.51" />
+        <keyframe android:fraction="0.256" android:value="0.374" />
+        <keyframe android:fraction="0.269" android:value="0.535" />
+        <keyframe android:fraction="0.3" android:value="0.493" />
+        <keyframe android:fraction="0.331" android:value="0.51" />
+        <keyframe android:fraction="0.344" android:value="0.374" />
+        <keyframe android:fraction="0.357" android:value="0.535" />
+        <keyframe android:fraction="0.388" android:value="0.493" />
+        <keyframe android:fraction="0.419" android:value="0.51" />
+        <keyframe android:fraction="0.432" android:value="0.374" />
+        <keyframe android:fraction="0.445" android:value="0.535" />
+        <keyframe android:fraction="0.476" android:value="0.493" />
+        <keyframe android:fraction="0.507" android:value="0.51" />
+        <keyframe android:fraction="0.519" android:value="0.376" />
+        <keyframe android:fraction="0.55" android:value="0.359" />
+        <keyframe android:fraction="0.599" android:value="0.45" />
+        <keyframe android:fraction="0.694" android:value="0.403" />
+        <keyframe android:fraction="0.78" android:value="0.383" />
+        <keyframe android:fraction="0.792" android:value="0.535" />
+        <keyframe android:fraction="0.82" android:value="0.493" />
+        <keyframe android:fraction="0.848" android:value="0.51" />
+        <keyframe android:fraction="0.86" android:value="0.374" />
+        <keyframe android:fraction="0.872" android:value="0.535" />
+        <keyframe android:fraction="0.9" android:value="0.493" />
+        <keyframe android:fraction="0.928" android:value="0.51" />
+        <keyframe android:fraction="0.94" android:value="0.374" />
+        <keyframe android:fraction="0.974" android:value="0.446" />
+        <keyframe android:fraction="0.979" android:value="0.45" />
         <keyframe android:fraction="1" android:value="0.45" />
     </propertyValuesHolder>
 </objectAnimator>
