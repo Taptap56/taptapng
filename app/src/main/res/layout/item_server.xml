@@ -126,7 +126,11 @@
                     android:id="@+id/delay"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:ellipsize="end"
+                    android:gravity="end"
                     android:maxLines="1"
+                    android:maxWidth="140dp"
                     android:textAppearance="?attr/textAppearanceBodySmall"
                     android:textColor="@color/colorPing"
                     android:textSize="13sp" />

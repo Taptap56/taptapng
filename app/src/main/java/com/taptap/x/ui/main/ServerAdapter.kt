@@ -106,7 +106,7 @@ class ServerAdapter(
         } else if (delayMs < 0) {
             // v1.0.6: show WHERE the test died instead of a bare
             // "Timeout" ("TCP timeout", "DNS gagal", "protect gagal").
-            holder.delay.text = delayStages[item.guid]?.takeIf { it.isNotBlank() } ?: "Timeout"
+            holder.delay.text = formatDelayFailure(delayStages[item.guid])
             holder.delay.setTextColor(ContextCompat.getColor(context, R.color.colorPingRed))
         } else {
             // v1.0.13, fix B: the label says which ping it is — a
@@ -145,3 +145,15 @@ const val DELAY_KIND_TCP = "tcp"
  */
 fun formatDelayLabel(ms: Long, kind: String?): String =
     if (kind == DELAY_KIND_TCP) "${ms}ms (TCP)" else "${ms}ms"
+
+/**
+ * Row label for a failed delay test (v1.0.22): the stage text can be a
+ * long diagnostic ("TCP gagal: connect timed out after ...") that
+ * squeezed the protocol label. Keep only the part before the first
+ * colon, capped at 22 characters; blank = "Timeout" like v2rayNG.
+ */
+fun formatDelayFailure(stage: String?): String {
+    val head = stage?.substringBefore(':')?.trim().orEmpty()
+    if (head.isEmpty()) return "Timeout"
+    return if (head.length > 22) head.take(21) + "…" else head
+}

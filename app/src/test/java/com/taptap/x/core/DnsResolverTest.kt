@@ -291,4 +291,28 @@ class DnsResolverTest {
         val elapsedMs = (System.nanoTime() - start) / 1_000_000
         assertTrue(elapsedMs < 10_000, "fallback menggantung $elapsedMs ms")
     }
+    @Test
+    fun `resolveWithSystemFallback reuses a cached address when DNS goes away`() {
+        // v1.0.22: host proxy di-cache — koneksi berikutnya tidak
+        // menunggu query UDP baru, dan IP lama dipakai bila DNS mati.
+        val (server, running, serverThread) = fakeDnsServer()
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        DnsResolver.clearAddrCache()
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = server.localPort
+            val first = DnsResolver.resolveWithSystemFallback("cache-test.example", 443, timeoutMs = 2000)
+            assertEquals("93.184.216.34", first.hostAddress)
+            // Server DNS dimatikan: tanpa cache, lookup ini gagal.
+            stopFakeDns(server, running, serverThread)
+            val second = DnsResolver.resolveWithSystemFallback("cache-test.example", 443, timeoutMs = 500)
+            assertEquals("93.184.216.34", second.hostAddress)
+        } finally {
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            DnsResolver.clearAddrCache()
+            stopFakeDns(server, running, serverThread)
+        }
+    }
 }

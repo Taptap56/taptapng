@@ -41,6 +41,10 @@
         android:layout_height="wrap_content"
         android:layout_gravity="center_vertical"
         android:layout_marginStart="8dp"
+        android:ellipsize="end"
+        android:gravity="end"
+        android:maxLines="1"
+        android:maxWidth="150dp"
         android:textColor="?android:attr/textColorSecondary"
         android:textSize="14sp" />
 

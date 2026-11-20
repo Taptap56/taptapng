@@ -79,6 +79,8 @@
                 android:layout_weight="1"
                 android:gravity="center_vertical"
                 android:paddingStart="16dp"
+                android:ellipsize="end"
+                android:maxLines="2"
                 android:paddingEnd="88dp"
                 android:text="@string/status_stopped"
                 android:textAppearance="?attr/textAppearanceBodyMedium"

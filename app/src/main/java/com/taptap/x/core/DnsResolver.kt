@@ -108,6 +108,45 @@ object DnsResolver {
         if (AddrCodec.isIpLiteral(clean)) {
             return InetAddress.getByName(clean)
         }
+        // v1.0.22: cache hasil resolve host proxy. Tanpa cache, SETIAP
+        // koneksi TCP dari TUN memicu satu query UDP ke 8.8.8.8 lebih
+        // dulu (satu RTT ekstra + gagal total bila UDP 53 sedang
+        // lambat/hilang), dan IP bisa berganti-ganti antar koneksi.
+        val key = clean.lowercase()
+        val now = System.currentTimeMillis()
+        val cached = addrCache[key]
+        if (cached != null && now - cached.atMs < ADDR_CACHE_TTL_MS) {
+            return cached.addr
+        }
+        try {
+            val fresh = resolveUncached(host, clean, port, timeoutMs)
+            addrCache[key] = CachedAddr(fresh, now)
+            return fresh
+        } catch (e: IOException) {
+            // Lookup gagal: IP lama yang pernah berhasil lebih baik
+            // daripada menggagalkan koneksi.
+            if (cached != null) return cached.addr
+            throw e
+        }
+    }
+
+    /** Hapus cache resolve (dipakai tes). */
+    fun clearAddrCache() {
+        addrCache.clear()
+    }
+
+    private class CachedAddr(val addr: InetAddress, val atMs: Long)
+
+    private val addrCache = java.util.concurrent.ConcurrentHashMap<String, CachedAddr>()
+
+    private const val ADDR_CACHE_TTL_MS = 120_000L
+
+    private fun resolveUncached(
+        host: String,
+        clean: String,
+        port: Int,
+        timeoutMs: Int,
+    ): InetAddress {
         try {
             return resolve(clean, timeoutMs)
         } catch (e: IOException) {

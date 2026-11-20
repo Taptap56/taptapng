@@ -13,7 +13,7 @@
     <string name="set_section_advanced">Advanced settings</string>
     <string name="set_section_mode">Mode settings</string>
 
-    <string name="set_not_supported_m2">Belum didukung di M2</string>
+    <string name="set_not_supported_m2">Not supported yet</string>
     <string name="set_on">On</string>
     <string name="set_off">Off</string>
     <string name="set_not_set">Not set</string>

@@ -1,4 +1,4 @@
-# TaptapX v1.0.21
+# TaptapX v1.0.22
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.21 (vc22)
+- **id** `com.taptap.x`, **versi** 1.0.22 (vc23)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,25 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.22 — Cache DNS host proxy + rapikan teks UI
+
+**Stabilitas.** `DnsResolver.resolveWithSystemFallback` kini menyimpan
+hasil resolve host proxy 120 dtk. Sebelumnya SETIAP koneksi TCP dari TUN
+memicu satu query UDP ke 8.8.8.8 lebih dulu (satu RTT ekstra per
+koneksi, dan dial gagal bila query itu hilang). Bila lookup gagal, IP
+terakhir yang berhasil dipakai. Tes: `DnsResolverTest` (cache tetap
+menjawab saat server DNS mati).
+
+**UI/teks.** Nilai baris Settings dibatasi 150dp + ellipsis (nilai
+panjang tidak lagi menggencet judul jadi satu huruf per baris); label
+delay di baris server dibatasi 140dp dan label gagal dipendekkan
+(`formatDelayFailure`, tes di `DelayLabelTest`); status bar bawah maks
+2 baris + ellipsis; "Belum didukung di M2" -> "Not supported yet".
+
+**Tidak diubah.** Jalur data relay/TUN, MTU 9000, protokol. Temuan
+audit relay (tanpa ACK/window dari aplikasi, UDP non-DNS dibuang)
+dicatat untuk versi berikutnya — belum diubah karena butuh tes HP.
 
 ## v1.0.21 — MTU TUN 9000 + MSS 8960: segmen lebih besar, tulis lebih sedikit (eksperimen)
 
