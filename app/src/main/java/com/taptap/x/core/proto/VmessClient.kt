@@ -1,6 +1,8 @@
 package com.taptap.x.core.proto
 
 import com.taptap.x.core.DialLog
+import com.taptap.x.core.slowdns.SlowDnsSessionPool
+import com.taptap.x.core.slowdns.SlowDnsTransport
 import com.taptap.x.data.ProfileItem
 import java.io.IOException
 import java.io.InputStream
@@ -43,7 +45,11 @@ import javax.crypto.AEADBadTagException
  * Transport: TCP or WS, optionally under TLS (TCP → TLS → WS).
  * Only TCP command (0x01) is supported; no Mux, no UDP.
  */
-class VmessClient(private val item: ProfileItem) : ProxyClient {
+class VmessClient(
+    private val item: ProfileItem,
+    /** Test seam: a pool with a fake DNS transport (default: a real pool). */
+    slowDnsPool: SlowDnsSessionPool? = null,
+) : ProxyClient {
 
     // v1.0.6: every stream this client opened, so close() can close
     // them all — but a new dial NEVER closes the previous stream
@@ -51,8 +57,16 @@ class VmessClient(private val item: ProfileItem) : ProxyClient {
     // first session whenever two apps dialled at once).
     private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
+    // M3: one DNSTT session per client, shared by the probe + all
+    // forwarder dials (see SlowDnsSessionPool). Unused when the
+    // entry is not a SlowDNS entry.
+    private val slowDns = slowDnsPool ?: SlowDnsSessionPool(item)
+
     override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
-        val transport = Transport.open(item)
+        // M3: the ladder is a socket (TCP → TLS → WS) for a plain
+        // entry, or a DNSTT smux stream (→ TLS → WS) for a SlowDNS
+        // entry. Everything below is identical for both.
+        val transport = SlowDnsTransport.open(item, slowDns)
         try {
             val session = VmessCrypto.newSession(item, targetHost, targetPort)
             transport.output.write(session.requestBytes)
@@ -87,11 +101,10 @@ class VmessClient(private val item: ProfileItem) : ProxyClient {
                 Transport.noteStage("VMess")
                 VmessCrypto.readResponseHeader(transport.input, session)
                 val bodyIn = VmessBodyInputStream(transport.input, session)
-                transport.socket.soTimeout = 0
-                Transport.clearWatchdogSocket()
+                transport.clearHandshakeTimeout()
                 DialLog.log("VMess", "handshake ok")
                 return TrackedProxyStream(
-                    SocketProxyStream(transport.socket, bodyIn, bodyOut),
+                    StreamProxyStream(bodyIn, bodyOut) { transport.close() },
                     openStreams,
                 )
             }
@@ -127,12 +140,11 @@ class VmessClient(private val item: ProfileItem) : ProxyClient {
                     DialLog.failure("VMess", failure)
                     throw failure
                 }
-                transport.socket.soTimeout = 0
-                Transport.clearWatchdogSocket()
+                transport.clearHandshakeTimeout()
                 DialLog.log("VMess", "handshake ok")
             }
             return TrackedProxyStream(
-                SocketProxyStream(transport.socket, lazyIn, bodyOut),
+                StreamProxyStream(lazyIn, bodyOut) { transport.close() },
                 openStreams,
             )
         } catch (e: java.net.SocketTimeoutException) {
@@ -157,6 +169,9 @@ class VmessClient(private val item: ProfileItem) : ProxyClient {
 
     override fun close() {
         openStreams.toList().forEach { runCatching { it.close() } }
+        // M3: tear the DNSTT session down too (stops the KCP/DNS
+        // loops; a leaked session would keep polling the resolver).
+        runCatching { slowDns.close() }
     }
 }
 
@@ -472,10 +487,18 @@ class VmessBodyOutputStream(
      * never fires it.
      */
     private val onFirstChunk: ((Int) -> Unit)? = null,
+    /**
+     * M3: the key/IV pair that masks + seals the chunks. Default is
+     * the REQUEST pair (bodyKey/bodyIV) — the client writing the
+     * request body. A server writing the RESPONSE body passes the
+     * response pair (responseBodyKey/responseBodyIV).
+     */
+    private val key: ByteArray = session.bodyKey,
+    private val iv: ByteArray = session.bodyIV,
 ) : OutputStream() {
 
-    private val mask = Shake128(session.bodyIV)
-    private val nonce = VmessCrypto.ChunkNonce(session.bodyIV)
+    private val mask = Shake128(iv)
+    private val nonce = VmessCrypto.ChunkNonce(iv)
     private val pending = mutableListOf<Byte>()
     private var closed = false
     private val firstChunkLogged = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -537,7 +560,7 @@ class VmessBodyOutputStream(
         }
         val paddingLen = mask.nextPaddingLen()
         val sealed = VmessCrypto.sealBodyChunk(
-            session.security, session.bodyKey, nonce.next(), data,
+            session.security, key, nonce.next(), data,
         )
         val total = sealed.size + paddingLen
         val maskedSize = total xor mask.nextUint16()
@@ -565,10 +588,18 @@ class VmessBodyOutputStream(
 class VmessBodyInputStream(
     private val rawIn: InputStream,
     private val session: VmessSession,
+    /**
+     * M3: the key/IV pair that unmasks + opens the chunks. Default
+     * is the RESPONSE pair (responseBodyKey/responseBodyIV) — the
+     * client reading the response body. A server reading the REQUEST
+     * body passes the request pair (bodyKey/bodyIV).
+     */
+    private val key: ByteArray = session.responseBodyKey,
+    private val iv: ByteArray = session.responseBodyIV,
 ) : InputStream() {
 
-    private val mask = Shake128(session.responseBodyIV)
-    private val nonce = VmessCrypto.ChunkNonce(session.responseBodyIV)
+    private val mask = Shake128(iv)
+    private val nonce = VmessCrypto.ChunkNonce(iv)
     private var chunkBuf: ByteArray = ByteArray(0)
     private var chunkPos = 0
     private var eof = false
@@ -590,7 +621,7 @@ class VmessBodyInputStream(
         val sealed = wire.copyOfRange(0, size - paddingLen)
         // Response direction: response body key (SHA256 of request key).
         val plain = try {
-            VmessCrypto.openBodyChunk(session.security, session.responseBodyKey, nonce.next(), sealed)
+            VmessCrypto.openBodyChunk(session.security, key, nonce.next(), sealed)
         } catch (e: AEADBadTagException) {
             throw IOException("VMess body chunk gagal diverifikasi", e)
         }

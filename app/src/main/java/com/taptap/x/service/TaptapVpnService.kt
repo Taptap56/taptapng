@@ -75,7 +75,11 @@ class TaptapVpnService : VpnService() {
          * Onering entries need the M4 engine (the 0xff00 extension
          * is not built yet) and SlowDNS entries need M3 — in M2 both
          * would dial as plain VMess and hang on TLS when the window
-         * is closed, with no honest status.
+         * is closed, with no honest status. v1.0.14 (M3): SlowDNS
+         * entries ARE startable for VMess/VLESS (the DNSTT tunnel
+         * is built in-app); SlowDNS for Trojan/SS/SSH is still
+         * rejected — the DNSTT ladder is only plugged into the
+         * VMess/VLESS clients.
          */
         fun requireStartable(item: ProfileItem) {
             if (item.configType == ConfigType.SSH) {
@@ -88,9 +92,12 @@ class TaptapVpnService : VpnService() {
                     "Entry Onering belum didukung di v1.0.4 (butuh M4) — pilih entry VMess biasa",
                 )
             }
-            if (item.dnsttEnabled) {
+            if (item.dnsttEnabled &&
+                item.configType != ConfigType.VMESS &&
+                item.configType != ConfigType.VLESS
+            ) {
                 throw IllegalStateException(
-                    "Entry SlowDNS belum didukung di v1.0.4 (butuh M3) — pilih entry VMess biasa",
+                    "Entry SlowDNS baru didukung untuk VMess/VLESS di v1.0.14 — pilih entry VMess/VLESS",
                 )
             }
         }
@@ -148,6 +155,13 @@ class TaptapVpnService : VpnService() {
     private var tunFd: ParcelFileDescriptor? = null
     private var forwarder: TunForwarder? = null
     private var probeWatchdog: DialWatchdog? = null
+    /**
+     * The client of the current start (M3): teardown closes it so a
+     * SlowDNS client's DNSTT session (KCP/DNS loops) cannot leak
+     * after a stop — the old code only closed the client on the
+     * error paths in runStart, never on a normal stop.
+     */
+    private var currentClient: ProxyClient? = null
     private val tunnelLock = Any()
 
     /**
@@ -341,6 +355,7 @@ class TaptapVpnService : VpnService() {
         TunnelState.up = true
         TunnelState.appBypass = disallowed
         tunFd = fd
+        currentClient = client
         try {
             val tunIn = FileInputStream(fd.fileDescriptor)
             val tunOut = FileOutputStream(fd.fileDescriptor)
@@ -431,6 +446,10 @@ class TaptapVpnService : VpnService() {
             forwarder = null
             runCatching { tunFd?.close() }
             tunFd = null
+            // M3: close the client so a SlowDNS session is torn down
+            // (idempotent — runStart also closes it on its paths).
+            runCatching { currentClient?.close() }
+            currentClient = null
         }
         Transport.protectSocket = null
         ServerTester.protectSocket = null

@@ -61,9 +61,28 @@ class VpnStartGuardTest {
         assertTrue(e.message!!.contains("M4"), "message must point at M4: ${e.message}")
     }
 
+    // ---- v1.0.14 (M3): SlowDNS is startable for VMess/VLESS ----
+
     @Test
-    fun `SlowDNS entry is rejected with a clear message`() {
+    fun `SlowDNS VMess entry is startable in v1_0_14 (M3)`() {
+        // The DNSTT tunnel is built in-app now (M3): a SlowDNS VMess
+        // entry must pass the guard — the old v1.0.4 rejection only
+        // made sense while M3 was not built.
         val item = vmess("SSH SlowDNS").apply {
+            dnsttEnabled = true
+            dnsttNS = "ns.example.com"
+            dnsttPubkey = "deadbeef"
+        }
+        assertDoesNotThrow { TaptapVpnService.requireStartable(item) }
+    }
+
+    @Test
+    fun `SlowDNS Trojan entry is rejected with a clear message`() {
+        // The DNSTT ladder is only plugged into the VMess/VLESS
+        // clients — a SlowDNS Trojan entry would otherwise dial as
+        // plain Trojan to the entry address, which is wrong.
+        val item = vmess("Trojan SlowDNS").apply {
+            configType = ConfigType.TROJAN
             dnsttEnabled = true
             dnsttNS = "ns.example.com"
             dnsttPubkey = "deadbeef"
@@ -72,7 +91,21 @@ class VpnStartGuardTest {
             TaptapVpnService.requireStartable(item)
         }
         assertTrue(e.message!!.contains("SlowDNS"), "message must name SlowDNS: ${e.message}")
-        assertTrue(e.message!!.contains("M3"), "message must point at M3: ${e.message}")
+        assertTrue(e.message!!.contains("VMess/VLESS"), "message must name VMess/VLESS: ${e.message}")
+    }
+
+    @Test
+    fun `prepareStart accepts SlowDNS VMess entry`() {
+        val item = vmess("SlowDNS VMess").apply {
+            dnsttEnabled = true
+            dnsttNS = "ns.example.com"
+            dnsttPubkey = "deadbeef"
+        }
+        val prepared = TaptapVpnService.prepareStart(item)
+        assertTrue(
+            prepared is TaptapVpnService.PreparedStart.Ready,
+            "expected Ready, got $prepared",
+        )
     }
 
     // ---- v1.0.6, fix D: the guard runs on EVERY start attempt ----

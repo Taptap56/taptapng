@@ -1,6 +1,8 @@
 package com.taptap.x.core.proto
 
 import com.taptap.x.core.DialLog
+import com.taptap.x.core.slowdns.SlowDnsSessionPool
+import com.taptap.x.core.slowdns.SlowDnsTransport
 import com.taptap.x.data.ProfileItem
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -20,17 +22,25 @@ import java.util.concurrent.ConcurrentHashMap
  * layer is out of scope for M2.
  * Transport: TCP or WS, optionally under TLS (TCP → TLS → WS).
  */
-class VlessClient(private val item: ProfileItem) : ProxyClient {
+class VlessClient(
+    private val item: ProfileItem,
+    /** Test seam: a pool with a fake DNS transport (default: a real pool). */
+    slowDnsPool: SlowDnsSessionPool? = null,
+) : ProxyClient {
 
     // v1.0.6: see VmessClient — streams stay open independently.
     private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
+
+    // M3: one DNSTT session per client (see VmessClient).
+    private val slowDns = slowDnsPool ?: SlowDnsSessionPool(item)
 
     override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
         val encryption = item.method.ifBlank { "none" }.lowercase()
         require(encryption == "none") {
             "VLESS encryption tidak didukung: $encryption (hanya none)"
         }
-        val transport = Transport.open(item)
+        // M3: socket ladder or DNSTT ladder (see VmessClient).
+        val transport = SlowDnsTransport.open(item, slowDns)
         try {
             val header = VlessCrypto.buildRequestHeader(item.uuid, targetHost, targetPort)
             transport.output.write(header)
@@ -45,11 +55,10 @@ class VlessClient(private val item: ProfileItem) : ProxyClient {
                 DialLog.log("VLESS", "probe body ${probeBody.size}B")
                 Transport.noteStage("VLESS")
                 VlessCrypto.readResponseHeader(transport.input)
-                transport.socket.soTimeout = 0
-                Transport.clearWatchdogSocket()
+                transport.clearHandshakeTimeout()
                 DialLog.log("VLESS", "handshake ok")
                 return TrackedProxyStream(
-                    SocketProxyStream(transport.socket, transport.input, transport.output),
+                    StreamProxyStream(transport.input, transport.output) { transport.close() },
                     openStreams,
                 )
             }
@@ -77,15 +86,14 @@ class VlessClient(private val item: ProfileItem) : ProxyClient {
                     DialLog.failure("VLESS", failure)
                     throw failure
                 }
-                transport.socket.soTimeout = 0
-                Transport.clearWatchdogSocket()
+                transport.clearHandshakeTimeout()
                 DialLog.log("VLESS", "handshake ok")
             }
             val loggedOut = FirstWriteLoggingOutputStream(transport.output) { n ->
                 DialLog.log("VLESS", "body ${n}B untuk $targetHost:$targetPort")
             }
             return TrackedProxyStream(
-                SocketProxyStream(transport.socket, lazyIn, loggedOut),
+                StreamProxyStream(lazyIn, loggedOut) { transport.close() },
                 openStreams,
             )
         } catch (e: Exception) {
@@ -98,6 +106,8 @@ class VlessClient(private val item: ProfileItem) : ProxyClient {
 
     override fun close() {
         openStreams.toList().forEach { runCatching { it.close() } }
+        // M3: tear the DNSTT session down too (see VmessClient).
+        runCatching { slowDns.close() }
     }
 }
 

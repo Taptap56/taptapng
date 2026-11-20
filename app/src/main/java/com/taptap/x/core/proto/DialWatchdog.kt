@@ -1,5 +1,6 @@
 package com.taptap.x.core.proto
 
+import java.io.Closeable
 import java.net.Socket
 import kotlin.concurrent.thread
 
@@ -39,6 +40,15 @@ class DialWatchdog(val timeoutMs: Long = DEFAULT_TIMEOUT_MS) {
     @Volatile
     private var socket: Socket? = null
 
+    /**
+     * M3: a non-socket resource to close if the timer fires (a DNSTT
+     * smux stream / KCP stream). A stuck stream read is unblocked by
+     * closing the stream, the same way a stuck socket read is
+     * unblocked by closing the socket.
+     */
+    @Volatile
+    private var closeable: Closeable? = null
+
     @Volatile
     private var done = false
 
@@ -55,6 +65,7 @@ class DialWatchdog(val timeoutMs: Long = DEFAULT_TIMEOUT_MS) {
             if (!done) {
                 fired = true
                 runCatching { socket?.close() }
+                runCatching { closeable?.close() }
             }
         }
     }
@@ -69,11 +80,22 @@ class DialWatchdog(val timeoutMs: Long = DEFAULT_TIMEOUT_MS) {
         socket = null
     }
 
+    /** The stream/session to close if the timer fires (M3, SlowDNS). */
+    fun armCloseable(c: Closeable?) {
+        closeable = c
+    }
+
+    /** The dial succeeded: the timer must not touch this stream again. */
+    fun clearCloseable() {
+        closeable = null
+    }
+
     /** Disarm the timer (dial finished, one way or the other). */
     fun stop() {
         done = true
         timer?.interrupt()
         socket = null
+        closeable = null
     }
 
     /** Alias for teardown paths (stop + unblock the dial right now). */

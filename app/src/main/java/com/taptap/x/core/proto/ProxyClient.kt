@@ -60,6 +60,45 @@ class SocketProxyStream(
 }
 
 /**
+ * One transport ladder's byte stream (M3): either a socket ladder
+ * (TCP → TLS → WS, [Transport.open]) or a DNSTT ladder (smux stream
+ * → TLS → WS, [com.taptap.x.core.slowdns.SlowDnsTransport.open]).
+ * [clearHandshakeTimeout] mirrors the socket's `soTimeout = 0` once
+ * the protocol handshake has succeeded — for a smux stream it clears
+ * the stream's read deadline instead.
+ */
+class LadderStream(
+    val input: InputStream,
+    val output: OutputStream,
+    private val onClose: () -> Unit,
+    private val onHandshakeDone: () -> Unit,
+) {
+    fun close() = onClose()
+    fun clearHandshakeTimeout() = onHandshakeDone()
+}
+
+/**
+ * A [ProxyStream] over arbitrary (input, output) streams (M3). Same
+ * close order as [SocketProxyStream] (output, input, transport) —
+ * for the socket path this is behaviour-identical to
+ * SocketProxyStream. The protocol clients wrap their body streams
+ * here ([com.taptap.x.core.proto.VmessClient] /
+ * [com.taptap.x.core.proto.VlessClient]) so the same code serves
+ * both the socket ladder and the DNSTT ladder.
+ */
+class StreamProxyStream(
+    override val input: InputStream,
+    override val output: OutputStream,
+    private val onClose: () -> Unit,
+) : ProxyStream {
+    override fun close() {
+        runCatching { output.close() }
+        runCatching { input.close() }
+        runCatching { onClose() }
+    }
+}
+
+/**
  * A [ProxyStream] that removes itself from [registry] when closed
  * (v1.0.6). The owning client registers every stream it returns;
  * [ProxyClient.close] closes whatever is still registered. Without

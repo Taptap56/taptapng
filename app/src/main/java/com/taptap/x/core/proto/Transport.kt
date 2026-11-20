@@ -72,6 +72,16 @@ object Transport {
         threadWatchdog.get()?.clearSocket()
     }
 
+    /** Arm the watchdog with a non-socket resource (M3: a DNSTT stream). */
+    fun armWatchdogCloseable(c: java.io.Closeable?) {
+        threadWatchdog.get()?.armCloseable(c)
+    }
+
+    /** The dial succeeded: the watchdog must not touch this stream again. */
+    fun clearWatchdogCloseable() {
+        threadWatchdog.get()?.clearCloseable()
+    }
+
     /**
      * The watchdog-tagged failure for the current thread's dial, or
      * null when the watchdog did not fire. Callers prefer this over

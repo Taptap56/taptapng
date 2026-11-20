@@ -273,6 +273,49 @@ class VmessCryptoTest {
     }
 
     @Test
+    fun `body streams honour request vs response key direction (M3)`() {
+        val item = com.taptap.x.data.ProfileItem(
+            configType = com.taptap.x.data.ConfigType.VMESS,
+            uuid = uuid,
+            security = "aes-128-gcm",
+        )
+        val session = VmessCrypto.newSession(item, "example.com", 443)
+        val payload = "ping-slowdns".toByteArray(Charsets.UTF_8)
+
+        // Server reading the REQUEST body: writer uses the request
+        // keys (default), reader must be given the request keys too.
+        val reqSink = ByteArrayOutputStream()
+        VmessBodyOutputStream(reqSink, session).apply { write(payload); close() }
+        val reqReader = VmessBodyInputStream(
+            ByteArrayInputStream(reqSink.toByteArray()), session,
+            key = session.bodyKey, iv = session.bodyIV,
+        )
+        assertArrayEquals(payload, reqReader.readBytes())
+
+        // Server writing the RESPONSE body: writer must be given the
+        // response keys; the client reader uses them by default.
+        val respSink = ByteArrayOutputStream()
+        VmessBodyOutputStream(
+            respSink, session,
+            key = session.responseBodyKey, iv = session.responseBodyIV,
+        ).apply { write(payload); close() }
+        val respReader = VmessBodyInputStream(
+            ByteArrayInputStream(respSink.toByteArray()), session,
+        )
+        assertArrayEquals(payload, respReader.readBytes())
+
+        // The old mock-server pairing (request-key writer, default
+        // response-key reader) must NOT round-trip: the unmasked
+        // chunk size is garbage and the read fails.
+        val badSink = ByteArrayOutputStream()
+        VmessBodyOutputStream(badSink, session).apply { write(payload); close() }
+        val badReader = VmessBodyInputStream(
+            ByteArrayInputStream(badSink.toByteArray()), session,
+        )
+        assertThrows(java.io.IOException::class.java) { badReader.readBytes() }
+    }
+
+    @Test
     fun `resolveSecurity maps auto and rejects unknown`() {
         assertEquals(VmessSecurity.AES_128_GCM, VmessCrypto.resolveSecurity("auto"))
         assertEquals(VmessSecurity.AES_128_GCM, VmessCrypto.resolveSecurity("aes-128-gcm"))
