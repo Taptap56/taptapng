@@ -116,7 +116,15 @@ class TunForwarder(
     }
 
     private val sessions = ConcurrentHashMap<Key, TcpSession>()
-    private val writeLock = Any()
+    /**
+     * v1.0.18: the TUN write moved to a single writer thread
+     * (TunWriter) — the old synchronized(writeLock) + blocking
+     * write() per segment stalled every relay thread whenever one
+     * write blocked on a full TUN queue (phone log 2026-11-20:
+     * tun=6046ms of an 8 s Speedtest connection). All writePacket
+     * calls now only enqueue; the writer owns the fd.
+     */
+    private val tunWriter = TunWriter(tunOut)
     private val random = SecureRandom()
     private val running = AtomicBoolean(false)
     private var readerThread: Thread? = null
@@ -205,15 +213,24 @@ class TunForwarder(
     fun start() {
         if (!running.compareAndSet(false, true)) return
         DialLog.log("FORWARDER", "mulai — baca TUN")
+        tunWriter.start()
         readerThread = thread(name = "tun-reader", isDaemon = true) { readLoop() }
     }
 
     fun stop() {
         if (!running.compareAndSet(true, false)) return
         runCatching { tunIn.close() }
-        runCatching { tunOut.close() }
+        // v1.0.18: stop the writer BEFORE closing the fd — it
+        // drains the queue and exits; the join is bounded (2 s), so
+        // a stuck fd cannot hang teardown. Then clear the queue so
+        // a relay blocked in enqueue (queue full + writer gone) can
+        // finish its put() and see the closed session instead of
+        // hanging.
+        tunWriter.stop()
+        tunWriter.clear()
         sessions.values.toList().forEach { closeSession(it) }
         sessions.clear()
+        runCatching { tunOut.close() }
         DialLog.log(
             "FORWARDER",
             "berhenti (paket dibaca: ${packetsRead.get()}, " +
@@ -874,11 +891,13 @@ class TunForwarder(
     }
 
     private fun writePacket(pkt: ByteArray, len: Int = pkt.size) {
-        synchronized(writeLock) {
-            runCatching {
-                tunOut.write(pkt, 0, len)
-                tunOut.flush()
-            }
-        }
+        // v1.0.18: no more synchronized(writeLock) + blocking
+        // write() per segment on the caller thread (phone log:
+        // tun=6046ms of an 8 s Speedtest connection). The single
+        // writer thread (TunWriter) owns the fd; this only enqueues
+        // (copying the bytes — the relay reuses pktBuf) and blocks
+        // in put() when the queue is full (backpressure, no global
+        // lock). The relay's `tun` stage now measures this enqueue.
+        tunWriter.enqueue(pkt, len)
     }
 }

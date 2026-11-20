@@ -37,8 +37,13 @@ import java.util.concurrent.atomic.AtomicLong
  *     the cross-check: rd ≈ tls+net + ws + vmess (+ LazyHeader /
  *     stream plumbing overhead, which is the residual).
  *   build: building the TCP segment (buildTcpInto).
- *   tun: writing the segment to the TUN fd (writePacket, incl.
- *     any block on the fd).
+ *   tun: enqueueing the segment to the TUN writer thread
+ *     (v1.0.18 — was: the fd write itself, incl. any block on the
+ *     fd. The fd write moved to a single writer thread, so a small
+ *     tun means the relay is no longer stuck behind it; the real
+ *     fd-write cost is in the TUNWRITER aggregate line — if the
+ *     writer is still the bottleneck, tulisMs there stays large
+ *     and blokirMs grows).
  *
  * Upload (TUN → proxy, light): upW = writer thread's write+flush
  * wall time (VMess seal + WS frame + TLS wrap + socket write,
@@ -49,7 +54,7 @@ import java.util.concurrent.atomic.AtomicLong
  * thread is shared by all sessions).
  *
  * The relay thread is single-threaded per connection (read →
- * build → write, sequentially), so in a saturated 5 s window the
+ * build → enqueue, sequentially), so in a saturated 5 s window the
  * stage times sum to ≈ 5000 ms — the stage with the biggest number
  * IS the bottleneck. All counters are AtomicLong: the relay thread
  * (download) and the writer thread (upload) accumulate into the
@@ -74,7 +79,9 @@ class SpeedStats {
     /** TCP segment build time (forwarder). */
     val buildNs = AtomicLong(0)
 
-    /** TUN write time (forwarder writePacket). */
+    /** TUN enqueue time (v1.0.18: enqueue to the writer thread;
+     * the fd write itself is on the writer thread — see the
+     * TUNWRITER aggregate line). */
     val tunNs = AtomicLong(0)
 
     /** Forwarder relay total stream.read() wall time (cross-check). */

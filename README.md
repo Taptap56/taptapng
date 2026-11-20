@@ -1,4 +1,4 @@
-# TaptapX v1.0.17
+# TaptapX v1.0.18
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.17 (vc18)
+- **id** `com.taptap.x`, **versi** 1.0.18 (vc19)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,52 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.18 — Thread penulis TUN khusus + antrean
+
+**Perbaikan bottleneck yang TERBUKTI dari log HP.** Log v1.0.17
+(taptapx-0d94e353.txt, Speedtest 15:27, 16,1 Mbps) menunjukkan tiap
+koneksi Speedtest menghabiskan ~6 detik dari 8 detik cuma buat nulis
+ke TUN (`tun=6046ms`, 1622 writes untuk 2,06 MB, ~3,7ms per write)
+— 70-75% waktu relay thread — sementara WS (~20ms), dekrip VMess
+(~100ms), dan bangun segmen (~30ms) negligible. Penyebabnya di
+`TunForwarder.writePacket`: semua thread relay (satu per koneksi
+TCP) antre lewat satu `synchronized(writeLock)`, lalu satu syscall
+`write()` per segmen ~1460B di fd blocking — begitu antrean TUN
+penuh, satu tulis nge-blok SAMBIL pegang kunci, semua koneksi ikut
+ketahan. Pembanding: v2rayNG (xray-core) juga tulis ke TUN satu
+paket per write, tapi lewat SATU goroutine penulis tanpa lock — dan
+mencapai 133 Mbps ke Speedtest yang sama. Jadi batasnya bukan fd
+TUN, tapi antrean kunci + banyak thread penulis.
+
+Perbaikannya (kelas baru `TunWriter`): semua tulis TUN — segmen
+data, SYN-ACK, RST, balasan DNS — lewat satu antrean FIFO bounded
+(1024 paket, backpressure: relay nge-blok di `put()` bila penuh,
+TANPA pegang kunci global) yang dikuras SATU thread penulis.
+Urutan per koneksi terjaga (FIFO + satu penulis). `writeLock`
+dihapus, `flush()` yang no-op (raw `FileOutputStream`) dihapus.
+**Bukan** batching write: TUN fd menerima TEPAT SATU paket IP per
+`write()` — gabung paket akan merusak paket. Jujur soal batasnya:
+ini memperbaiki bentuk antrean, bukan fd-nya — angka di HP yang
+menentukan.
+
+Instrumentasi tetap bisa membuktikan: `tun` per koneksi kini
+mengukur waktu ENQUEUE (harusnya mikrodetik — bukti relay tidak
+lagi ketahan), plus baris agregat `TUNWRITER` tiap 5 detik saat
+transfer aktif (`tulis=` paket ditulis, `antriMax=` kedalaman
+antrean maks, `tulisMs=` total waktu di `write()`, `blokirMs=`
+total waktu relay nge-blok di `put()`). Bila tulis fd masih
+bottleneck, `tulisMs` tetap besar; bila penulis tidak sanggup
+mengimbangi relay, `blokirMs` membesar. Tidak ada perubahan lain:
+protokol, relay, MSS/chunk, UI tetap seperti v1.0.17.
+
+**Tes HP** — konek entry biasa (VMess yang sama), jalankan SATU
+Speedtest sampai SELESAI, BARU export Log + kirim file log +
+screenshot hasil. Yang menentukan: angka download (bandingkan
+langsung dengan 16,1 Mbps di v1.0.17), baris `SPEED` koneksi
+Speedtest (`tun` harusnya kecil), dan baris `TUNWRITER`
+(menunjukkan biaya tulis sebenarnya). Bila angka tidak naik,
+log-nya tetap yang bicara — bukan tebakan.
 
 ## v1.0.17 — Buffer log 500 → 5000 baris
 
