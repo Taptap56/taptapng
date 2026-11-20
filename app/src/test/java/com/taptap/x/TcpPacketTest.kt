@@ -250,14 +250,12 @@ class TcpPacketTest {
     fun `parseTcpSegment matches parseIp plus parseTcp`() {
         // v1.0.15: the single-copy hot path must agree with the
         // old two-copy path on every field, including a realistic
-        // SYN with options (data offset 0xA0 — the v1.0.10
+        // SYN with options (data offset 0xB0 — the v1.0.10
         // signed-byte case) and a data segment.
         val synOptions = byteArrayOf(
-            2, 4, 0x05, 0xB4, // MSS 1460
+            1, 1, 4, 2, // SACK-permitted
             1, 3, 3, 7, // window scale 7
-            1, 1, 4, 2, // SACK permitted
-            1, 8, 10, 0, 0, 0, 1, 0, 0, 0, 2, // timestamps
-            1, 1, 1, // NOP padding
+            1, 1, 8, 10, 0, 0, 0, 1, 0, 0, 0, 2, // timestamps
         )
         val syn = TcpPacket.buildTcp(
             clientIp, serverIp, 12345, 443, 1000L, 0L,
