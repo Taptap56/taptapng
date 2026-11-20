@@ -50,6 +50,11 @@ android {
     testOptions {
         unitTests.all {
             it.useJUnitPlatform()
+            // v1.0.15: show test stdout in the CI log, so the
+            // throughput tests' printed MB/s (grep THROUGHPUT) is
+            // readable from `gh run view --log` — Gradle otherwise
+            // captures println into the XML reports only.
+            it.testLogging { showStandardStreams = true }
         }
     }
 }
