@@ -98,6 +98,17 @@ class VpnConnection {
      * Forwarder callback: "Connected" on the first successful app
      * dial, "Konek gagal (<reason>)" on a dial failure. The status
      * always carries the RUNNING entry's label.
+     *
+     * v1.0.13, fix C: a dial failure while RUNNING must NOT
+     * overwrite the status. The forwarder reports EVERY failed app
+     * dial (first failure at once, then once per 10 s); once the
+     * VPN is up, one background app hitting a closed window wrote
+     * "Konek gagal (WS gagal: ...)" over the good "Connected: ..."
+     * status while the VPN icon was up and video played (phone
+     * screenshot 2026-11-20 08:57:42). Failures belong in DialLog
+     * once connected. While STARTING (no dial has succeeded yet)
+     * the failure still shows, so a dead start is never silent
+     * (v1.0.4).
      */
     @Synchronized
     fun reportDialStatus(msg: String) {
@@ -105,7 +116,7 @@ class VpnConnection {
         if (msg == "Connected") {
             state = State.RUNNING
             if (entry != null) status = "Connected: $entry"
-        } else {
+        } else if (state != State.RUNNING) {
             status = if (entry != null) "$msg: $entry" else msg
         }
     }

@@ -351,6 +351,7 @@ class TaptapVpnService : VpnService() {
                 dnsServer = dns,
                 protectUdp = { socket -> protect(socket) },
                 onStatus = { msg -> connection.reportDialStatus(msg) },
+                tunMtu = mtu,
             )
             forwarder = fwd
             fwd.start()

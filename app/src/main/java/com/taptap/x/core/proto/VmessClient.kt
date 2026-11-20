@@ -479,6 +479,16 @@ class VmessBodyOutputStream(
     private val pending = mutableListOf<Byte>()
     private var closed = false
     private val firstChunkLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+    /**
+     * v1.0.13, fix A3: the first non-empty chunk was emitted by the
+     * caller through flush() — the flush was load-bearing and
+     * invisible. If a future change batches writes, the first chunk
+     * sits in `pending`, the server never flushes its response
+     * header, and the v1.0.12 deadlock returns silently. The first
+     * chunk now goes out on write() itself (XVEON's Ly8 has no
+     * buffer at all: every write() is one sealed chunk).
+     */
+    private val firstChunkEmitted = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun write(b: Int) = write(byteArrayOf(b.toByte()))
 
@@ -492,6 +502,11 @@ class VmessBodyOutputStream(
             pos += take
             remaining -= take
             if (pending.size >= VmessCrypto.MAX_CHUNK_PLAINTEXT) flushChunk()
+        }
+        // First non-empty chunk: emit NOW, unbuffered — never wait
+        // for a flush() the caller might forget.
+        if (len > 0 && firstChunkEmitted.compareAndSet(false, true)) {
+            flushChunk()
         }
     }
 

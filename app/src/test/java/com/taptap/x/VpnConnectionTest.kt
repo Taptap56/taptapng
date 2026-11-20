@@ -73,6 +73,25 @@ class VpnConnectionTest {
     }
 
     @Test
+    fun `dial failure while running must not overwrite the Connected status`() {
+        // v1.0.13, fix C: phone screenshot 2026-11-20 08:57:42 —
+        // the status read "Konek gagal (WS gagal: Read timed out)"
+        // while the VPN icon was up and video played. One failed
+        // app dial overwrote the good status. Fails on v1.0.12
+        // code (status becomes "Konek gagal ...").
+        val conn = VpnConnection()
+        conn.requestStart(entryA)
+        conn.reportConnected(entryA)
+        assertEquals("Connected: $entryA", conn.status)
+        conn.reportDialStatus("Konek gagal (WS gagal: Read timed out)")
+        assertEquals("Connected: $entryA", conn.status)
+        assertEquals(VpnConnection.State.RUNNING, conn.state)
+        // A later success keeps it.
+        conn.reportDialStatus("Connected")
+        assertEquals("Connected: $entryA", conn.status)
+    }
+
+    @Test
     fun `dial label disambiguates entries that share a remark`() {
         val zoomOnering = ProfileItem(
             remarks = "Zoom onering",

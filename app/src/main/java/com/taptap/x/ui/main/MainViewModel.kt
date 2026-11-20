@@ -11,11 +11,16 @@ import com.taptap.x.core.SshClient
 import com.taptap.x.data.ConfigType
 import com.taptap.x.data.ProfileItem
 import com.taptap.x.data.ProfileStore
+import com.taptap.x.data.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * Main screen state. Durable state lives here and is exposed as
@@ -63,6 +68,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val _delayStages = MutableStateFlow<Map<String, String>>(emptyMap())
     val delayStages: StateFlow<Map<String, String>> = _delayStages.asStateFlow()
+
+    /**
+     * guid -> delay kind ("real" or "tcp") for the row label
+     * (v1.0.13, fix B): a real ping shows "48ms", a TCP fallback
+     * shows "48ms (TCP)" — see [formatDelayLabel].
+     */
+    private val _delayKinds = MutableStateFlow<Map<String, String>>(emptyMap())
+    val delayKinds: StateFlow<Map<String, String>> = _delayKinds.asStateFlow()
+
+    /** Settings (delayTestUrl, realPingConcurrency) — lazy so the
+     * ViewModel stays constructible without touching disk. */
+    private val settings by lazy { SettingsStore(getApplication()) }
 
     init {
         store.load()
@@ -209,26 +226,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (items.isEmpty()) return
         _statusText.value = "Testing…"
         viewModelScope.launch(Dispatchers.IO) {
-            val results = LinkedHashMap<String, Long>()
-            for (item in items) {
-                val r = if (realPing) {
-                    // v1.0.5: the (host, port) overload falls back to a
-                    // TCP connect on the entry's own port — the
-                    // host-only isReachable never answers on a
-                    // non-root phone (ICMP needs raw sockets).
-                    ServerTester.testRealPingDetailed(item.address, item.port)
-                } else {
-                    ServerTester.testTcpDetailed(item.address, item.port)
+            if (realPing) {
+                // v1.0.13, fix B: real ping = full round-trip
+                // through the proxy (HTTP GET to delayTestUrl).
+                // Run with the user's realPingConcurrency
+                // (default 16, clamp 1..32); SSH entries cannot
+                // ride a proxy, so they fall back to TCP. A proxy
+                // dial that FAILS is a real failure — its stage
+                // is shown, never hidden behind a TCP number
+                // (the TCP fallback applies only when the real
+                // ping cannot run at all).
+                val concurrency =
+                    settings.realPingConcurrency.toIntOrNull()?.coerceIn(1, 32) ?: 16
+                val semaphore = Semaphore(concurrency)
+                val results = java.util.concurrent.ConcurrentHashMap<String, Long>()
+                val stages = java.util.concurrent.ConcurrentHashMap<String, String>()
+                val kinds = java.util.concurrent.ConcurrentHashMap<String, String>()
+                val jobs = items.map { item ->
+                    async {
+                        semaphore.withPermit {
+                            if (item.configType == ConfigType.SSH) {
+                                val r = ServerTester.testTcpDetailed(item.address, item.port)
+                                results[item.guid] = r.ms
+                                kinds[item.guid] = DELAY_KIND_TCP
+                                if (r.failureStage != null) stages[item.guid] = r.failureStage
+                            } else {
+                                val r = ServerTester.testRealPingThroughProxy(
+                                    item, settings.delayTestUrl,
+                                )
+                                if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
+                                    val t = ServerTester.testTcpDetailed(item.address, item.port)
+                                    results[item.guid] = t.ms
+                                    kinds[item.guid] = DELAY_KIND_TCP
+                                    if (t.failureStage != null) stages[item.guid] = t.failureStage
+                                } else {
+                                    results[item.guid] = r.ms
+                                    kinds[item.guid] = DELAY_KIND_REAL
+                                    if (r.failureStage != null) stages[item.guid] = r.failureStage
+                                }
+                            }
+                        }
+                    }
                 }
-                results[item.guid] = r.ms
-                _delays.value = _delays.value + (item.guid to r.ms)
-                _delayStages.value = if (r.failureStage != null) {
-                    _delayStages.value + (item.guid to r.failureStage)
-                } else {
-                    _delayStages.value - item.guid
+                jobs.awaitAll()
+                val okGuids = results.filterValues { it >= 0 }.keys
+                _delays.value = _delays.value + results
+                _delayStages.value = (_delayStages.value + stages) - okGuids
+                _delayKinds.value = _delayKinds.value + kinds
+            } else {
+                for (item in items) {
+                    val r = ServerTester.testTcpDetailed(item.address, item.port)
+                    applyDelayResult(item, r.ms, r.failureStage, DELAY_KIND_TCP)
                 }
             }
-            _statusText.value = "Tested ${results.size} server(s)"
+            _statusText.value = "Tested ${items.size} server(s)"
+        }
+    }
+
+    /** Apply one delay-test result to the row flows. */
+    private fun applyDelayResult(item: ProfileItem, ms: Long, stage: String?, kind: String) {
+        _delays.value = _delays.value + (item.guid to ms)
+        _delayKinds.value = _delayKinds.value + (item.guid to kind)
+        _delayStages.value = if (stage != null) {
+            _delayStages.value + (item.guid to stage)
+        } else {
+            _delayStages.value - item.guid
         }
     }
 
@@ -261,19 +323,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 val ms = (System.nanoTime() - start) / 1_000_000
-                _delays.value = _delays.value + (item.guid to if (outcome.isSuccess) ms else -1)
-                _delayStages.value = if (outcome.isSuccess) {
-                    _delayStages.value - item.guid
-                } else {
-                    _delayStages.value + (item.guid to "SSH gagal")
-                }
+                // An SSH command round-trip is a real round-trip,
+                // not a TCP connect (v1.0.13, fix B).
+                applyDelayResult(
+                    item, if (outcome.isSuccess) ms else -1,
+                    if (outcome.isSuccess) null else "SSH gagal", DELAY_KIND_REAL,
+                )
             } else {
-                val r = ServerTester.testTcpDetailed(item.address, item.port)
-                _delays.value = _delays.value + (item.guid to r.ms)
-                _delayStages.value = if (r.failureStage != null) {
-                    _delayStages.value + (item.guid to r.failureStage)
+                // v1.0.13, fix B: the selected server is tested
+                // with the real ping (full round-trip through the
+                // proxy); the TCP connect is only a fallback when
+                // the real ping cannot run at all.
+                val r = ServerTester.testRealPingThroughProxy(item, settings.delayTestUrl)
+                if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
+                    val t = ServerTester.testTcpDetailed(item.address, item.port)
+                    applyDelayResult(item, t.ms, t.failureStage, DELAY_KIND_TCP)
                 } else {
-                    _delayStages.value - item.guid
+                    applyDelayResult(item, r.ms, r.failureStage, DELAY_KIND_REAL)
                 }
             }
         }

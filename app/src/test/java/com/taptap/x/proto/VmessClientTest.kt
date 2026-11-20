@@ -118,6 +118,34 @@ class VmessClientTest {
     }
 
     @Test
+    fun `first body chunk reaches the raw stream without flush`() {
+        // v1.0.13, fix A3: the first write() must emit immediately
+        // — the server only flushes its response header once the
+        // first body chunk arrives, so a first chunk that waits in
+        // `pending` for a flush() the caller forgets is the v1.0.12
+        // deadlock again. Fails on v1.0.12 code (raw stays empty
+        // until flush()).
+        val session = VmessSession(
+            requestBytes = ByteArray(0),
+            bodyKey = Crypto.randomBytes(16),
+            bodyIV = Crypto.randomBytes(16),
+            responseBodyKey = Crypto.randomBytes(16),
+            responseBodyIV = Crypto.randomBytes(16),
+            responseV = 0,
+            security = VmessSecurity.AES_128_GCM,
+        )
+        val raw = java.io.ByteArrayOutputStream()
+        val out = VmessBodyOutputStream(raw, session)
+        out.write("hello".toByteArray())
+        assertTrue(raw.size() > 0, "first chunk must be on the wire without flush(), got ${raw.size()} bytes")
+        val afterFirst = raw.size()
+        out.write("world".toByteArray())
+        assertEquals(afterFirst, raw.size(), "second chunk may stay buffered until flush()")
+        out.flush()
+        assertTrue(raw.size() > afterFirst, "flush() must emit the buffered chunk")
+    }
+
+    @Test
     fun `second dial does not close the first stream`() {
         // v1.0.6: every client's dial() used to start with close(),
         // killing the previous stream — two apps connecting at once

@@ -1,8 +1,16 @@
 package com.taptap.x.core
 
+import com.taptap.x.core.proto.DialWatchdog
+import com.taptap.x.core.proto.ProxyClient
+import com.taptap.x.core.proto.ProxyClientFactory
+import com.taptap.x.core.proto.Transport
+import com.taptap.x.data.ConfigType
+import com.taptap.x.data.ProfileItem
+import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import kotlin.concurrent.thread
 
 /**
  * Delay tests for the server list (v2rayNG's "Test TCP delays" /
@@ -21,17 +29,36 @@ object ServerTester {
      */
     data class TestResult(val ms: Long, val failureStage: String?)
 
+    /** Stage tags Transport / protocol clients put in failure
+     * messages ("VMess gagal: ...") — kept verbatim by [stageOf]. */
+    private val STAGE_TAGS = listOf(
+        "DNS gagal", "TCP gagal", "TLS gagal", "WS gagal",
+        "VMess gagal", "VLESS gagal", "Trojan gagal", "SS gagal",
+    )
+
     /**
      * Map a test failure to its stage. DNS failures carry our own
      * "DNS gagal" tag from DnsResolver; a refused protect is its
      * own stage (the socket never left the phone).
+     *
+     * v1.0.13: a stage tag already in the message ("VMess gagal",
+     * "WS gagal", ...) is kept verbatim — the real ping dials
+     * through the proxy, so a "VMess gagal" must reach the row
+     * label instead of collapsing to "TCP timeout". The TCP test
+     * never produces these tags, so its stages are unchanged.
      */
-    fun stageOf(e: Exception): String = when (e) {
-        is java.net.SocketTimeoutException -> "TCP timeout"
-        is java.net.ConnectException -> "TCP gagal"
-        is java.io.IOException ->
-            if (e.message?.startsWith("DNS gagal") == true) "DNS gagal" else "TCP gagal"
-        else -> "TCP gagal"
+    fun stageOf(e: Exception): String {
+        val msg = e.message
+        if (msg != null) {
+            STAGE_TAGS.firstOrNull { msg.startsWith(it) }?.let { return it }
+        }
+        return when (e) {
+            is java.net.SocketTimeoutException -> "TCP timeout"
+            is java.net.ConnectException -> "TCP gagal"
+            is java.io.IOException ->
+                if (e.message?.startsWith("DNS gagal") == true) "DNS gagal" else "TCP gagal"
+            else -> "TCP gagal"
+        }
     }
 
     /**
@@ -188,5 +215,154 @@ object ServerTester {
         } catch (e: Exception) {
             TestResult(-1, stageOf(e))
         }
+    }
+
+    // ---- Real ping through the proxy (v1.0.13, fix B) ----
+
+    /**
+     * Default delay-test URL for the real ping: the v2rayNG
+     * default, as plain HTTP. The proxy stream is a raw byte
+     * stream, so the ping is a plain HTTP GET (no TLS over the
+     * stream); the generate_204 endpoint answers over HTTP, and
+     * any HTTP response (204 / 200 / 301) proves the round-trip.
+     */
+    const val DEFAULT_REAL_PING_URL = "http://www.gstatic.com/generate_204"
+
+    /**
+     * Failure stage meaning "the real ping cannot run for this
+     * entry" (SSH — no proxy client — or an unparseable URL).
+     * Callers fall back to the TCP test ONLY on this stage; a
+     * proxy dial that FAILS is a real failure and is reported
+     * with its stage, never hidden behind a TCP number.
+     */
+    const val CANNOT_RUN_STAGE = "tidak bisa ping"
+
+    /** Parsed delay-test URL: host, port, path. The scheme is
+     * ignored for transport — the ping is always a plain HTTP GET
+     * (see [DEFAULT_REAL_PING_URL]) — only host / port / path are
+     * used. Null when the URL has no usable host. */
+    fun parseDelayUrl(url: String): Triple<String, Int, String>? {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return null
+        val lower = trimmed.lowercase()
+        val stripped = when {
+            lower.startsWith("https://") -> trimmed.substring(8)
+            lower.startsWith("http://") -> trimmed.substring(7)
+            else -> trimmed
+        }
+        if (stripped.isEmpty()) return null
+        val slash = stripped.indexOf('/')
+        val hostPort = if (slash >= 0) stripped.substring(0, slash) else stripped
+        val path = if (slash >= 0) stripped.substring(slash) else "/"
+        val colon = hostPort.lastIndexOf(':')
+        val host = if (colon >= 0) hostPort.substring(0, colon) else hostPort
+        val port = if (colon >= 0) {
+            hostPort.substring(colon + 1).toIntOrNull() ?: return null
+        } else {
+            80
+        }
+        if (host.isBlank() || port !in 1..65535 || !path.startsWith("/")) return null
+        return Triple(host, port, path)
+    }
+
+    /**
+     * Real ping (v1.0.13, fix B): the FULL round-trip through the
+     * proxy — dial the entry (VMess/VLESS/Trojan/SS via
+     * [ProxyClientFactory]), send an HTTP GET to the delay-test
+     * URL as the body, and time until the HTTP response header
+     * arrives. This is v2rayNG's "Test real delays". The old
+     * [testRealPingDetailed] only measured a TCP connect to the
+     * entry (ICMP never answers on a non-root phone), so the
+     * number on the row was a TCP ping, not a real ping (user
+     * report 2026-11-20 08:58:59). The HTTP GET is the body, so
+     * it unblocks the server's response-header flush (v1.0.12
+     * lazy header) exactly like the probe body does.
+     *
+     * [clientFactory] is injectable so tests can run against a
+     * fake proxy instead of a real server.
+     */
+    fun testRealPingThroughProxy(
+        item: ProfileItem,
+        delayTestUrl: String,
+        timeoutMs: Int = 10_000,
+        clientFactory: (ProfileItem) -> ProxyClient = ProxyClientFactory::create,
+    ): TestResult {
+        if (item.configType == ConfigType.SSH) return TestResult(-1, CANNOT_RUN_STAGE)
+        val target = parseDelayUrl(delayTestUrl.ifBlank { DEFAULT_REAL_PING_URL })
+            ?: return TestResult(-1, CANNOT_RUN_STAGE)
+        val (host, port, path) = target
+        val start = System.nanoTime()
+        // Bound the whole dial (DNS + TCP + TLS + WS + protocol)
+        // with a watchdog, like the forwarder does — without it a
+        // stuck stage could hang past every socket timeout.
+        val watchdog = DialWatchdog(timeoutMs.toLong())
+        Transport.setThreadWatchdog(watchdog)
+        try {
+            watchdog.start()
+            val client = clientFactory(item)
+            try {
+                val stream = client.dial(host, port)
+                try {
+                    val req =
+                        "GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n"
+                    stream.output.write(req.toByteArray(Charsets.UTF_8))
+                    stream.output.flush()
+                    // Bound the response read: the lazy header
+                    // clears the socket timeout to 0 (blocking)
+                    // once it arrives, so a target that never
+                    // answers would hang forever without this. A
+                    // timer thread closes the stream at the
+                    // deadline; the read then fails as a timeout.
+                    val closer = thread(name = "real-ping-timeout", isDaemon = true) {
+                        try {
+                            Thread.sleep(timeoutMs.toLong())
+                            runCatching { stream.close() }
+                        } catch (_: InterruptedException) {
+                            // Read finished in time; nothing to close.
+                        }
+                    }
+                    try {
+                        val header = readHttpResponseHeader(stream.input)
+                        if (!header.startsWith("HTTP/")) {
+                            return TestResult(-1, "ping gagal")
+                        }
+                        return TestResult((System.nanoTime() - start) / 1_000_000, null)
+                    } finally {
+                        closer.interrupt()
+                    }
+                } finally {
+                    runCatching { stream.close() }
+                }
+            } finally {
+                runCatching { client.close() }
+            }
+        } catch (e: Exception) {
+            val failure = Transport.preferWatchdogFailure(e)
+            return TestResult(-1, stageOf(failure))
+        } finally {
+            watchdog.stop()
+            Transport.setThreadWatchdog(null)
+        }
+    }
+
+    /** Read until the HTTP response header is complete (\r\n\r\n),
+     * EOF, or 8 KiB. Returns the header text (may be empty). */
+    private fun readHttpResponseHeader(input: java.io.InputStream): String {
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(1024)
+        while (out.size() < 8192) {
+            val n = try {
+                input.read(buf)
+            } catch (_: Exception) {
+                break
+            }
+            if (n == -1) break
+            if (n > 0) {
+                out.write(buf, 0, n)
+                val text = out.toString(Charsets.UTF_8.name())
+                if (text.contains("\r\n\r\n")) return text
+            }
+        }
+        return out.toString(Charsets.UTF_8.name())
     }
 }

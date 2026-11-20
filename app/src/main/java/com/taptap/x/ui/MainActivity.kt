@@ -238,6 +238,9 @@ class MainActivity : AppCompatActivity() {
                     viewModel.delayStages.collect { adapter.delayStages = it }
                 }
                 launch {
+                    viewModel.delayKinds.collect { adapter.delayKinds = it }
+                }
+                launch {
                     viewModel.isRunning.collect { running ->
                         fab.setImageResource(
                             if (running) R.drawable.ic_stop_24dp else R.drawable.ic_play_24dp

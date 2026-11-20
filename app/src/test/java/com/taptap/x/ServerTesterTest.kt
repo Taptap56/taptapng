@@ -2,10 +2,19 @@ package com.taptap.x
 
 import com.taptap.x.core.ServerTester
 import com.taptap.x.core.TunnelState
+import com.taptap.x.core.proto.ProxyClient
+import com.taptap.x.core.proto.ProxyStream
+import com.taptap.x.data.ConfigType
+import com.taptap.x.data.ProfileItem
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.net.ServerSocket
 
 class ServerTesterTest {
 
@@ -276,5 +285,114 @@ class ServerTesterTest {
     @Test
     fun `real ping overload fails for unresolvable host`() {
         assertEquals(-1, ServerTester.testRealPing("tidak-ada.invalid", 443, timeoutMs = 500))
+    }
+
+    // ---- v1.0.13, fix B: real ping through the proxy ----
+
+    /** Fake proxy: records dials + written bytes, answers the HTTP
+     * GET with a 204 (like generate_204). */
+    private class HttpEchoProxy(
+        private val response: String =
+            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n",
+    ) : ProxyClient {
+        val dialed = java.util.Collections.synchronizedList(mutableListOf<Pair<String, Int>>())
+        val written = ByteArrayOutputStream()
+        override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream {
+            dialed.add(targetHost to targetPort)
+            val input = ByteArrayInputStream(response.toByteArray(Charsets.UTF_8))
+            return object : ProxyStream {
+                override val input: InputStream = input
+                override val output: OutputStream = written
+                override fun close() = Unit
+            }
+        }
+
+        override fun close() = Unit
+    }
+
+    private fun vmessItem() = ProfileItem(
+        remarks = "T",
+        configType = ConfigType.VMESS,
+        address = "1.2.3.4",
+        port = 443,
+        uuid = "00000000-0000-0000-0000-000000000000",
+    )
+
+    @Test
+    fun `real ping through proxy measures the round trip, not the TCP connect`() {
+        // v1.0.13, fix B: the old testRealPingDetailed only measured
+        // a TCP connect to the entry (ICMP never answers on a
+        // non-root phone) — the user reported the number "kayanya
+        // ping tcp bukan ping asli". The real ping dials THROUGH
+        // the proxy and GETs the delay-test URL. Fails on v1.0.12
+        // code (no such function — the row showed a TCP time).
+        val proxy = HttpEchoProxy()
+        val r = ServerTester.testRealPingThroughProxy(
+            vmessItem(), "http://www.gstatic.com/generate_204",
+            clientFactory = { proxy },
+        )
+        assertTrue(r.ms >= 0, "expected >= 0 ms, got ${r.ms} stage=${r.failureStage}")
+        assertEquals(null, r.failureStage)
+        assertEquals(listOf("www.gstatic.com" to 80), proxy.dialed)
+        val sent = proxy.written.toString(Charsets.UTF_8.name())
+        assertTrue(sent.startsWith("GET /generate_204 HTTP/1.1"), "expected an HTTP GET, got: $sent")
+        assertTrue(sent.contains("Host: www.gstatic.com"), "GET must carry the Host header: $sent")
+    }
+
+    @Test
+    fun `real ping through proxy reports the proxy stage when the dial fails`() {
+        // A proxy dial that fails (bad UUID / closed window) must
+        // show its stage — never a TCP number. Fails on v1.0.12
+        // code (the row showed a TCP connect time for a dead entry).
+        val failing = object : ProxyClient {
+            override fun dial(targetHost: String, targetPort: Int, probeBody: ByteArray?): ProxyStream =
+                throw SocketTimeoutException("VMess gagal: Read timed out")
+
+            override fun close() = Unit
+        }
+        val r = ServerTester.testRealPingThroughProxy(
+            vmessItem(), "http://www.gstatic.com/generate_204",
+            clientFactory = { failing },
+        )
+        assertEquals(-1, r.ms)
+        assertEquals("VMess gagal", r.failureStage)
+    }
+
+    @Test
+    fun `real ping through proxy cannot run for SSH entries`() {
+        // SSH has no proxy client — the caller falls back to TCP
+        // only on this stage (see CANNOT_RUN_STAGE).
+        val ssh = ProfileItem(
+            remarks = "S",
+            configType = ConfigType.SSH,
+            address = "1.2.3.4",
+            port = 22,
+            username = "u",
+        )
+        val r = ServerTester.testRealPingThroughProxy(
+            ssh, "http://www.gstatic.com/generate_204",
+        )
+        assertEquals(-1, r.ms)
+        assertEquals(ServerTester.CANNOT_RUN_STAGE, r.failureStage)
+    }
+
+    @Test
+    fun `parseDelayUrl splits host port path`() {
+        assertEquals(
+            Triple("www.gstatic.com", 80, "/generate_204"),
+            ServerTester.parseDelayUrl("http://www.gstatic.com/generate_204"),
+        )
+        assertEquals(
+            Triple("www.gstatic.com", 80, "/generate_204"),
+            ServerTester.parseDelayUrl("https://www.gstatic.com/generate_204"),
+        )
+        assertEquals(
+            Triple("example.com", 8080, "/x"),
+            ServerTester.parseDelayUrl("http://example.com:8080/x"),
+        )
+        assertEquals(Triple("example.com", 80, "/"), ServerTester.parseDelayUrl("example.com"))
+        assertEquals(null, ServerTester.parseDelayUrl(""))
+        assertEquals(null, ServerTester.parseDelayUrl("http://"))
+        assertEquals(null, ServerTester.parseDelayUrl("http://example.com:abc/x"))
     }
 }

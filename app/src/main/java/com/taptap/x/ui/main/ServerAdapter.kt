@@ -54,6 +54,13 @@ class ServerAdapter(
             notifyDataSetChanged()
         }
 
+    /** guid -> delay kind ("real" or "tcp", v1.0.13, fix B). */
+    var delayKinds: Map<String, String> = emptyMap()
+        set(value) {
+            field = value
+            notifyDataSetChanged()
+        }
+
     var gridMode: Boolean = false
         set(value) {
             field = value
@@ -102,7 +109,10 @@ class ServerAdapter(
             holder.delay.text = delayStages[item.guid]?.takeIf { it.isNotBlank() } ?: "Timeout"
             holder.delay.setTextColor(ContextCompat.getColor(context, R.color.colorPingRed))
         } else {
-            holder.delay.text = "${delayMs}ms"
+            // v1.0.13, fix B: the label says which ping it is — a
+            // real ping shows "48ms", a TCP fallback "48ms (TCP)",
+            // so a TCP number is never mistaken for a real ping.
+            holder.delay.text = formatDelayLabel(delayMs, delayKinds[item.guid])
             holder.delay.setTextColor(ContextCompat.getColor(context, R.color.colorPing))
         }
 
@@ -121,3 +131,17 @@ class ServerAdapter(
         holder.btnDelete.setOnClickListener { callbacks.onDelete(item) }
     }
 }
+
+/** Delay kind: full round-trip through the proxy (v1.0.13, fix B). */
+const val DELAY_KIND_REAL = "real"
+
+/** Delay kind: plain TCP connect fallback (only when the real ping
+ * cannot run at all). */
+const val DELAY_KIND_TCP = "tcp"
+
+/**
+ * Row delay label (v1.0.13, fix B): a real ping shows "48ms"; a
+ * TCP fallback shows "48ms (TCP)". Pure, so it is unit testable.
+ */
+fun formatDelayLabel(ms: Long, kind: String?): String =
+    if (kind == DELAY_KIND_TCP) "${ms}ms (TCP)" else "${ms}ms"

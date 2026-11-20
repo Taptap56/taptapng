@@ -51,6 +51,9 @@ class TunForwarder(
     private val onStatus: (String) -> Unit,
     /** DNS reply wait; shortened by tests so a dead relay fails fast. */
     private val dnsTimeoutMs: Int = 5000,
+    /** MTU from Settings (v2rayNG default 1500) — the SYN-ACK MSS
+     * is derived from it (v1.0.13, fix A6). */
+    private val tunMtu: Int = 1500,
 ) {
 
     private enum class State { DIALING, SYN_SENT, ESTABLISHED, CLOSED }
@@ -63,6 +66,27 @@ class TunForwarder(
         @Volatile var serverSeq: Long = isn // next byte we will send
         @Volatile var stream: ProxyStream? = null
         val closed = AtomicBoolean(false)
+        /**
+         * App data waiting to be written to the proxy (v1.0.13,
+         * fix A1): XVEON queues payloads per connection (g7.IO)
+         * and drains them on a dedicated writer thread (Ll4); the
+         * old code wrote synchronously on the single TUN reader
+         * thread, so one slow write stalled packet processing for
+         * every connection, and data arriving while DIALING was
+         * dropped. Bounded at 48 chunks (XVEON), drop-oldest.
+         */
+        val outQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CHUNKS)
+        /**
+         * Out-of-order segments, keyed by seq (v1.0.13, fix A2):
+         * XVEON buffers up to 32 and replays them when the gap
+         * fills; the old code dropped them and relied on a
+         * retransmit, which slowed the first page load.
+         */
+        val outOfOrder = java.util.TreeMap<Long, ByteArray>()
+        /** Last packet/dial activity, for session eviction (A4). */
+        @Volatile var lastActivityMs: Long = System.currentTimeMillis()
+        /** The writer thread was started (single-shot). */
+        val writerStarted = AtomicBoolean(false)
         /**
          * What the app's SYN offered (v1.0.10): the peer MSS caps
          * our segments, and SACK / window-scale offers are echoed
@@ -93,6 +117,29 @@ class TunForwarder(
     private val dnsFailures = java.util.concurrent.atomic.AtomicLong(0)
 
     companion object {
+        /** Max concurrent TCP sessions (v1.0.13, fix A4): XVEON caps
+         * at 96 and evicts the oldest by last activity — the old
+         * map was unbounded, so a SYN flood grew it forever. */
+        const val MAX_SESSIONS = 96
+
+        /** Max queued app-data chunks per connection (XVEON: 48). */
+        const val MAX_QUEUE_CHUNKS = 48
+
+        /** Max buffered out-of-order segments per connection (XVEON: 32). */
+        const val MAX_OUT_OF_ORDER = 32
+
+        /** Max chunks the writer drains per flush (XVEON's Ll4: 8). */
+        const val MAX_WRITER_DRAIN = 8
+
+        /**
+         * SYN-ACK MSS from the MTU (v1.0.13, fix A6): XVEON offers
+         * clamp(tunMtu - 140, 1140, 1360), capped at the peer's
+         * MSS — the old code echoed the peer MSS capped at 1460
+         * and ignored the user's MTU setting entirely.
+         */
+        fun synAckMss(tunMtu: Int, peerMss: Int): Int =
+            minOf(peerMss, (tunMtu - 140).coerceIn(1140, 1360))
+
         /**
          * Short human-readable reason for a dial failure, for the
          * status bar. Timeouts (the closed-window case) get a plain
@@ -116,6 +163,9 @@ class TunForwarder(
             else -> e.message?.take(40)?.ifBlank { null } ?: "gagal"
         }
     }
+
+    /** Sessions currently tracked (tests). */
+    fun sessionCount(): Int = sessions.size
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -235,6 +285,13 @@ class TunForwarder(
         }
         if (session == null) {
             if (tcp.flags and TcpPacket.FLAG_SYN != 0) {
+                // v1.0.13, fix A4: cap TCP sessions at 96 (XVEON)
+                // — evict the oldest by last activity so a SYN
+                // flood cannot grow the map without bound.
+                if (sessions.size >= MAX_SESSIONS) {
+                    sessions.values.minByOrNull { it.lastActivityMs }
+                        ?.let { closeSession(it) }
+                }
                 val isn = (random.nextInt().toLong() and 0xFFFFFFFFL)
                 val s = TcpSession(key, isn)
                 s.clientSeq = (tcp.seq + 1) and 0xFFFFFFFFL
@@ -255,8 +312,16 @@ class TunForwarder(
             // Pure ACKs for unknown sessions are dropped silently.
             return
         }
+        session.lastActivityMs = System.currentTimeMillis()
         when (session.state) {
-            State.DIALING -> Unit // Dial in flight; SYNs/data are ignored.
+            State.DIALING -> {
+                // v1.0.13, fix A1: data that arrives while the proxy
+                // dial is in flight is QUEUED, not dropped — the
+                // writer drains it once the stream is set. (In
+                // practice the app only sends after the SYN-ACK, so
+                // this is a race guard, not the hot path.)
+                if (tcp.payload.isNotEmpty()) handleData(session, tcp)
+            }
             State.SYN_SENT -> {
                 if (tcp.flags and TcpPacket.FLAG_SYN != 0) {
                     // SYN retransmit: resend SYN-ACK with the same ISN.
@@ -274,32 +339,42 @@ class TunForwarder(
     }
 
     private fun handleData(session: TcpSession, tcp: TcpPacket.TcpSegment) {
-        val stream = session.stream ?: return
         val payload = tcp.payload
         var ackNeeded = false
         if (payload.isNotEmpty()) {
             when {
                 tcp.seq == session.clientSeq -> {
-                    runCatching { stream.output.write(payload) }
-                        .onFailure { sendFin(session); return }
-                    runCatching { stream.output.flush() }
+                    // v1.0.13, fix A1: enqueue for the writer
+                    // thread — never write to the proxy stream on
+                    // the TUN reader thread. A slow write on one
+                    // connection used to stall packet processing
+                    // for every connection (sluggish start).
+                    enqueueData(session, payload)
                     session.clientSeq = (session.clientSeq + payload.size) and 0xFFFFFFFFL
                     ackNeeded = true
+                    replayOutOfOrder(session)
                 }
                 tcp.seq < session.clientSeq &&
                     tcp.seq + payload.size > session.clientSeq -> {
                     // Retransmit with a new tail: forward only the new bytes.
                     val skip = (session.clientSeq - tcp.seq).toInt()
                     val tail = payload.copyOfRange(skip, payload.size)
-                    runCatching { stream.output.write(tail) }
-                        .onFailure { sendFin(session); return }
-                    runCatching { stream.output.flush() }
+                    enqueueData(session, tail)
                     session.clientSeq = (session.clientSeq + tail.size) and 0xFFFFFFFFL
                     ackNeeded = true
+                    replayOutOfOrder(session)
                 }
                 tcp.seq > session.clientSeq -> {
-                    // Out of order: drop and ACK what we have, so the
-                    // app retransmits.
+                    // v1.0.13, fix A2: out of order — BUFFER it
+                    // (seq-keyed, max 32, drop oldest) instead of
+                    // dropping and waiting for a retransmit.
+                    // XVEON replays the buffered segments when the
+                    // gap fills; dropping forced a retransmit and
+                    // slowed the first page load.
+                    if (session.outOfOrder.size >= MAX_OUT_OF_ORDER) {
+                        session.outOfOrder.pollFirstEntry()
+                    }
+                    session.outOfOrder[tcp.seq] = payload
                     ackNeeded = true
                 }
                 else -> {
@@ -310,6 +385,12 @@ class TunForwarder(
         }
         if (tcp.flags and TcpPacket.FLAG_FIN != 0) {
             session.clientSeq = (session.clientSeq + 1) and 0xFFFFFFFFL
+            if (session.state == State.DIALING) {
+                // App aborted before the handshake: drop the
+                // session silently (no SYN-ACK was ever sent).
+                closeSession(session)
+                return
+            }
             // ACK the FIN, then close our side. In-flight server data
             // that the relay thread has not written yet may be lost —
             // acceptable for M2 (FIN normally follows a complete reply).
@@ -318,6 +399,70 @@ class TunForwarder(
             return
         }
         if (ackNeeded) sendAck(session)
+    }
+
+    /** Offer one app-data chunk to the session's writer queue
+     * (drop-oldest when full) and make sure the writer runs. */
+    private fun enqueueData(session: TcpSession, data: ByteArray) {
+        while (!session.outQueue.offer(data)) {
+            session.outQueue.poll()
+        }
+        session.lastActivityMs = System.currentTimeMillis()
+        startWriter(session)
+    }
+
+    /** Replay buffered out-of-order segments that now follow in
+     * order, in seq order, until the next gap. */
+    private fun replayOutOfOrder(session: TcpSession) {
+        while (true) {
+            val next = session.outOfOrder.remove(session.clientSeq) ?: return
+            enqueueData(session, next)
+            session.clientSeq = (session.clientSeq + next.size) and 0xFFFFFFFFL
+        }
+    }
+
+    /** Start the session's writer thread (single-shot), once the
+     * proxy stream is set. Data queued while DIALING waits here
+     * until then. */
+    private fun startWriter(session: TcpSession) {
+        if (session.stream == null) return
+        if (!session.writerStarted.compareAndSet(false, true)) return
+        thread(name = "tun-writer-${session.key.dstPort}", isDaemon = true) {
+            writerLoop(session)
+        }
+    }
+
+    /**
+     * Writer thread (v1.0.13, fix A1 — XVEON's Ll4): drains the
+     * session's queue, up to 8 chunks per flush, so a slow write
+     * on this connection never stalls the TUN reader or any other
+     * connection. Stops when the session closes.
+     */
+    private fun writerLoop(session: TcpSession) {
+        val stream = session.stream ?: return
+        try {
+            while (!session.closed.get()) {
+                val first = try {
+                    session.outQueue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    return
+                } ?: continue
+                val batch = ArrayList<ByteArray>(MAX_WRITER_DRAIN)
+                batch.add(first)
+                while (batch.size < MAX_WRITER_DRAIN) {
+                    val next = session.outQueue.poll() ?: break
+                    batch.add(next)
+                }
+                for (chunk in batch) {
+                    stream.output.write(chunk)
+                }
+                stream.output.flush()
+                session.lastActivityMs = System.currentTimeMillis()
+            }
+        } catch (_: Exception) {
+            // Write failed: close our side (the app gets a FIN).
+            if (!session.closed.get()) sendFin(session)
+        }
     }
 
     private fun dial(session: TcpSession) {
@@ -367,6 +512,9 @@ class TunForwarder(
         session.stream = stream
         session.state = State.SYN_SENT
         sendSynAck(session)
+        // v1.0.13, fix A1: start the writer now, so data queued
+        // while DIALING drains at once.
+        startWriter(session)
         DialLog.log("DIAL", "$dst ok")
         if (!firstDialReported) {
             firstDialReported = true
@@ -415,8 +563,10 @@ class TunForwarder(
         // v1.0.10: echo what the SYN offered, like xray-core's tun
         // stack (sendSyn) — SACK-permitted and window scale (shift
         // 5, window 256 KiB >> 5) only when the peer offered them;
-        // otherwise the plain MSS-only SYN-ACK as before. The MSS
-        // we offer is capped at the peer's MSS.
+        // otherwise the plain MSS-only SYN-ACK as before.
+        // v1.0.13, fix A6: the MSS we offer comes from the MTU
+        // setting — clamp(tunMtu - 140, 1140, 1360), capped at the
+        // peer's MSS (XVEON) — instead of the peer MSS alone.
         val extra = ByteArrayOutputStream()
         if (session.sackOffered) extra.write(byteArrayOf(1, 1, 4, 2))
         if (session.wsOffered) {
@@ -428,7 +578,7 @@ class TunForwarder(
             session.isn, session.clientSeq,
             TcpPacket.FLAG_SYN or TcpPacket.FLAG_ACK,
             ByteArray(0),
-            mss = session.peerMss,
+            mss = synAckMss(tunMtu, session.peerMss),
             options = extra.toByteArray(),
             window = window,
         )
