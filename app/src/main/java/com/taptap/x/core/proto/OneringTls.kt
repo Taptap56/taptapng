@@ -161,16 +161,23 @@ internal class OneringTlsClient(
         return tmf.trustManagers.filterIsInstance<X509TrustManager>().first()
     }
 
-    override fun getSNIServerNames(): java.util.Vector<*> {
+    override fun getSNIServerNames(): java.util.Vector<*>? {
         // SNI = real domain only (an IP literal gets no SNI, like TlsUtil).
-        if (sni.isBlank() || AddrCodec.isIpLiteral(sni)) return java.util.Vector<ServerName>()
+        // null (bukan Vector kosong) = jangan kirim ekstensi SNI sama
+        // sekali — kontrak BC: null = omit, kosong = ekstensi malformed.
+        if (sni.isBlank() || AddrCodec.isIpLiteral(sni)) return null
         val names = java.util.Vector<ServerName>()
         names.add(ServerName(NameType.host_name, sni.toByteArray(Charsets.US_ASCII)))
         return names
     }
 
-    override fun getProtocolNames(): java.util.Vector<*> {
-        if (alpn.isBlank()) return java.util.Vector<ProtocolName>()
+    override fun getProtocolNames(): java.util.Vector<*>? {
+        // null (bukan Vector kosong) saat alpn kosong: BC melempar
+        // TlsFatalAlert internal_error bila getProtocolNames()
+        // mengembalikan Vector kosong (createALPNExtensionClient
+        // menolak list kosong) — itu yang menggagalkan CI 44722503904
+        // dan 44723693626 (0 byte ClientHello sempat terkirim).
+        if (alpn.isBlank()) return null
         val names = java.util.Vector<ProtocolName>()
         alpn.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach {
             names.add(ProtocolName.asUtf8Encoding(it))
