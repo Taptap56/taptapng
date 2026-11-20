@@ -42,14 +42,24 @@ sama sekali. Patch byte ClientHello sesudah SSLEngine membuatnya
 juga BUKAN jalan: transcript hash TLS dihitung dari ClientHello
 asli, sementara server melihat yang sudah diubah, jadi Finished
 gagal di TLS 1.2 maupun 1.3. Bouncy Castle (`bctls` 1.86, kripto
-tetap JCA platform — tanpa bcprov) membangun ClientHello sendiri
-dari `getClientExtensions()`, jadi 0xff00 masuk transcript sejak
-awal dan handshake konsisten. Urutan dipaksa lewat `Hashtable`
-subclass (`OrderedExtensions`, `keys()` enumerasi 0xff00 dulu) —
-BC menulis ekstensi dengan iterasi `keys()`, dan
-`ensureExtensionsInitialised` tidak menyalin tabelnya. Isi data
-0xff00 byte-identik dengan fork TC (`oneringBugExtensionData`:
-server_name_list berisi bug). Ukuran APK tetap dijaga R8.
+native BC `BcTlsCrypto` — BUKAN JCA platform: jalur JCA gagal
+verifikasi RSA-PSS CertificateVerify TLS 1.3 karena nama algoritma
+`SHA256WITHRSAANDMGF1` tidak dikenal JCA platform; bcprov ikut
+transitif via bcutil) membangun ClientHello sendiri dari
+`getClientExtensions()`, jadi 0xff00 masuk transcript sejak awal
+dan handshake konsisten. Urutan dipaksa lewat `Hashtable` subclass
+(`OrderedExtensions`, `keys()` enumerasi 0xff00 dulu) — BC menulis
+ekstensi dengan iterasi `keys()`, dan `ensureExtensionsInitialised`
+tidak menyalin tabelnya. **TLS 1.3 saja:** BC menulis ekstensi
+KOSONG dulu, dan bila TLS 1.2 ikut ditawarkan ia menambahkan
+`encrypt_then_mac` + `extended_master_secret` (keduanya kosong)
+yang selalu mendahului 0xff00 di wire — jadi entry Onering hanya
+menawarkan TLS 1.3 (server TLS 1.2-only tidak bisa lewat entry
+Onering; semua proxy modern bisa 1.3). Isi data 0xff00
+byte-identik dengan fork TC (`oneringBugExtensionData`:
+server_name_list berisi bug). Ukuran APK naik ~433 KB gara-gara
+BC (2.583.200 B vs 2.150.279 B di v1.0.22) — masih jauh di bawah
+batas, tanpa core.
 
 **Tes HP.** Entry Onering (contoh: Zoom onering, atau entry
 leaseweb4 dengan bug `live.iflix.com` / `io.ruangguru.com`):
