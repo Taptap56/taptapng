@@ -19,6 +19,7 @@ import org.bouncycastle.tls.CertificateRequest
 import org.bouncycastle.tls.DefaultTlsClient
 import org.bouncycastle.tls.NameType
 import org.bouncycastle.tls.ProtocolName
+import org.bouncycastle.tls.ProtocolVersion
 import org.bouncycastle.tls.ServerName
 import org.bouncycastle.tls.TlsAuthentication
 import org.bouncycastle.tls.TlsClientProtocol
@@ -160,6 +161,26 @@ internal class OneringTlsClient(
         tmf.init(null as KeyStore?)
         return tmf.trustManagers.filterIsInstance<X509TrustManager>().first()
     }
+
+    /**
+     * TLS 1.3 ONLY — bukan preferensi, tapi syarat agar 0xff00 jadi
+     * ekstensi PERTAMA di ClientHello: BC menulis ekstensi KOSONG
+     * dulu (writeSelectedExtensions: empty dulu, baru non-empty).
+     * Bila TLS 1.2 ikut ditawarkan, BC menambahkan dua ekstensi
+     * kosong — encrypt_then_mac (0x0016) dan extended_master_secret
+     * (0x0017) — yang selalu mendahului 0xff00 di wire (terbukti di
+     * repro JVM: 0x0016, 0x0017, 0xff00, ...; itulah yang menggagalkan
+     * CI 44724669772 di assert extensions[0]). TLS 1.3 saja mematikan
+     * keduanya di sumber (offeringPreTLSv13=false; EMS bukan optional
+     * untuk 1.3) sehingga 0xff00 — pertama di keys() OrderedExtensions
+     * — jadi benar-benar pertama di wire. Tradeoff yang disadari:
+     * server yang HANYA bisa TLS 1.2 tidak bisa dipakai lewat entry
+     * Onering (pakai entry non-Onering/SSLSocket untuk itu); semua
+     * server proxy modern (xray/sing-box/mihomo/Cloudflare) bisa
+     * TLS 1.3.
+     */
+    override fun getSupportedVersions(): Array<ProtocolVersion> =
+        arrayOf(ProtocolVersion.TLSv13)
 
     override fun getSNIServerNames(): java.util.Vector<*>? {
         // SNI = real domain only (an IP literal gets no SNI, like TlsUtil).
