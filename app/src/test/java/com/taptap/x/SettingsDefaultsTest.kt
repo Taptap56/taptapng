@@ -102,7 +102,10 @@ class SettingsDefaultsTest {
     @Test
     fun `display defaults match v2rayNG AppConfig`() {
         assertEquals("1.1.1.1", SettingsStore.DISPLAY_VPN_DNS)
-        assertEquals("1500", SettingsStore.DISPLAY_VPN_MTU)
+        // v1.0.21: MTU display default is 9000, not v2rayNG's 1500 —
+        // the effective MTU default changed with it (the forwarder
+        // builds 8960-byte segments on a 9000 MTU).
+        assertEquals("9000", SettingsStore.DISPLAY_VPN_MTU)
         assertEquals("10.10.14.x", SettingsStore.DISPLAY_VPN_INTERFACE_ADDRESS)
         assertEquals("300,60", SettingsStore.DISPLAY_HEV_TUN_RW_TIMEOUT)
         assertEquals("10808", SettingsStore.DISPLAY_SOCKS_PORT)

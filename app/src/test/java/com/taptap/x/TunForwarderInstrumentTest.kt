@@ -218,6 +218,11 @@ override fun dial(
         // SYN offers MSS 1460 + SACK-permitted + window scale 7.
         h.feed(syn(options = byteArrayOf(1, 1, 4, 2, 1, 3, 3, 7)))
         assertTrue(waitFor(what = "Connected") { h.statuses.contains("Connected") })
+        // v1.0.21: wait for the SYN-ACK to reach the drainer BEFORE
+        // stopping — the writer thread is async, and stop() closes
+        // the pipe while the drainer may not have consumed the
+        // bytes yet (flaky `bytes.size >= 32` on a loaded runner).
+        assertTrue(waitFor(what = "SYN-ACK drained") { h.drainedBytes().isNotEmpty() })
         h.stop()
         val bytes = h.drainedBytes()
         assertTrue(bytes.size >= 32)
@@ -247,6 +252,9 @@ override fun dial(
         h.fwd.start()
         h.feed(syn())
         assertTrue(waitFor(what = "Connected") { h.statuses.contains("Connected") })
+        // v1.0.21: same drain race as the WS/SACK test above — wait
+        // for the SYN-ACK to reach the drainer before stopping.
+        assertTrue(waitFor(what = "SYN-ACK drained") { h.drainedBytes().isNotEmpty() })
         h.stop()
         val bytes = h.drainedBytes()
         assertTrue(bytes.size >= 24)
