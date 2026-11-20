@@ -310,13 +310,21 @@ class TaptapVpnService : VpnService() {
         // (phone log 08:05:09.528–529, "baca TUN selesai (n=0)").
         // Set it blocking so read() waits for the first packet;
         // the reader then only exits on stop() or a real read
-        // error. v2rayNG never hits this: it hands the fd to the
+        // error. (Os has no setBlocking — that lives in hidden
+        // libcore.io.IoUtils; fcntlInt is the public API.)
+        // v2rayNG never hits this: it hands the fd to the
         // native core, and xray-core's Android TUN sets the fd
         // non-blocking and waits in the Go poller
         // (tun_android.go: SetNonblock + fdTun.ReadParts) — a
         // naive Java read loop must have a blocking fd instead.
         try {
-            android.system.Os.setBlocking(fd.fileDescriptor, true)
+            val flags = android.system.Os.fcntlInt(
+                fd.fileDescriptor, android.system.OsConstants.F_GETFL, 0,
+            )
+            android.system.Os.fcntlInt(
+                fd.fileDescriptor, android.system.OsConstants.F_SETFL,
+                flags and android.system.OsConstants.O_NONBLOCK.inv(),
+            )
         } catch (e: Exception) {
             // If this ever fails, the reader still survives: a 0
             // read is retried, not treated as end-of-stream
