@@ -34,6 +34,7 @@ object ServerTester {
     private val STAGE_TAGS = listOf(
         "DNS gagal", "TCP gagal", "TLS gagal", "WS gagal",
         "VMess gagal", "VLESS gagal", "Trojan gagal", "SS gagal",
+        "SSH gagal",
     )
 
     /**
@@ -287,7 +288,6 @@ object ServerTester {
         timeoutMs: Int = 10_000,
         clientFactory: (ProfileItem) -> ProxyClient = ProxyClientFactory::create,
     ): TestResult {
-        if (item.configType == ConfigType.SSH) return TestResult(-1, CANNOT_RUN_STAGE)
         val target = parseDelayUrl(delayTestUrl.ifBlank { DEFAULT_REAL_PING_URL })
             ?: return TestResult(-1, CANNOT_RUN_STAGE)
         val (host, port, path) = target

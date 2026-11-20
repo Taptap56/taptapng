@@ -5,7 +5,8 @@ import com.taptap.x.data.ProfileItem
 
 /**
  * Factory for the M2 in-app protocol clients (VMess/VLESS/Trojan/
- * Shadowsocks). SSH is NOT built here — it lives in [com.taptap.x.core.SshClient].
+ * Shadowsocks). v1.0.30: SSH is built here too — [SshProxyClient]
+ * (one shared JSch session, one direct-tcpip channel per dial).
  *
  * Rules:
  * - network must be tcp or ws (blank = tcp). Anything else throws.
@@ -36,9 +37,7 @@ object ProxyClientFactory {
                 SsCrypto.resolveCipher(item.method)
                 SsClient(item)
             }
-            ConfigType.SSH -> throw IllegalArgumentException(
-                "SSH tidak ditangani ProxyClientFactory (pakai SshClient)",
-            )
+            ConfigType.SSH -> SshProxyClient(item)
         }
     }
 }

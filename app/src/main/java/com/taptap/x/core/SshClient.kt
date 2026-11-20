@@ -27,7 +27,15 @@ object SshClient {
         val exitStatus: Int,
     )
 
-    /** Build a connected, authenticated session. Caller must [disconnect]. */
+    /** Build a connected, authenticated session. Caller must [disconnect].
+     *
+     * [socketFactory] (v1.0.30): when set, JSch builds its socket
+     * through it — the SSH payload chain ([SshChainSocketFactory])
+     * runs on the raw socket before the SSH handshake. Null = a
+     * plain direct socket (the old exec / delay-test path).
+     * [keepAliveMs] (v1.0.30): server-alive interval for a
+     * long-lived tunnel session; 0 = off (short-lived uses).
+     */
     fun connect(
         host: String,
         port: Int,
@@ -35,6 +43,8 @@ object SshClient {
         password: String = "",
         privateKey: String = "",
         connectTimeoutMs: Int = AppConfig.SSH_CONNECT_TIMEOUT_MS,
+        socketFactory: com.jcraft.jsch.SocketFactory? = null,
+        keepAliveMs: Int = 0,
     ): Session {
         val jsch = JSch()
         if (privateKey.isNotBlank()) {
@@ -53,6 +63,13 @@ object SshClient {
             "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384," +
                 "ecdsa-sha2-nistp521,rsa-sha2-256,rsa-sha2-512,ssh-rsa"
         )
+        if (socketFactory != null) {
+            session.setSocketFactory(socketFactory)
+        }
+        if (keepAliveMs > 0) {
+            session.setServerAliveInterval(keepAliveMs)
+            session.setServerAliveCountMax(3)
+        }
         session.connect(connectTimeoutMs)
         return session
     }

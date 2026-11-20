@@ -7,8 +7,6 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.taptap.x.core.LinkParser
 import com.taptap.x.core.ServerTester
-import com.taptap.x.core.SshClient
-import com.taptap.x.data.ConfigType
 import com.taptap.x.data.ProfileItem
 import com.taptap.x.data.ProfileStore
 import com.taptap.x.data.SettingsStore
@@ -241,12 +239,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // v1.0.13, fix B: real ping = full round-trip
                 // through the proxy (HTTP GET to delayTestUrl).
                 // Run with the user's realPingConcurrency
-                // (default 16, clamp 1..32); SSH entries cannot
-                // ride a proxy, so they fall back to TCP. A proxy
-                // dial that FAILS is a real failure — its stage
-                // is shown, never hidden behind a TCP number
-                // (the TCP fallback applies only when the real
-                // ping cannot run at all).
+                // (default 16, clamp 1..32). v1.0.30: SSH entries
+                // ride the proxy now (SshProxyClient), so they take
+                // the same real-ping path — no TCP-only branch
+                // anymore. A proxy dial that FAILS is a real failure
+                // — its stage is shown, never hidden behind a TCP
+                // number (the TCP fallback applies only when the
+                // real ping cannot run at all).
                 val concurrency =
                     settings.realPingConcurrency.toIntOrNull()?.coerceIn(1, 32) ?: 16
                 val semaphore = Semaphore(concurrency)
@@ -256,25 +255,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val jobs = items.map { item ->
                     async {
                         semaphore.withPermit {
-                            if (item.configType == ConfigType.SSH) {
-                                val r = ServerTester.testTcpDetailed(item.address, item.port)
-                                results[item.guid] = r.ms
+                            val r = ServerTester.testRealPingThroughProxy(
+                                item, settings.delayTestUrl,
+                            )
+                            if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
+                                val t = ServerTester.testTcpDetailed(item.address, item.port)
+                                results[item.guid] = t.ms
                                 kinds[item.guid] = DELAY_KIND_TCP
-                                if (r.failureStage != null) stages[item.guid] = r.failureStage
+                                if (t.failureStage != null) stages[item.guid] = t.failureStage
                             } else {
-                                val r = ServerTester.testRealPingThroughProxy(
-                                    item, settings.delayTestUrl,
-                                )
-                                if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
-                                    val t = ServerTester.testTcpDetailed(item.address, item.port)
-                                    results[item.guid] = t.ms
-                                    kinds[item.guid] = DELAY_KIND_TCP
-                                    if (t.failureStage != null) stages[item.guid] = t.failureStage
-                                } else {
-                                    results[item.guid] = r.ms
-                                    kinds[item.guid] = DELAY_KIND_REAL
-                                    if (r.failureStage != null) stages[item.guid] = r.failureStage
-                                }
+                                results[item.guid] = r.ms
+                                kinds[item.guid] = DELAY_KIND_REAL
+                                if (r.failureStage != null) stages[item.guid] = r.failureStage
                             }
                         }
                     }
@@ -321,37 +313,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
-            if (item.configType == ConfigType.SSH) {
-                val start = System.nanoTime()
-                val outcome = runCatching {
-                    SshClient.runCommand(
-                        host = item.address,
-                        port = item.port,
-                        username = item.username,
-                        password = item.password,
-                        privateKey = item.privateKey,
-                        command = "echo ok",
-                    )
-                }
-                val ms = (System.nanoTime() - start) / 1_000_000
-                // An SSH command round-trip is a real round-trip,
-                // not a TCP connect (v1.0.13, fix B).
-                applyDelayResult(
-                    item, if (outcome.isSuccess) ms else -1,
-                    if (outcome.isSuccess) null else "SSH gagal", DELAY_KIND_REAL,
-                )
+            // v1.0.13, fix B + v1.0.30: the selected server is tested
+            // with the real ping (full round-trip through the proxy);
+            // SSH entries take the same path now (SshProxyClient) —
+            // the old SSH exec round-trip would fail on a payload
+            // entry (it dialled direct, without the payload chain).
+            // The TCP connect is only a fallback when the real ping
+            // cannot run at all.
+            val r = ServerTester.testRealPingThroughProxy(item, settings.delayTestUrl)
+            if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
+                val t = ServerTester.testTcpDetailed(item.address, item.port)
+                applyDelayResult(item, t.ms, t.failureStage, DELAY_KIND_TCP)
             } else {
-                // v1.0.13, fix B: the selected server is tested
-                // with the real ping (full round-trip through the
-                // proxy); the TCP connect is only a fallback when
-                // the real ping cannot run at all.
-                val r = ServerTester.testRealPingThroughProxy(item, settings.delayTestUrl)
-                if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
-                    val t = ServerTester.testTcpDetailed(item.address, item.port)
-                    applyDelayResult(item, t.ms, t.failureStage, DELAY_KIND_TCP)
-                } else {
-                    applyDelayResult(item, r.ms, r.failureStage, DELAY_KIND_REAL)
-                }
+                applyDelayResult(item, r.ms, r.failureStage, DELAY_KIND_REAL)
             }
         }
     }

@@ -1,5 +1,6 @@
 package com.taptap.x.core.proto
 
+import com.taptap.x.core.DialLog
 import com.taptap.x.data.ProfileItem
 import java.net.Socket
 import java.security.SecureRandom
@@ -39,7 +40,7 @@ object TlsUtil {
         }
     }
 
-    fun wrap(plain: Socket, item: ProfileItem): SSLSocket {
+    fun wrap(plain: Socket, item: ProfileItem, enabledProtocols: Array<String>? = null): SSLSocket {
         val factory: SSLSocketFactory = if (item.insecure) {
             trustAllContext.socketFactory
         } else {
@@ -62,6 +63,18 @@ object TlsUtil {
             }
         }
         tls.sslParameters = params
+        if (enabledProtocols != null) {
+            // v1.0.30: SSH TLS version forcing (sshSniVersion).
+            // An unsupported name must never kill the dial — fall
+            // back to negotiation and say so in the log.
+            runCatching { tls.enabledProtocols = enabledProtocols }
+                .onFailure {
+                    DialLog.log(
+                        "TLS",
+                        "versi TLS ${enabledProtocols.joinToString(",")} tidak didukung — lanjut negosiasi",
+                    )
+                }
+        }
         tls.soTimeout = Transport.HANDSHAKE_TIMEOUT_MS
         tls.startHandshake()
         return tls

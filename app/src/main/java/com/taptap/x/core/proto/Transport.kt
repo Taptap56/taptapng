@@ -159,7 +159,16 @@ object Transport {
      * stays a timeout and [SSLException] stays a TLS failure, so
      * `TunForwarder.dialFailureReason` keeps mapping them the same way.
      */
-    fun open(item: ProfileItem, stats: SpeedStats? = null): OpenStream {
+    fun open(
+        item: ProfileItem,
+        stats: SpeedStats? = null,
+        /**
+         * v1.0.30: TLS protocol names to offer (SSH `sshSniVersion`
+         * forcing). Null = negotiate (the default for every other
+         * protocol).
+         */
+        tlsProtocols: Array<String>? = null,
+    ): OpenStream {
         require(item.address.isNotBlank()) { "Address proxy kosong" }
         require(item.port in 1..65535) { "Port proxy di luar 1..65535: ${item.port}" }
         val wd = threadWatchdog.get()
@@ -269,7 +278,7 @@ object Transport {
                         input = tlsIn
                         output = tlsOut
                     } else {
-                        socket = TlsUtil.wrap(plain, item)
+                        socket = TlsUtil.wrap(plain, item, tlsProtocols)
                         // Re-arm the watchdog on the TLS socket: closing the
                         // plain socket would not unblock the TLS read.
                         wd?.arm(socket)

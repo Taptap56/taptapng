@@ -34,11 +34,12 @@ import kotlin.concurrent.thread
  * and feed it.
  *
  * M2: the selected profile is loaded from [ProfileStore]; a
- * [ProxyClient] (VMess/VLESS/Trojan/SS) is created for it, and a
+ * [ProxyClient] (VMess/VLESS/Trojan/SS/SSH) is created for it, and a
  * [TunForwarder] relays TCP between the TUN interface and the proxy.
- * SSH profiles cannot ride the tunnel yet (no SOCKS forwarding in
- * SshClient) — starting with an SSH profile selected fails with a
- * clear status instead of blackholing traffic.
+ * v1.0.30: SSH profiles ride the tunnel too ([SshProxyClient] — one
+ * shared JSch session, one direct-tcpip channel per dial, payload
+ * chain before the SSH handshake); SSH+SlowDNS and SSH+Onering are
+ * still rejected (see [requireStartable]).
  *
  * v1.0.6: the start flow is probe-first — the entry is dialled
  * (full protocol handshake) BEFORE the TUN comes up, so a dead
@@ -85,14 +86,12 @@ class TaptapVpnService : VpnService() {
          * domain (the 0xff00 extension is built in-app via Bouncy
          * Castle); Onering without TLS/WS/bug, for SS/SSH, or
          * combined with SlowDNS is still rejected with a clear
-         * message.
+         * message. v1.0.30: SSH entries ARE startable (the
+         * SshProxyClient + payload chain) — the old blanket SSH
+         * rejection is gone; SSH+SlowDNS and SSH+Onering are still
+         * rejected by the checks below.
          */
         fun requireStartable(item: ProfileItem) {
-            if (item.configType == ConfigType.SSH) {
-                throw IllegalStateException(
-                    "Entry SSH belum bisa lewat TUN di v1.0.2 — pilih entry VMess/VLESS/Trojan/SS",
-                )
-            }
             if (item.oneringEnabled) {
                 if (item.dnsttEnabled) {
                     throw IllegalStateException(

@@ -234,6 +234,7 @@ class TunForwarder(
          */
         private val STAGE_TAGS = listOf(
             "DNS gagal", "TCP gagal", "TLS gagal", "WS gagal", "VMess gagal",
+            "VLESS gagal", "Trojan gagal", "SS gagal", "SSH gagal",
         )
 
         fun dialFailureReason(e: Exception): String = when (e) {

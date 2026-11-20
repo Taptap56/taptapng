@@ -17,9 +17,13 @@ import org.junit.jupiter.api.Test
  * honest explanation.
  *
  * v1.0.4: starting with an Onering or SlowDNS entry fails fast with
- * a clear status (like SSH already did), telling the user to pick a
- * plain VMess entry instead. The guard lives in
+ * a clear status, telling the user to pick a plain VMess entry
+ * instead. The guard lives in
  * TaptapVpnService.requireStartable so it is testable on the JVM.
+ *
+ * v1.0.30: SSH entries ARE startable now (SshProxyClient + payload
+ * chain) — the old blanket SSH rejection is gone. SSH+SlowDNS and
+ * SSH+Onering are still rejected by the checks below.
  *
  * v1.0.23 (M4): a well-formed Onering entry (VMess/VLESS/Trojan +
  * TLS + WS + bug domain) IS startable now — the 0xff00 engine is
@@ -44,12 +48,52 @@ class VpnStartGuardTest {
     }
 
     @Test
-    fun `SSH entry is rejected with a clear message`() {
-        val item = ProfileItem(configType = ConfigType.SSH, address = "example.com", port = 22)
+    fun `SSH entry is startable in v1_0_30`() {
+        // v1.0.30: SSH rides the tunnel (SshProxyClient + payload
+        // chain) — the old blanket rejection is gone. Fails on
+        // v1.0.29 code (requireStartable threw for every SSH entry).
+        val item = ProfileItem(configType = ConfigType.SSH, address = "vip.sshvpn.web.id", port = 80, username = "user")
+        assertDoesNotThrow { TaptapVpnService.requireStartable(item) }
+    }
+
+    @Test
+    fun `SSH entry with TLS and SNI is startable`() {
+        // v1.0.30: SSH+TLS/SNI is supported (the chain dials TLS
+        // with SNI = sshSni, or the SSH host when blank).
+        val item = ProfileItem(
+            configType = ConfigType.SSH, address = "vip.sshvpn.web.id", port = 443, username = "user",
+            sshUseTls = true, sshSni = "example.com",
+        )
+        assertDoesNotThrow { TaptapVpnService.requireStartable(item) }
+    }
+
+    @Test
+    fun `SSH SlowDNS entry is still rejected`() {
+        // The DNSTT ladder is only plugged into the VMess/VLESS
+        // clients — SSH over SlowDNS has no path.
+        val item = ProfileItem(
+            configType = ConfigType.SSH, address = "vip.sshvpn.web.id", port = 80, username = "user",
+            dnsttEnabled = true, dnsttNS = "dnsv.sshvpn.web.id", dnsttPubkey = "deadbeef",
+        )
         val e = assertThrows(IllegalStateException::class.java) {
             TaptapVpnService.requireStartable(item)
         }
-        assertTrue(e.message!!.contains("SSH"), "message must name SSH: ${e.message}")
+        assertTrue(e.message!!.contains("SlowDNS"), "msg: ${e.message}")
+        assertTrue(e.message!!.contains("VMess/VLESS"), "msg: ${e.message}")
+    }
+
+    @Test
+    fun `SSH Onering entry is still rejected`() {
+        // Onering is only built for VMess/VLESS/Trojan.
+        val item = ProfileItem(
+            configType = ConfigType.SSH, address = "vip.sshvpn.web.id", port = 443, username = "user",
+            tls = true, network = "ws", oneringEnabled = true, oneringBug = "support.zoom.us",
+        )
+        val e = assertThrows(IllegalStateException::class.java) {
+            TaptapVpnService.requireStartable(item)
+        }
+        assertTrue(e.message!!.contains("Onering"), "msg: ${e.message}")
+        assertTrue(e.message!!.contains("VMess/VLESS/Trojan"), "msg: ${e.message}")
     }
 
     @Test
@@ -235,12 +279,14 @@ class VpnStartGuardTest {
     }
 
     @Test
-    fun `prepareStart rejects SSH entry`() {
+    fun `prepareStart accepts SSH entry`() {
+        // v1.0.30: creating the SSH client is lazy (no session is
+        // opened until the first dial), so prepareStart returns
+        // Ready without touching the network. Fails on v1.0.29
+        // code (requireStartable rejected every SSH entry).
         val item = ProfileItem(configType = ConfigType.SSH, address = "example.com", port = 22)
         val prepared = TaptapVpnService.prepareStart(item)
-        assertTrue(prepared is TaptapVpnService.PreparedStart.Rejected)
-        val msg = (prepared as TaptapVpnService.PreparedStart.Rejected).message
-        assertTrue(msg.contains("SSH"), "message must name SSH: $msg")
+        assertTrue(prepared is TaptapVpnService.PreparedStart.Ready, "got: $prepared")
     }
 
     @Test

@@ -370,9 +370,11 @@ override fun dial(
     }
 
     @Test
-    fun `real ping through proxy cannot run for SSH entries`() {
-        // SSH has no proxy client — the caller falls back to TCP
-        // only on this stage (see CANNOT_RUN_STAGE).
+    fun `real ping through proxy runs for SSH entries`() {
+        // v1.0.30: SSH rides the proxy now (SshProxyClient), so the
+        // delay test is a real ping through the tunnel — the old
+        // CANNOT_RUN + TCP fallback is gone. Fails on v1.0.29 code
+        // (testRealPingThroughProxy returned CANNOT_RUN for SSH).
         val ssh = ProfileItem(
             remarks = "S",
             configType = ConfigType.SSH,
@@ -380,11 +382,16 @@ override fun dial(
             port = 22,
             username = "u",
         )
+        val proxy = HttpEchoProxy()
         val r = ServerTester.testRealPingThroughProxy(
             ssh, "http://www.gstatic.com/generate_204",
+            clientFactory = { proxy },
         )
-        assertEquals(-1, r.ms)
-        assertEquals(ServerTester.CANNOT_RUN_STAGE, r.failureStage)
+        assertTrue(r.ms >= 0, "expected >= 0 ms, got ${r.ms} stage=${r.failureStage}")
+        assertEquals(null, r.failureStage)
+        assertEquals(listOf("www.gstatic.com" to 80), proxy.dialed)
+        val sent = proxy.written.toString(Charsets.UTF_8.name())
+        assertTrue(sent.startsWith("GET /generate_204 HTTP/1.1"), "expected an HTTP GET, got: $sent")
     }
 
     @Test
