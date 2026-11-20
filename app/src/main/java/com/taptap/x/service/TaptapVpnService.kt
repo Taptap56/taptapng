@@ -79,7 +79,12 @@ class TaptapVpnService : VpnService() {
          * entries ARE startable for VMess/VLESS (the DNSTT tunnel
          * is built in-app); SlowDNS for Trojan/SS/SSH is still
          * rejected — the DNSTT ladder is only plugged into the
-         * VMess/VLESS clients.
+         * VMess/VLESS clients. v1.0.23 (M4): Onering entries ARE
+         * startable for VMess/VLESS/Trojan with TLS + WS + a bug
+         * domain (the 0xff00 extension is built in-app via Bouncy
+         * Castle); Onering without TLS/WS/bug, for SS/SSH, or
+         * combined with SlowDNS is still rejected with a clear
+         * message.
          */
         fun requireStartable(item: ProfileItem) {
             if (item.configType == ConfigType.SSH) {
@@ -88,9 +93,34 @@ class TaptapVpnService : VpnService() {
                 )
             }
             if (item.oneringEnabled) {
-                throw IllegalStateException(
-                    "Entry Onering belum didukung di v1.0.4 (butuh M4) — pilih entry VMess biasa",
-                )
+                if (item.dnsttEnabled) {
+                    throw IllegalStateException(
+                        "Entry Onering + SlowDNS belum didukung digabung — matikan salah satu",
+                    )
+                }
+                if (item.configType != ConfigType.VMESS &&
+                    item.configType != ConfigType.VLESS &&
+                    item.configType != ConfigType.TROJAN
+                ) {
+                    throw IllegalStateException(
+                        "Entry Onering baru didukung untuk VMess/VLESS/Trojan di v1.0.23 (M4)",
+                    )
+                }
+                if (!item.tls) {
+                    throw IllegalStateException(
+                        "Entry Onering butuh TLS — nyalakan TLS di entry ini",
+                    )
+                }
+                if (item.network.lowercase() != "ws") {
+                    throw IllegalStateException(
+                        "Entry Onering butuh network WS — ganti network ke ws",
+                    )
+                }
+                if (item.oneringBug.isBlank()) {
+                    throw IllegalStateException(
+                        "Entry Onering butuh Bug domain — isi di Xray method",
+                    )
+                }
             }
             if (item.dnsttEnabled &&
                 item.configType != ConfigType.VMESS &&

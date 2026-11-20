@@ -23,7 +23,7 @@ import java.util.Locale
  * only for network exception types (our own stage tags and system
  * socket messages — neither carries a UUID, password, or key) and
  * for IllegalStateException (our own state errors: "protect() gagal",
- * "Entry Onering belum didukung", "Gagal establish TUN" — audited,
+ * "Entry Onering belum didukung" (v1.0.4–v1.0.22, M4 belum dibangun), "Gagal establish TUN" — audited,
  * all throw sites are static messages with no user input). Anything
  * else (e.g. IllegalArgumentException, which UUID parsing throws
  * with the raw input in the message) logs the class name only.

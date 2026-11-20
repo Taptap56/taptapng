@@ -253,20 +253,35 @@ object Transport {
                 // — createSocket(plain, host, ...) tidak me-resolve
                 // host karena socket sudah terkoneksi; SNI di-set
                 // eksplisit dari item, bukan dari IP hasil resolve.
+                // v1.0.23 (M4): entry Onering TIDAK lewat SSLSocket —
+                // platform TLS tidak bisa membawa ekstensi kustom
+                // 0xff00, dan patch byte ClientHello merusak transcript
+                // hash — jadi Onering naik Bouncy Castle (OneringTls),
+                // yang membangun ClientHello sendiri dengan 0xff00
+                // paling depan. Socket di OpenStream tetap `plain`
+                // (sudah di-arm watchdog): protokol BC membaca dari
+                // stream-nya, jadi menutup plain tetap membangunkan
+                // read yang macet.
                 noteStage("TLS")
                 try {
-                    socket = TlsUtil.wrap(plain, item)
+                    if (OneringTls.isOnering(item)) {
+                        val (tlsIn, tlsOut) = OneringTls.wrap(input, output, item)
+                        input = tlsIn
+                        output = tlsOut
+                    } else {
+                        socket = TlsUtil.wrap(plain, item)
+                        // Re-arm the watchdog on the TLS socket: closing the
+                        // plain socket would not unblock the TLS read.
+                        wd?.arm(socket)
+                        input = socket.getInputStream()
+                        output = socket.getOutputStream()
+                        DialLog.log("TLS", "${item.address} ok")
+                    }
                 } catch (e: SSLException) {
                     throw SSLException("TLS gagal: ${e.message}")
                 } catch (e: Exception) {
                     throw IOException("TLS gagal: ${e.message}", e)
                 }
-                // Re-arm the watchdog on the TLS socket: closing the
-                // plain socket would not unblock the TLS read.
-                wd?.arm(socket)
-                input = socket.getInputStream()
-                output = socket.getOutputStream()
-                DialLog.log("TLS", "${item.address} ok")
             }
             // v1.0.16: time every read from the transport stream
             // (TLS unwrap + socket wait — inseparable on the

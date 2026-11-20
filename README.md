@@ -1,4 +1,4 @@
-# TaptapX v1.0.22
+# TaptapX v1.0.23
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.22 (vc23)
+- **id** `com.taptap.x`, **versi** 1.0.23 (vc24)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,45 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.23 — MILESTONE M4: Onering (ext TLS 0xff00 via Bouncy Castle)
+
+**Cara pakai.** Di editor entry, seksi Xray method: nyalakan chip
+**Onering**, isi **Bug domain** (mis. `live.iflix.com`). SNI entry
+tetap domain asli (mis. `support.zoom.us`) — chip yang mengatur
+format `onering:<real>:<bug>` di link, jadi saling copy
+v2rayNG↔TaptapX tetap jalan. Syarat: VMess/VLESS/Trojan + TLS nyala
++ network WS + Bug domain terisi. SS/SSH, Onering tanpa TLS/WS/bug,
+dan Onering+SlowDNS tetap ditolak guard dengan pesan yang jelas.
+
+**Kenapa Bouncy Castle.** SSLSocket/SSLEngine platform TIDAK punya
+API ekstensi kustom — 0xff00 tidak bisa dikirim lewat javax.net.ssl
+sama sekali. Patch byte ClientHello sesudah SSLEngine membuatnya
+juga BUKAN jalan: transcript hash TLS dihitung dari ClientHello
+asli, sementara server melihat yang sudah diubah, jadi Finished
+gagal di TLS 1.2 maupun 1.3. Bouncy Castle (`bctls` 1.86, kripto
+tetap JCA platform — tanpa bcprov) membangun ClientHello sendiri
+dari `getClientExtensions()`, jadi 0xff00 masuk transcript sejak
+awal dan handshake konsisten. Urutan dipaksa lewat `Hashtable`
+subclass (`OrderedExtensions`, `keys()` enumerasi 0xff00 dulu) —
+BC menulis ekstensi dengan iterasi `keys()`, dan
+`ensureExtensionsInitialised` tidak menyalin tabelnya. Isi data
+0xff00 byte-identik dengan fork TC (`oneringBugExtensionData`:
+server_name_list berisi bug). Ukuran APK tetap dijaga R8.
+
+**Tes HP.** Entry Onering (contoh: Zoom onering, atau entry
+leaseweb4 dengan bug `live.iflix.com` / `io.ruangguru.com`):
+pancing dulu lewat v2rayNG/pemicu.apk bila jendela tutup —
+Onering tetap butuh pancing, bukan pengganti pancing. Yang
+menentukan: konek + Log menunjukkan `TLS ... Onering ... ok (bug
+..., SNI ...)` + internet jalan. Bila entry Onering timeout
+padahal konek di v2rayNG, pancing dulu, jangan utak-atik
+fingerprint/address.
+
+**Tidak diubah.** Relay/TUN/MTU 9000, buffer socket, SlowDNS,
+salin server dua arah. Saran Claude berikutnya (flow control
+ACK/window, ICMP port-unreachable UDP 443, cache DNS aplikasi)
+belum dikerjakan.
 
 ## v1.0.22 — Cache DNS host proxy + rapikan teks UI
 

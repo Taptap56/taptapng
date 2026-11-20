@@ -11,8 +11,8 @@ android {
         applicationId = "com.taptap.x"
         minSdk = 24
         targetSdk = 37
-        versionCode = 23
-        versionName = "1.0.22"
+        versionCode = 24
+        versionName = "1.0.23"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -75,6 +75,10 @@ dependencies {
     // SSH (in-app, pure Java) — proof-of-concept protocol for Phase 1.
     // Same approach as XVEON: JSch, no native core.
     implementation(libs.jsch)
+
+    // Onering (M4, v1.0.23): Bouncy Castle TLS client (see libs.versions.toml
+    // for why BC is the only way to send the custom 0xff00 extension).
+    implementation(libs.bctls)
 
     // QR code scan/generate: ZXing core only (no CameraX — CameraX
     // would add megabytes; the scanner uses the framework Camera1 API).
