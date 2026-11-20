@@ -282,4 +282,71 @@ override fun dial(
             h.stop()
         }
     }
+
+    @Test
+    fun `upload data is written promptly despite the long writer poll`() {
+        // v1.0.25: writer poll 100 ms -> 1000 ms (battery).
+        // poll() returns at once when data arrives, so the upload
+        // must NOT wait for the poll timeout — this fails if the
+        // writer sleeps before draining the queue.
+        val proxy = OkProxy()
+        val h = Harness(proxy)
+        try {
+            h.fwd.start()
+            h.feed(syn())
+            assertTrue(waitFor(what = "Connected") { h.statuses.contains("Connected") })
+            val isn = synAckIsn(h)
+            val serverSeq = (isn + 1) and 0xFFFFFFFFL
+            h.feed(ackPkt(seq = 1001L, ack = serverSeq))
+            Thread.sleep(150)
+            val t0 = System.currentTimeMillis()
+            h.feed(dataPkt(seq = 1001L, ack = serverSeq, payload = "prompt".toByteArray()))
+            assertTrue(waitFor(what = "prompt at proxy", timeoutMs = 5_000) {
+                proxy.last.written.toString(Charsets.UTF_8.name()).contains("prompt")
+            })
+            val elapsed = System.currentTimeMillis() - t0
+            assertTrue(elapsed < 500, "upload took $elapsed ms — writer waited for the poll timeout")
+        } finally {
+            h.stop()
+        }
+    }
+
+    @Test
+    fun `writer thread exits promptly after the session closes`() {
+        // v1.0.25: writer poll 100 ms -> 1000 ms (battery). The
+        // writer must still notice a closed session within ~1 s —
+        // it must not keep waking on a dead session forever.
+        val proxy = OkProxy()
+        val h = Harness(proxy)
+        try {
+            h.fwd.start()
+            h.feed(syn())
+            assertTrue(waitFor(what = "Connected") { h.statuses.contains("Connected") })
+            val isn = synAckIsn(h)
+            val serverSeq = (isn + 1) and 0xFFFFFFFFL
+            h.feed(ackPkt(seq = 1001L, ack = serverSeq))
+            Thread.sleep(150)
+            // One data packet starts the writer, then the app FINs.
+            h.feed(dataPkt(seq = 1001L, ack = serverSeq, payload = "bye".toByteArray()))
+            assertTrue(waitFor(what = "bye at proxy") {
+                proxy.last.written.toString(Charsets.UTF_8.name()).contains("bye")
+            })
+            h.feed(
+                TcpPacket.buildTcp(
+                    clientIp, serverIp, 12345, 443,
+                    1004L, serverSeq,
+                    TcpPacket.FLAG_FIN or TcpPacket.FLAG_ACK, ByteArray(0),
+                ),
+            )
+            assertTrue(waitFor(what = "session removed") { h.fwd.sessionCount() == 0 })
+            // The writer thread must exit within ~2 s (one 1 s poll
+            // + scheduling slack) — not linger on a dead session.
+            val gone = waitFor(what = "writer thread gone", timeoutMs = 5_000) {
+                Thread.getAllStackTraces().keys.none { it.name == "tun-writer-443" && it.isAlive }
+            }
+            assertTrue(gone, "writer thread still alive after the session closed")
+        } finally {
+            h.stop()
+        }
+    }
 }

@@ -167,6 +167,46 @@ class PemicuManagerTest {
     }
 
     @Test
+    fun `msUntilNextDue sleeps until the next prime, not one second`() {
+        // v1.0.25: the loop sleeps until the next prime falls due
+        // instead of polling every second.
+        val target = PemicuManager.PemicuTarget("chat.sociomile.com", 443, 15)
+        val now = 1_000_000L
+        // Never primed: due at once -> min sleep (1 s), never 0 (no spin).
+        assertEquals(1_000L, PemicuManager.msUntilNextDue(listOf(target), emptyMap(), now))
+        // Primed 5 s ago, 15 s interval -> 10 s left.
+        assertEquals(
+            10_000L,
+            PemicuManager.msUntilNextDue(
+                listOf(target), mapOf(target.key() to (now - 5_000L)), now,
+            ),
+        )
+        // Primed 14 s ago -> 1 s left (min sleep).
+        assertEquals(
+            1_000L,
+            PemicuManager.msUntilNextDue(
+                listOf(target), mapOf(target.key() to (now - 14_000L)), now,
+            ),
+        )
+        // Primed just now, 15 s interval -> the full interval.
+        assertEquals(
+            15_000L,
+            PemicuManager.msUntilNextDue(
+                listOf(target), mapOf(target.key() to now), now,
+            ),
+        )
+        // Two targets: the earliest due wins.
+        val other = PemicuManager.PemicuTarget("support.zoom.us", 443, 300)
+        val last = mapOf(
+            target.key() to (now - 5_000L),
+            other.key() to (now - 100_000L),
+        )
+        assertEquals(10_000L, PemicuManager.msUntilNextDue(listOf(target, other), last, now))
+        // No targets: idle sleep (5 s), so edits are picked up soon.
+        assertEquals(5_000L, PemicuManager.msUntilNextDue(emptyList(), emptyMap(), now))
+    }
+
+    @Test
     fun `formatPrimeResult shapes`() {
         val target = PemicuManager.PemicuTarget("chat.sociomile.com", 443, 15)
         val ok = PemicuManager.PrimeResult.Ok(
@@ -382,6 +422,38 @@ class PemicuManagerTest {
                 DialLog.lines().none { it.contains("PRIME OK") || it.contains("PRIME GAGAL") },
                 "log: ${DialLog.lines()}",
             )
+        } finally {
+            PemicuManager.stop()
+        }
+    }
+
+    @Test
+    fun `loop wakes about once per interval, not once per second`() {
+        // v1.0.25: the loop sleeps until the next prime falls due
+        // instead of polling every second. A 5 s interval target on
+        // a closed port primes at t=0 and again at t=5 s — in that
+        // window the loop must tick twice, not ~6 times (old 1 s
+        // tick). The second PRIME GAGAL also proves the prime still
+        // fires on time.
+        DialLog.clear()
+        val target = PemicuManager.PemicuTarget("127.0.0.1", closedPort(), 5)
+        val before = PemicuManager.loopTickCount
+        PemicuManager.start { listOf(target) }
+        try {
+            assertTrue(waitForLog("PRIME GAGAL 127.0.0.1:"), "log: ${DialLog.lines()}")
+            val deadline = System.currentTimeMillis() + 12_000
+            while (DialLog.lines().count { it.contains("PRIME GAGAL") } < 2
+                && System.currentTimeMillis() < deadline
+            ) {
+                Thread.sleep(100)
+            }
+            assertEquals(
+                2,
+                DialLog.lines().count { it.contains("PRIME GAGAL") },
+                "log: ${DialLog.lines()}",
+            )
+            val ticks = PemicuManager.loopTickCount - before
+            assertTrue(ticks <= 3, "loop ticked $ticks times in about 5 s")
         } finally {
             PemicuManager.stop()
         }

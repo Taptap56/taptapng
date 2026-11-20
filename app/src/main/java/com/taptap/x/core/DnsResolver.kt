@@ -116,17 +116,18 @@ object DnsResolver {
         val key = clean.lowercase()
         val now = System.currentTimeMillis()
         val cached = addrCache[key]
-        if (cached != null && now - cached.atMs < ADDR_CACHE_TTL_MS) {
-            return cached.addr
+        if (cached != null && now - cached.atMs < addrCacheTtlMs) {
+            cached.addrs.firstOrNull()?.let { return it }
         }
         try {
             val fresh = resolveUncached(host, clean, port, timeoutMs)
-            addrCache[key] = CachedAddr(fresh, now)
+            addrCache[key] = CachedAddr(listOf(fresh), now)
             return fresh
         } catch (e: IOException) {
             // Lookup gagal: IP lama yang pernah berhasil lebih baik
             // daripada menggagalkan koneksi.
-            if (cached != null) return cached.addr
+            val stale = cached?.addrs?.firstOrNull()
+            if (stale != null) return stale
             throw e
         }
     }
@@ -137,10 +138,14 @@ object DnsResolver {
      * getAllByName sorted v4-first). Direct UDP queries first
      * (bypass TUN, same as [resolve]); the system resolver is the
      * fallback, bounded by [timeoutMs]. Deduped, IPv4 first.
-     * Deliberately NOT cached: the v1.0.22 cache holds ONE address
-     * per host, but the prime needs both families, and a prime dial
-     * runs at most once per interval (15 s+), so two UDP queries per
-     * dial are cheap. @throws IOException bila kedua jalur gagal.
+     *
+     * v1.0.25: the result is cached for [addrCacheTtlMs] in the same
+     * cache as [resolveWithSystemFallback] (which now holds the
+     * full address list) — a prime dial runs every 15 s, so without
+     * the cache each prime cost 2 fresh UDP queries + a radio
+     * wakeup. On lookup failure the last good list is returned,
+     * like the single-address path. @throws IOException bila kedua
+     * jalur gagal dan tidak ada cache.
      */
     fun resolveAll(
         host: String,
@@ -152,6 +157,31 @@ object DnsResolver {
         if (AddrCodec.isIpLiteral(clean)) {
             return listOf(InetAddress.getByName(clean))
         }
+        val key = clean.lowercase()
+        val now = System.currentTimeMillis()
+        val cached = addrCache[key]
+        if (cached != null && now - cached.atMs < addrCacheTtlMs) {
+            return cached.addrs
+        }
+        try {
+            val fresh = resolveAllUncached(host, clean, port, timeoutMs)
+            addrCache[key] = CachedAddr(fresh, now)
+            return fresh
+        } catch (e: IOException) {
+            if (cached != null) return cached.addrs
+            throw e
+        }
+    }
+
+    /** The uncached half of [resolveAll]: direct A + AAAA queries,
+     *  then the system resolver as fallback. Returns non-empty, or
+     *  throws IOException when both paths fail. */
+    private fun resolveAllUncached(
+        host: String,
+        clean: String,
+        port: Int,
+        timeoutMs: Int,
+    ): List<InetAddress> {
         try {
             // A dulu; bila servernya saja tidak menjawab (timeout),
             // jangan buang waktu coba AAAA — langsung fallback sistem
@@ -176,11 +206,21 @@ object DnsResolver {
         addrCache.clear()
     }
 
-    private class CachedAddr(val addr: InetAddress, val atMs: Long)
+    /**
+     * One cached address list (IPv4 first, then IPv6) + the time it
+     * was stored. Only non-empty lists are ever cached (both
+     * [resolveAllUncached] and [resolveUncached] return non-empty
+     * or throw), so [CachedAddr.addrs] always has a first element.
+     */
+    private class CachedAddr(val addrs: List<InetAddress>, val atMs: Long)
 
     private val addrCache = java.util.concurrent.ConcurrentHashMap<String, CachedAddr>()
 
-    private const val ADDR_CACHE_TTL_MS = 120_000L
+    /** TTL cache DNS (120 dtk). Diubah tes untuk menguji fallback
+     *  cache kedaluwarsa (pola yang sama dengan [dnsServer] /
+     *  [dnsPort]); produksi tidak pernah mengubahnya. */
+    @Volatile
+    var addrCacheTtlMs: Long = 120_000L
 
     private fun resolveUncached(
         host: String,

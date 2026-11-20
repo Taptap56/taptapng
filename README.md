@@ -1,4 +1,4 @@
-# TaptapX v1.0.24
+# TaptapX v1.0.25
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.24 (vc25)
+- **id** `com.taptap.x`, **versi** 1.0.25 (vc26)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,43 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.25 — Paket hemat baterai (loop prime + writer + cache DNS)
+
+**Kenapa.** Screenshot baterai 2026-11-21 01:55 (MIUI, VPN nyala
+~21:00–01:55): TaptapX 60,89% — tertinggi. Audit READ-ONLY
+(2026-11-21 02:01, tanpa ubah kode) menemukan: sebagian besar
+angka itu kerja relay yang SAH (semua trafik app lain lewat relay
+Java TaptapX dan MIUI menghitungnya ke TaptapX), TIDAK ada
+WakeLock/WifiLock sama sekali — tapi ada tiga pemboros saat IDLE
+yang bisa dipangkas tanpa mengubah perilaku:
+
+1. **Loop prime tidur sampai jatuh tempo, bukan polling 1 dtk**
+   (`PemicuManager`): loop bangun ~1×/interval (15 dtk default),
+   bukan 1×/dtk. Prime tetap tepat waktu; loop tetap bisa
+   dibangunkan lewat `interrupt()` saat entry diedit / VPN stop.
+2. **Writer per-session `poll(100ms)` → `poll(1000ms)`**
+   (`TunForwarder`): tiap session terbuka bangun 10×/dtk walau
+   antrean kosong — penyebab boros idle #1 (10–20 session ×
+   10 bangun/dtk). `poll(timeout)` langsung kembali saat ada data
+   masuk, jadi ini TIDAK menambah latensi upload sama sekali —
+   hanya menunda deteksi session tertutup maks 1 dtk.
+3. **Prime DNS pakai cache 120 dtk** (`DnsResolver.resolveAll`):
+   tiap prime tidak lagi 2 query UDP baru + wakeup radio; cache
+   yang sama seperti `resolve()` (TTL 120 dtk, fallback IP
+   terakhir bila lookup gagal).
+
+**Yang TIDAK diubah.** Interval prime adaptif (usulan audit #4)
+sengaja diputuskan terpisah — ia mengubah perilaku prime dan
+primer bawaan sendiri belum terbukti di HP. KCP SlowDNS, poll
+MainActivity, dan poller NIO juga tidak disentuh.
+
+**Verifikasi di HP.** VPN nyala semalaman (idle, layar mati),
+bandingkan pangsa baterai TaptapX dengan 60,89% sebelumnya.
+Screenshot kedua 02:06 menegaskan diagnosis: saat user AKTIF
+pakai HP, pangsa TaptapX cuma 7,66% (YouTube 31,05%) — TaptapX
+mendominasi HANYA saat idle. Log `PRIME OK` harus tetap tepat
+waktu tiap interval (tidak telat karena loop tidur).
 
 ## v1.0.24 — MILESTONE M5: Pemicu bawaan (primer di dalam TaptapX)
 

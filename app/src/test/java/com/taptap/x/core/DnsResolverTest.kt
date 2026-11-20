@@ -324,6 +324,59 @@ class DnsResolverTest {
         assertTrue(elapsedMs < 10_000, "fallback menggantung $elapsedMs ms")
     }
     @Test
+    fun `resolveAll reuses a cached list when DNS goes away`() {
+        // v1.0.25: prime DNS pakai cache 120 dtk — tiap prime tidak
+        // lagi 2 query UDP baru.
+        val (server, running, serverThread) = fakeDnsServer()
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        DnsResolver.clearAddrCache()
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = server.localPort
+            val first = DnsResolver.resolveAll("cache-test.example", 443, timeoutMs = 2000)
+            assertEquals(listOf("93.184.216.34"), first.map { it.hostAddress })
+            // Server DNS dimatikan: tanpa cache, lookup ini gagal.
+            stopFakeDns(server, running, serverThread)
+            val second = DnsResolver.resolveAll("cache-test.example", 443, timeoutMs = 500)
+            assertEquals(listOf("93.184.216.34"), second.map { it.hostAddress })
+        } finally {
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            DnsResolver.clearAddrCache()
+            stopFakeDns(server, running, serverThread)
+        }
+    }
+
+    @Test
+    fun `resolveAll falls back to the stale cached list when lookup fails`() {
+        // TTL dipendekkan untuk tes: cache kedaluwarsa, server mati,
+        // lookup gagal -> IP terakhir yang berhasil dipakai.
+        val (server, running, serverThread) = fakeDnsServer()
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        val oldTtl = DnsResolver.addrCacheTtlMs
+        DnsResolver.clearAddrCache()
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = server.localPort
+            val first = DnsResolver.resolveAll("stale-test.example", 443, timeoutMs = 2000)
+            assertEquals(listOf("93.184.216.34"), first.map { it.hostAddress })
+            DnsResolver.addrCacheTtlMs = 1L
+            Thread.sleep(5)
+            stopFakeDns(server, running, serverThread)
+            val second = DnsResolver.resolveAll("stale-test.example", 443, timeoutMs = 500)
+            assertEquals(listOf("93.184.216.34"), second.map { it.hostAddress })
+        } finally {
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            DnsResolver.addrCacheTtlMs = oldTtl
+            DnsResolver.clearAddrCache()
+            stopFakeDns(server, running, serverThread)
+        }
+    }
+
+    @Test
     fun `resolveWithSystemFallback reuses a cached address when DNS goes away`() {
         // v1.0.22: host proxy di-cache — koneksi berikutnya tidak
         // menunggu query UDP baru, dan IP lama dipakai bila DNS mati.

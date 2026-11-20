@@ -158,6 +158,17 @@ class TunForwarder(
         const val MAX_WRITER_DRAIN = 8
 
         /**
+         * Session writer poll timeout (v1.0.25, battery): the
+         * writer wakes at most 1×/s per idle session (was 10×/s
+         * at 100 ms — the #1 idle battery drain in the 2026-11-21
+         * audit: 10–20 idle sessions × 10 wakeups/s, 24 h while
+         * the VPN is up). poll() returns at once when data
+         * arrives, so this adds NO upload latency — the timeout
+         * only bounds how fast a closed session is noticed (≤ 1 s).
+         */
+        const val WRITER_POLL_MS = 1000L
+
+        /**
          * Relay read buffer (v1.0.15): one read() from the proxy
          * stream pulls up to 32 KiB (several VMess chunks / many
          * TCP segments) instead of one peer-MSS read per segment —
@@ -538,7 +549,7 @@ class TunForwarder(
         try {
             while (!session.closed.get()) {
                 val first = try {
-                    session.outQueue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    session.outQueue.poll(WRITER_POLL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
                 } catch (_: InterruptedException) {
                     return
                 } ?: continue

@@ -39,10 +39,12 @@ import kotlin.concurrent.thread
  * Lifecycle (owned by TaptapVpnService): [primeNowSync] runs once
  * BEFORE the probe dial at start (prime first, then the main dial
  * can use the open window); [start] runs the auto-prime loop while
- * the VPN is up (one tick per second, a host is dialled when its
- * interval has elapsed since its last prime); [stop] ends the loop
- * and closes in-flight dials. A prime failure is only ever logged
- * (PRIME GAGAL) — it NEVER fails the VPN start or connection.
+ * the VPN is up (v1.0.25: the loop sleeps until the next prime
+ * falls due — ~1 wakeup per interval instead of 1 per second; a
+ * host is dialled when its interval has elapsed since its last
+ * prime); [stop] ends the loop and closes in-flight dials. A prime
+ * failure is only ever logged (PRIME GAGAL) — it NEVER fails the
+ * VPN start or connection.
  */
 object PemicuManager {
 
@@ -54,8 +56,14 @@ object PemicuManager {
      *  hang on a silent server. */
     const val TLS_TIMEOUT_MS = 10_000
 
-    /** Tick interval of the prime loop. */
-    private const val TICK_MS = 1_000L
+    /** Min sleep of the prime loop (1 s, v1.0.25): the loop never
+     *  spins faster than this, even when a target is due at once. */
+    private const val MIN_SLEEP_MS = 1_000L
+
+    /** Sleep while the loop has no targets at all (5 s, v1.0.25):
+     *  the provider is re-read after this, so editing the entry's
+     *  Pemicu fields while the VPN runs takes effect within 5 s. */
+    private const val IDLE_SLEEP_MS = 5_000L
 
     /** One prime host + its interval (seconds). */
     data class PemicuTarget(val host: String, val port: Int, val intervalSec: Int) {
@@ -145,6 +153,35 @@ object PemicuManager {
         now: Long,
     ): List<PemicuTarget> = targets.filter { target ->
         now - (lastPrime[target.key()] ?: 0L) >= target.intervalSec * 1_000L
+    }
+
+    /**
+     * Milliseconds until the next prime falls due (v1.0.25): the
+     * loop sleeps this long instead of polling every second, so an
+     * idle VPN wakes ~1×/interval instead of 1×/s (the #2 idle
+     * battery drain in the 2026-11-21 audit). A never-primed
+     * target is due at once, so the sleep is at least
+     * [MIN_SLEEP_MS] (the loop never busy-spins) and at most the
+     * longest target interval; with no targets it is
+     * [IDLE_SLEEP_MS]. Pure, unit-tested.
+     */
+    fun msUntilNextDue(
+        targets: List<PemicuTarget>,
+        lastPrime: Map<String, Long>,
+        now: Long,
+    ): Long {
+        if (targets.isEmpty()) return IDLE_SLEEP_MS
+        var minMs = Long.MAX_VALUE
+        var maxIntervalMs = 0L
+        for (target in targets) {
+            val intervalMs = target.intervalSec * 1_000L
+            if (intervalMs > maxIntervalMs) maxIntervalMs = intervalMs
+            val last = lastPrime[target.key()]
+            val nextDue = if (last == null) 0L else last + intervalMs
+            val wait = nextDue - now
+            if (wait < minMs) minMs = wait
+        }
+        return minMs.coerceIn(MIN_SLEEP_MS, maxIntervalMs.coerceAtLeast(MIN_SLEEP_MS))
     }
 
     /** The log line for a prime result, same short shape as the
@@ -294,12 +331,22 @@ object PemicuManager {
     val isLoopRunning: Boolean
         get() = synchronized(lock) { loopThread?.isAlive == true }
 
+    /** Loop iterations so far (tests / battery audit, v1.0.25):
+     *  the loop sleeps until the next prime is due, so this grows
+     *  ~1×/interval, not 1×/s. */
+    val loopTickCount: Long
+        get() = loopTicks.get()
+
+    private val loopTicks = java.util.concurrent.atomic.AtomicLong(0)
+
     /**
-     * Start the prime loop (1 s tick). Idempotent: a second call
+     * Start the prime loop (v1.0.25: sleeps until the next prime
+     * falls due, ~1 wakeup per interval). Idempotent: a second call
      * while the loop runs restarts it with the new provider, so a
      * core reload / re-entry never spawns a duplicate loop. The
-     * provider is re-read on every tick, so editing the entry's
-     * Pemicu fields takes effect without restarting the VPN.
+     * provider is re-read on every wake, so editing the entry's
+     * Pemicu fields takes effect without restarting the VPN (at
+     * the latest when the next prime falls due).
      */
     fun start(targetsProvider: () -> List<PemicuTarget>) {
         val gen: Int
@@ -323,8 +370,9 @@ object PemicuManager {
 
     /** Stop the prime loop and its in-flight dials. Idempotent.
      *  Safe to call from the main thread: it never joins, it only
-     *  interrupts and closes sockets (the loop thread exits on its
-     *  own within one tick). */
+     *  interrupts and closes sockets (the sleeping loop thread is
+     *  interrupted and exits at once, it does not wait out its
+     *  sleep until the next prime). */
     fun stop() {
         synchronized(lock) {
             generation++
@@ -341,8 +389,10 @@ object PemicuManager {
 
     private fun primeLoop(targetsProvider: () -> List<PemicuTarget>, gen: Int) {
         while (gen == generation) {
+            loopTicks.incrementAndGet()
+            var targets: List<PemicuTarget> = emptyList()
             try {
-                val targets = runCatching { targetsProvider() }.getOrElse { emptyList() }
+                targets = runCatching { targetsProvider() }.getOrElse { emptyList() }
                 val now = System.currentTimeMillis()
                 for (target in dueTargets(targets, lastPrime, now)) {
                     if (gen != generation) return
@@ -370,9 +420,20 @@ object PemicuManager {
                 }
             } catch (e: Exception) {
                 DialLog.log("PRIME", "loop error (${e.javaClass.simpleName})")
+                targets = emptyList()
             }
+            // v1.0.25: sleep until the next prime falls due instead
+            // of polling every second — an idle VPN wakes ~1× per
+            // interval. The sleep is interrupted by start()/stop()
+            // (the loop thread is interrupted there), so an entry
+            // edit or a stop is still noticed at once.
+            val sleepMs = msUntilNextDue(
+                targets,
+                lastPrime,
+                System.currentTimeMillis(),
+            )
             try {
-                Thread.sleep(TICK_MS)
+                Thread.sleep(sleepMs)
             } catch (_: InterruptedException) {
                 return
             }
