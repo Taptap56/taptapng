@@ -29,7 +29,10 @@ import com.taptap.x.data.SettingsStore
  * (a) Basic -> (b) protocol fields -> (c) Network -> (d) Stream
  * Security (TLS) -> (e) Xray method chips (SlowDNS / Onering /
  * Pemicu) + the SSH method chips (Payload / Enhanced / TLS /
- * SlowDNS, like v2rayNG's ServerSshActivity). Every field is an
+ * SlowDNS / Pemicu, like v2rayNG's ServerSshActivity). v1.0.31: the
+ * Xray method section is hidden while editing an SSH entry — SSH
+ * gets its Pemicu chip in the SSH method row instead, bound to the
+ * same ProfileItem.pemicuEnabled field. Every field is an
  * OUTLINED TextInputLayout; dropdowns are exposed
  * AutoCompleteTextViews. Save lives in the top bar (checkmark).
  *
@@ -67,6 +70,16 @@ class ServerEditorActivity : AppCompatActivity() {
         private val DNSTT_TYPE_VALUES = listOf("txt", "null")
         private val SSH_SNI_VERSION_DISPLAYS = listOf("Default", "TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3")
         private val SSH_SNI_VERSION_VALUES = listOf("default", "tls1", "tls1.1", "tls1.2", "tls1.3")
+
+        /**
+         * v1.0.31: the Xray method section (SlowDNS / Onering / Pemicu)
+         * belongs to VMess/VLESS/Trojan/SS only. SSH entries get their
+         * Pemicu chip in the SSH method row instead, so the whole
+         * Xray section is hidden while an SSH entry is being edited.
+         * Pure so a JVM test can assert the rule.
+         */
+        fun isXrayMethodVisible(configType: ConfigType): Boolean =
+            configType != ConfigType.SSH
     }
 
     private lateinit var store: ProfileStore
@@ -309,7 +322,19 @@ class ServerEditorActivity : AppCompatActivity() {
         // Xray method chips toggle their field sections.
         chip(R.id.chip_slowdns).setOnCheckedChangeListener { _, _ -> updateXraySections() }
         chip(R.id.chip_onering).setOnCheckedChangeListener { _, _ -> updateXraySections() }
-        chip(R.id.chip_pemicu).setOnCheckedChangeListener { _, _ -> updateXraySections() }
+        // v1.0.31: the SSH Pemicu chip mirrors the Xray Pemicu chip —
+        // one field (ProfileItem.pemicuEnabled), two controls. The
+        // Xray chip stays the canonical state holder (save +
+        // validation + updateXraySections read it); the SSH chip only
+        // writes through it. CompoundButton only notifies on a real
+        // value change, so the two-way sync cannot loop.
+        chip(R.id.chip_ssh_pemicu).setOnCheckedChangeListener { _, isChecked ->
+            chip(R.id.chip_pemicu).isChecked = isChecked
+        }
+        chip(R.id.chip_pemicu).setOnCheckedChangeListener { _, isChecked ->
+            chip(R.id.chip_ssh_pemicu).isChecked = isChecked
+            updateXraySections()
+        }
 
         // Restore chip states from the existing profile.
         existing?.let { item ->
@@ -320,6 +345,7 @@ class ServerEditorActivity : AppCompatActivity() {
             chip(R.id.chip_slowdns).isChecked = item.dnsttEnabled
             chip(R.id.chip_onering).isChecked = item.oneringEnabled
             chip(R.id.chip_pemicu).isChecked = item.pemicuEnabled
+            chip(R.id.chip_ssh_pemicu).isChecked = item.pemicuEnabled
         }
     }
 
@@ -351,6 +377,10 @@ class ServerEditorActivity : AppCompatActivity() {
         val isSsh = configType == ConfigType.SSH
         show(R.id.section_ssh, isSsh)
         show(R.id.section_proxy, !isSsh)
+        // v1.0.31: no Xray method section for SSH entries — their
+        // Pemicu chip lives in the SSH method row instead.
+        show(R.id.label_xray_method, isXrayMethodVisible(configType))
+        show(R.id.chip_xray_method, isXrayMethodVisible(configType))
         // UUID only for VMess/VLESS; password only for Trojan/SS.
         show(
             R.id.layout_uuid,

@@ -224,6 +224,12 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="SlowDNS" />
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/chip_ssh_pemicu"
+                        style="@style/Widget.TaptapX.Chip.Filter"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Pemicu" />
                 </com.google.android.material.chip.ChipGroup>
 
                 <LinearLayout
@@ -828,6 +834,7 @@
 
             <!-- (e) Xray method (all protocols). -->
             <TextView
+                android:id="@+id/label_xray_method"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
