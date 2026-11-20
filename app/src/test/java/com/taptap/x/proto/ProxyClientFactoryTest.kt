@@ -73,9 +73,11 @@ class ProxyClientFactoryTest {
     }
 
     @Test
-    fun `factory rejects ssh`() {
-        assertThrows(IllegalArgumentException::class.java) {
-            ProxyClientFactory.create(item(ConfigType.SSH))
-        }
+    fun `factory builds ssh in v1_0_30`() {
+        // v1.0.30: SSH rides the tunnel (SshProxyClient) — the old
+        // rejection is gone. Fails on v1.0.29 code (the factory
+        // threw IllegalArgumentException for SSH).
+        val client = ProxyClientFactory.create(item(ConfigType.SSH))
+        assertTrue(client is SshProxyClient, "got: ${client::class.simpleName}")
     }
 }
