@@ -224,9 +224,11 @@ class TcpPacketTest {
         )
         assertEquals(a.size, n)
         // Same bytes except the IP id field (bytes 4-5), which is a
-        // per-call counter.
+        // per-call counter — and the IP header checksum (bytes
+        // 10-11), which covers the id and so differs with it. The
+        // checksums themselves are verified separately below.
         for (i in a.indices) {
-            if (i == 4 || i == 5) continue
+            if (i == 4 || i == 5 || i == 10 || i == 11) continue
             assertEquals(a[i], buf[i], "byte $i differs")
         }
         assertEquals(0, TcpPacket.checksum(buf, 0, 20))

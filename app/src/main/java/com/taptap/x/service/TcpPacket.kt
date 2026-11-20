@@ -207,15 +207,20 @@ object TcpPacket {
      */
     fun parseTcpSegment(packet: ByteArray, off: Int, len: Int): TcpSegment? {
         if (len < 20) return null
+        // wrap(packet, off, len) starts the position AT off — but
+        // absolute gets (get(12), getShort(14)) are ARRAY-indexed,
+        // not off-indexed, so they would read the IP header. All
+        // reads below are RELATIVE (position starts at off), which
+        // is what lands on the TCP header at packet[off..].
         val buf = ByteBuffer.wrap(packet, off, len).order(ByteOrder.BIG_ENDIAN)
         val srcPort = buf.short.toInt() and 0xFFFF
         val dstPort = buf.short.toInt() and 0xFFFF
         val seq = buf.int.toLong() and 0xFFFFFFFFL
         val ack = buf.int.toLong() and 0xFFFFFFFFL
-        val dataOffset = ((buf.get(12).toInt() and 0xFF) ushr 4) * 4
-        if (len < dataOffset) return null
-        val flags = buf.get(13).toInt() and 0xFF
-        val window = buf.getShort(14).toInt() and 0xFFFF
+        val dataOffset = ((buf.get().toInt() and 0xFF) ushr 4) * 4
+        if (dataOffset < 20 || len < dataOffset) return null
+        val flags = buf.get().toInt() and 0xFF
+        val window = buf.short.toInt() and 0xFFFF
         val options = packet.copyOfRange(off + 20, off + dataOffset)
         val data = packet.copyOfRange(off + dataOffset, off + len)
         return TcpSegment(srcPort, dstPort, seq, ack, flags, window, data, options)
