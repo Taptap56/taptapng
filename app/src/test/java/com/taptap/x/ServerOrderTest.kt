@@ -33,7 +33,7 @@ class ServerOrderTest {
             item("c", ""), item("d", ""),
         )
         val reordered = reorderGroupProfiles(full, "", listOf("d", "b", "a", "c"))
-        assertEquals(listOf("d", "b", "x", "c"), reordered.map { it.guid })
+        assertEquals(listOf("d", "b", "x", "a", "c"), reordered.map { it.guid })
     }
 
     @Test
