@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Napas badan kue TB/TC (v1.0.28): ckbreath 3 dtk —
-     scaleX 1 -> 1.012, scaleY 1 -> 0.99, kembali ke 1. -->
-<animator xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Napas badan kue TB/TC (v1.0.32): ckbreath 3 dtk, amplitudo diperbesar dari 1.012/.99 (CSS, ~1%, tidak kelihatan) jadi 1.05/.96 supaya napasnya kelihatan. <objectAnimator> (bukan <animator>): AVD hanya mengikat ObjectAnimator ke target grup. Pivot badan sudah (12,21) di ic_cookie_logo.xml. -->
+<objectAnimator xmlns:android="http://schemas.android.com/apk/res/android"
     android:duration="3000"
-    android:repeatCount="infinite">
+    android:repeatCount="infinite"
+    android:interpolator="@android:interpolator/linear">
     <propertyValuesHolder android:propertyName="scaleX" android:valueType="floatType">
         <keyframe android:fraction="0" android:value="1" />
-        <keyframe android:fraction="0.5" android:value="1.012" />
+        <keyframe android:fraction="0.5" android:value="1.05" />
         <keyframe android:fraction="1" android:value="1" />
     </propertyValuesHolder>
     <propertyValuesHolder android:propertyName="scaleY" android:valueType="floatType">
         <keyframe android:fraction="0" android:value="1" />
-        <keyframe android:fraction="0.5" android:value="0.99" />
+        <keyframe android:fraction="0.5" android:value="0.96" />
         <keyframe android:fraction="1" android:value="1" />
     </propertyValuesHolder>
-</animator>
+</objectAnimator>
