@@ -205,7 +205,18 @@ object VmessCrypto {
 
     const val VERSION: Byte = 0x01
     const val CMD_TCP: Byte = 0x01
-    const val MAX_CHUNK_PLAINTEXT = 8192
+    /**
+     * Max plaintext per body chunk (v1.0.15: 16 KiB, was 8 KiB).
+     * The xray-core server's ChunkStreamReader reads whatever
+     * 2-byte size the peer sends (ReadAtMost(size), no upper-bound
+     * check — only the server's own WRITER slices at 8192), so a
+     * 16 KiB chunk is wire-legal and halves the AEAD ops per byte
+     * on the upload direction. The download direction is still
+     * chunked at 8 KiB by the server; the reader already accepts
+     * any size. 16 KiB also matches the WS frame payload cap, so
+     * one chunk is (almost) one WS frame.
+     */
+    const val MAX_CHUNK_PLAINTEXT = 16384
     const val TAG_LEN = 16
 
     private const val CMD_KEY_MAGIC = "c48619fe-8f02-49e0-b9e9-edf763e17e21"
@@ -499,7 +510,16 @@ class VmessBodyOutputStream(
 
     private val mask = Shake128(iv)
     private val nonce = VmessCrypto.ChunkNonce(iv)
-    private val pending = mutableListOf<Byte>()
+    /**
+     * v1.0.15: the pending bytes live in a reusable ByteArray, not
+     * a MutableList<Byte> — the old list boxed EVERY byte into a
+     * Byte object (1460 allocations per app segment, plus list
+     * growth), the single worst allocation hotspot on the upload
+     * path. Same chunking semantics, zero boxing: write() copies
+     * into the buffer, flushChunk() copies it out once.
+     */
+    private val pendingBuf = ByteArray(VmessCrypto.MAX_CHUNK_PLAINTEXT)
+    private var pendingLen = 0
     private var closed = false
     private val firstChunkLogged = java.util.concurrent.atomic.AtomicBoolean(false)
     /**
@@ -520,11 +540,12 @@ class VmessBodyOutputStream(
         var pos = off
         var remaining = len
         while (remaining > 0) {
-            val take = minOf(VmessCrypto.MAX_CHUNK_PLAINTEXT - pending.size, remaining)
-            for (i in 0 until take) pending.add(b[pos + i])
+            val take = minOf(VmessCrypto.MAX_CHUNK_PLAINTEXT - pendingLen, remaining)
+            b.copyInto(pendingBuf, pendingLen, pos, pos + take)
+            pendingLen += take
             pos += take
             remaining -= take
-            if (pending.size >= VmessCrypto.MAX_CHUNK_PLAINTEXT) flushChunk()
+            if (pendingLen >= VmessCrypto.MAX_CHUNK_PLAINTEXT) flushChunk()
         }
         // First non-empty chunk: emit NOW, unbuffered — never wait
         // for a flush() the caller might forget.
@@ -534,14 +555,14 @@ class VmessBodyOutputStream(
     }
 
     override fun flush() {
-        if (pending.isNotEmpty()) flushChunk()
+        if (pendingLen > 0) flushChunk()
         rawOut.flush()
     }
 
     private fun flushChunk() {
-        if (pending.isEmpty()) return
-        val data = pending.toByteArray()
-        pending.clear()
+        if (pendingLen == 0) return
+        val data = pendingBuf.copyOf(pendingLen)
+        pendingLen = 0
         writeChunk(data)
     }
 

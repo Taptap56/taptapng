@@ -201,6 +201,99 @@ class TcpPacketTest {
         assertEquals("1.2.3.4", TcpPacket.ipToString(serverIp))
     }
 
+    @Test
+    fun `buildTcpInto matches buildTcp byte for byte`() {
+        // v1.0.15: the relay builds into a reusable buffer — the
+        // bytes must be identical to the allocating buildTcp,
+        // including the checksums (ipId differs per call, so the
+        // two packets are built from the same call sequence and
+        // compared field by field, not by raw bytes).
+        val payload = ByteArray(1460) { (it % 251).toByte() }
+        val options = byteArrayOf(1, 1, 4, 2, 1, 3, 3, 5)
+        val a = TcpPacket.buildTcp(
+            clientIp, serverIp, 12345, 443, 1000L, 5000L,
+            TcpPacket.FLAG_PSH or TcpPacket.FLAG_ACK, payload,
+            mss = 1460, options = options, window = 8192,
+        )
+        val buf = ByteArray(2048) // options (12B) + payload 1460B = 1512B
+        val n = TcpPacket.buildTcpInto(
+            buf,
+            clientIp, serverIp, 12345, 443, 1000L, 5000L,
+            TcpPacket.FLAG_PSH or TcpPacket.FLAG_ACK, payload,
+            0, payload.size, mss = 1460, options = options, window = 8192,
+        )
+        assertEquals(a.size, n)
+        // Same bytes except the IP id field (bytes 4-5), which is a
+        // per-call counter.
+        for (i in a.indices) {
+            if (i == 4 || i == 5) continue
+            assertEquals(a[i], buf[i], "byte $i differs")
+        }
+        assertEquals(0, TcpPacket.checksum(buf, 0, 20))
+        assertEquals(0, TcpPacket.tcpChecksum(clientIp, serverIp, buf, 20, n - 20))
+        // Slice form: build from the middle of a larger buffer.
+        val big = ByteArray(4096) { (it % 251).toByte() }
+        val off = 1000
+        val n2 = TcpPacket.buildTcpInto(
+            buf,
+            clientIp, serverIp, 12345, 443, 2000L, 6000L,
+            TcpPacket.FLAG_PSH or TcpPacket.FLAG_ACK, big, off, 1460,
+        )
+        assertEquals(20 + 20 + 1460, n2)
+        val parsed = TcpPacket.parseTcpSegment(buf, 20, n2 - 20)
+        assertNotNull(parsed)
+        assertEquals(2000L, parsed!!.seq)
+        assertTrue(big.copyOfRange(off, off + 1460).contentEquals(parsed.payload))
+    }
+
+    @Test
+    fun `parseTcpSegment matches parseIp plus parseTcp`() {
+        // v1.0.15: the single-copy hot path must agree with the
+        // old two-copy path on every field, including a realistic
+        // SYN with options (data offset 0xA0 — the v1.0.10
+        // signed-byte case) and a data segment.
+        val synOptions = byteArrayOf(
+            2, 4, 0x05, 0xB4, // MSS 1460
+            1, 3, 3, 7, // window scale 7
+            1, 1, 4, 2, // SACK permitted
+            1, 8, 10, 0, 0, 0, 1, 0, 0, 0, 2, // timestamps
+            1, 1, 1, // NOP padding
+        )
+        val syn = TcpPacket.buildTcp(
+            clientIp, serverIp, 12345, 443, 1000L, 0L,
+            TcpPacket.FLAG_SYN, ByteArray(0),
+            mss = 1460, options = synOptions,
+        )
+        val data = TcpPacket.buildTcp(
+            clientIp, serverIp, 12345, 443, 1001L, 5000L,
+            TcpPacket.FLAG_PSH or TcpPacket.FLAG_ACK,
+            "hello-segment".toByteArray(Charsets.UTF_8),
+        )
+        for (pkt in listOf(syn, data)) {
+            val ip = TcpPacket.parseIp(pkt, pkt.size)!!
+            val old = TcpPacket.parseTcp(ip.payload)!!
+            val header = TcpPacket.parseIpHeader(pkt, pkt.size)!!
+            assertEquals(ip.src, header.src)
+            assertEquals(ip.dst, header.dst)
+            assertEquals(ip.protocol, header.protocol)
+            assertEquals(20, header.payloadOff)
+            assertEquals(ip.payload.size, header.payloadLen)
+            val fast = TcpPacket.parseTcpSegment(pkt, header.payloadOff, header.payloadLen)
+            assertNotNull(fast)
+            fast!!
+            assertEquals(old.srcPort, fast.srcPort)
+            assertEquals(old.dstPort, fast.dstPort)
+            assertEquals(old.seq, fast.seq)
+            assertEquals(old.ack, fast.ack)
+            assertEquals(old.flags, fast.flags)
+            assertEquals(old.window, fast.window)
+            assertTrue(old.options.contentEquals(fast.options))
+            assertTrue(old.payload.contentEquals(fast.payload))
+        }
+        assertNull(TcpPacket.parseTcpSegment(ByteArray(10), 0, 10))
+        assertNull(TcpPacket.parseIpHeader(ByteArray(10), 10))
+    }
+
     /** A well-formed ICMP echo request (client -> server), id 0x1234. */
     private fun buildEchoRequest(): ByteArray {
         val icmpPayload = "ping".toByteArray(Charsets.UTF_8)

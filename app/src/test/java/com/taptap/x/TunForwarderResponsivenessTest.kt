@@ -164,12 +164,12 @@ class TunForwarderResponsivenessTest {
 
     @Test
     fun `syn-ack mss comes from the mtu setting`() {
-        // XVEON: clamp(tunMtu - 140, 1140, 1360), capped at the peer MSS.
-        assertEquals(1360, TunForwarder.synAckMss(1500, 1460))
+        // v1.0.15: clamp(tunMtu - 40, 1140, 1460), capped at the peer MSS.
+        assertEquals(1460, TunForwarder.synAckMss(1500, 1460))
         assertEquals(1200, TunForwarder.synAckMss(1500, 1200))
-        assertEquals(1360, TunForwarder.synAckMss(9000, 1460))
+        assertEquals(1460, TunForwarder.synAckMss(9000, 1460))
         assertEquals(1140, TunForwarder.synAckMss(576, 1460))
-        assertEquals(1140, TunForwarder.synAckMss(1280, 1460))
+        assertEquals(1240, TunForwarder.synAckMss(1280, 1460))
     }
 
     @Test

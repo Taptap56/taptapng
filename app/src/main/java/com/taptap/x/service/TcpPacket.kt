@@ -29,6 +29,13 @@ object TcpPacket {
     const val TCP_WINDOW = 65535
 
     /**
+     * Max wire bytes of one relay TCP segment: IP + TCP headers +
+     * MSS, no options (v1.0.15 — the relay's reusable packet
+     * buffer size).
+     */
+    const val MAX_TCP_SEGMENT_BYTES = 20 + 20 + TCP_MSS
+
+    /**
      * Window-scale shift the forwarder echoes when the app's SYN
      * offers window scaling, and the window field it advertises
      * with that shift — the same numbers xray-core's tun stack
@@ -156,6 +163,64 @@ object TcpPacket {
         return TcpSegment(srcPort, dstPort, seq, ack, flags, window, data, options)
     }
 
+    /** IP header fields WITHOUT copying the payload (v1.0.15 hot
+     * path): the TUN reader parses the header in place and only
+     * the TCP data payload is copied out ([parseTcpSegment]). */
+    data class IpHeader(
+        val src: Int,
+        val dst: Int,
+        val protocol: Int,
+        /** Offset of the IP payload inside the packet. */
+        val payloadOff: Int,
+        /** Length of the IP payload (clamped by total-length). */
+        val payloadLen: Int,
+    )
+
+    /** Parse an IPv4 header without copying the payload. Same
+     * validation as [parseIp] (version, header length,
+     * total-length clamp); null for non-IPv4 / truncated input. */
+    fun parseIpHeader(packet: ByteArray, len: Int): IpHeader? {
+        if (len < 20) return null
+        if (packet[0].toInt() shr 4 != 4) return null
+        val ihl = (packet[0].toInt() and 0x0F) * 4
+        if (len < ihl) return null
+        val total = ((packet[2].toInt() and 0xFF) shl 8) or (packet[3].toInt() and 0xFF)
+        val end = minOf(total, len)
+        if (end < ihl) return null
+        val buf = ByteBuffer.wrap(packet, 0, end).order(ByteOrder.BIG_ENDIAN)
+        val protocol = buf.get(9).toInt() and 0xFF
+        val src = buf.getInt(12)
+        val dst = buf.getInt(16)
+        return IpHeader(src, dst, protocol, ihl, end - ihl)
+    }
+
+    /**
+     * Parse a TCP segment that starts at [off] in [packet]
+     * (the IP payload, [len] bytes), copying ONLY the data payload
+     * out — the single-copy hot path (v1.0.15). Equivalent to
+     * [parseIp] + [parseTcp] on the same bytes, minus the
+     * intermediate copy of the whole segment. The payload copy is
+     * load-bearing: the forwarder's writer queue holds it while
+     * the TUN read buffer is reused for the next packet. Same
+     * validation as [parseTcp], including the v1.0.10 signed-byte
+     * data-offset fix.
+     */
+    fun parseTcpSegment(packet: ByteArray, off: Int, len: Int): TcpSegment? {
+        if (len < 20) return null
+        val buf = ByteBuffer.wrap(packet, off, len).order(ByteOrder.BIG_ENDIAN)
+        val srcPort = buf.short.toInt() and 0xFFFF
+        val dstPort = buf.short.toInt() and 0xFFFF
+        val seq = buf.int.toLong() and 0xFFFFFFFFL
+        val ack = buf.int.toLong() and 0xFFFFFFFFL
+        val dataOffset = ((buf.get(12).toInt() and 0xFF) ushr 4) * 4
+        if (len < dataOffset) return null
+        val flags = buf.get(13).toInt() and 0xFF
+        val window = buf.getShort(14).toInt() and 0xFFFF
+        val options = packet.copyOfRange(off + 20, off + dataOffset)
+        val data = packet.copyOfRange(off + dataOffset, off + len)
+        return TcpSegment(srcPort, dstPort, seq, ack, flags, window, data, options)
+    }
+
     /** Parse a UDP datagram. Returns null for truncated input. */
     fun parseUdp(payload: ByteArray): UdpDatagram? {
         if (payload.size < 8) return null
@@ -173,6 +238,10 @@ object TcpPacket {
      * length + value) — the caller must keep the total option
      * length a multiple of 4. [window] is the advertised window
      * field (TCP_WINDOW unless the caller echoes a scale).
+     *
+     * v1.0.15: delegates to [buildTcpInto] — the relay's hot path
+     * builds straight into a reusable buffer instead of allocating
+     * a ByteBuffer + a packet array per segment.
      */
     fun buildTcp(
         srcIp: Int,
@@ -187,11 +256,57 @@ object TcpPacket {
         options: ByteArray = byteArrayOf(),
         window: Int = TCP_WINDOW,
     ): ByteArray {
+        val total = packetTotalLen(payload.size, mss, options)
+        val out = ByteArray(total)
+        buildTcpInto(out, srcIp, dstIp, srcPort, dstPort, seq, ack, flags,
+            payload, 0, payload.size, mss, options, window)
+        return out
+    }
+
+    /** Total wire bytes of a TCP packet for [payloadLen] + options. */
+    fun packetTotalLen(payloadLen: Int, mss: Int, options: ByteArray): Int {
+        val mssOptLen = if (mss > 0) 4 else 0
+        return 20 + 20 + mssOptLen + options.size + payloadLen
+    }
+
+    /**
+     * Build the same packet as [buildTcp], but into the caller-
+     * supplied [out] (which must hold at least
+     * [packetTotalLen] bytes) and return the wire length — no
+     * allocation. The relay reuses one [out] per thread: the
+     * packet is written to the TUN synchronously before the next
+     * build, so reuse is safe. [payloadOff]/[payloadLen] let the
+     * caller build straight from a larger read buffer (no
+     * copyOf per segment); [payloadLen] < 0 means "to the end".
+     */
+    fun buildTcpInto(
+        out: ByteArray,
+        srcIp: Int,
+        dstIp: Int,
+        srcPort: Int,
+        dstPort: Int,
+        seq: Long,
+        ack: Long,
+        flags: Int,
+        payload: ByteArray,
+        payloadOff: Int = 0,
+        payloadLen: Int = -1,
+        mss: Int = 0,
+        options: ByteArray = byteArrayOf(),
+        window: Int = TCP_WINDOW,
+    ): Int {
+        val plen = if (payloadLen < 0) payload.size - payloadOff else payloadLen
+        require(payloadOff >= 0 && plen >= 0 && payloadOff + plen <= payload.size) {
+            "buildTcpInto: payload range tidak valid ($payloadOff..${payloadOff + plen} of ${payload.size})"
+        }
         val mssOptLen = if (mss > 0) 4 else 0
         val optLen = mssOptLen + options.size
-        val tcpLen = 20 + optLen + payload.size
+        val tcpLen = 20 + optLen + plen
         val total = 20 + tcpLen
-        val buf = ByteBuffer.allocate(total).order(ByteOrder.BIG_ENDIAN)
+        require(out.size >= total) {
+            "buildTcpInto: buffer terlalu kecil (${out.size} < $total)"
+        }
+        val buf = ByteBuffer.wrap(out, 0, total).order(ByteOrder.BIG_ENDIAN)
         // IPv4 header.
         buf.put(0x45.toByte())
         buf.put(0)
@@ -219,8 +334,7 @@ object TcpPacket {
             buf.putShort(mss.toShort())
         }
         if (options.isNotEmpty()) buf.put(options)
-        buf.put(payload)
-        val out = buf.array()
+        buf.put(payload, payloadOff, plen)
         // IPv4 header checksum.
         val ipSum = checksum(out, 0, 20)
         out[10] = (ipSum ushr 8).toByte()
@@ -231,7 +345,7 @@ object TcpPacket {
         val tcpSum = tcpChecksum(srcIp, dstIp, out, 20, tcpLen)
         out[36] = (tcpSum ushr 8).toByte()
         out[37] = (tcpSum and 0xFF).toByte()
-        return out
+        return total
     }
 
     /** Build an IPv4 + UDP packet. */

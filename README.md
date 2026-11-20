@@ -1,4 +1,4 @@
-# TaptapX v1.0.1
+# TaptapX v1.0.15
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.1 (vc2)
+- **id** `com.taptap.x`, **versi** 1.0.15 (vc16)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,42 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.15 — Kecepatan relay
+
+Speedtest 2026-11-20 back-to-back (entry sama, kondisi sama):
+v2rayNG 133 Mbps, XVEON ~32 Mbps, TaptapX ~30,9 Mbps. Dua app
+tanpa core mentok di ~30 Mbps — batasnya di relay in-app, bukan
+di server. Perbaikan (tanpa ubah protokol, tanpa core, APK tetap
+~2 MB):
+
+- Chunk VMess 8KB → **16KB** (server xray-core menerima ukuran
+  chunk berapa pun — reader-nya baca 2-byte size tanpa batas
+  atas; yang 8KB itu cuma ukuran tulis server).
+- MSS SYN-ACK 1360 → **1460** (MTU − 40; margin 100B XVEON untuk
+  overhead terowongan luar tidak berlaku di link TUN lokal).
+- Relay baca TUN: satu `read()` tarik sampai **32KB** (dulu satu
+  segmen 1360B per read), segmen dibangun langsung dari buffer
+  baca ke buffer paket yang dipakai ulang (tanpa `copyOf`, tanpa
+  alokasi per segmen).
+- `VmessBodyOutputStream` / `SsBodyOutputStream`: buffer pending
+  jadi `ByteArray` (dulu `MutableList<Byte>` yang me-boxing tiap
+  byte — 1460 alokasi per segmen).
+- Parse TCP satu salinan (dulu `parseIp` + `parseTcp` menyalin
+  segmen dua kali).
+- Window terima tetap 256 KiB (sudah cukup, bukan bottleneck);
+  fd TUN tetap blocking (v1.0.11) jadi sleep 10ms di loop baca
+  tidak pernah jalan saat stream sibuk.
+- Tes baru `RelayThroughputTest` (in-memory, tanpa socket):
+  throughput relay download + round-trip codec chunk VMess,
+  print MB/s di log CI (grep THROUGHPUT), floor konservatif.
+
+**Tes HP (yang menentukan — angka lokal tidak membuktikan
+kenaikan di HP):** Speedtest back-to-back, entry sama, kondisi
+sama, lawan v2rayNG: (1) TaptapX, (2) v2rayNG, (3) TaptapX lagi.
+Laporkan download/upload ketiganya. Target: TaptapX naik dari
+~31 Mbps (tidak dijamin samakan 133 Mbps v2rayNG — jalur data
+native Go tetap lebih cepat dari relay Java tulisan tangan).
 
 ## v1.0.1 — UI dibangun ulang dengan Views + fitur v2rayNG
 

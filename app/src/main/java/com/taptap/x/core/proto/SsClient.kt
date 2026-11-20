@@ -177,7 +177,13 @@ class SsBodyOutputStream(
     private val targetPort: Int,
 ) : OutputStream() {
 
-    private val pending = mutableListOf<Byte>()
+    /**
+     * v1.0.15: same fix as VmessBodyOutputStream — the pending bytes
+     * live in a reusable ByteArray, not a MutableList<Byte> that
+     * boxed every byte. Same chunking semantics, zero boxing.
+     */
+    private val pendingBuf = ByteArray(SsCrypto.MAX_CHUNK_PLAINTEXT)
+    private var pendingLen = 0
     private var counter: Long = 0
     private var firstChunk = true
     private var closed = false
@@ -189,23 +195,24 @@ class SsBodyOutputStream(
         var pos = off
         var remaining = len
         while (remaining > 0) {
-            val take = minOf(SsCrypto.MAX_CHUNK_PLAINTEXT - pending.size, remaining)
-            for (i in 0 until take) pending.add(b[pos + i])
+            val take = minOf(SsCrypto.MAX_CHUNK_PLAINTEXT - pendingLen, remaining)
+            b.copyInto(pendingBuf, pendingLen, pos, pos + take)
+            pendingLen += take
             pos += take
             remaining -= take
-            if (pending.size >= SsCrypto.MAX_CHUNK_PLAINTEXT) flushChunk()
+            if (pendingLen >= SsCrypto.MAX_CHUNK_PLAINTEXT) flushChunk()
         }
     }
 
     override fun flush() {
-        if (pending.isNotEmpty()) flushChunk()
+        if (pendingLen > 0) flushChunk()
         rawOut.flush()
     }
 
     private fun flushChunk() {
-        if (pending.isEmpty() && !firstChunk) return
-        var payload = pending.toByteArray()
-        pending.clear()
+        if (pendingLen == 0 && !firstChunk) return
+        var payload = pendingBuf.copyOf(pendingLen)
+        pendingLen = 0
         if (firstChunk) {
             firstChunk = false
             payload = AddrCodec.encodeSocksTarget(targetHost, targetPort) + payload

@@ -218,10 +218,12 @@ class TunForwarderInstrumentTest {
         // SYN-ACK: MSS 4 + SACK 4 + WS 4 = 12 option bytes.
         assertEquals(12, tcp.options.size)
         val opts = TcpPacket.parseTcpOptions(tcp.options)
-        // v1.0.13, fix A6: the offered MSS comes from the MTU —
-        // clamp(1500 - 140, 1140, 1360) = 1360, capped at the
-        // peer's 1460 — not the peer MSS alone (was 1460).
-        assertEquals(1360, opts.mss)
+        // v1.0.15: the offered MSS comes from the MTU —
+        // clamp(1500 - 40, 1140, 1460) = 1460, capped at the
+        // peer's 1460 — not XVEON's 1360 (the extra 100 bytes
+        // guarded outer-tunnel overhead that does not apply to
+        // the local TUN link).
+        assertEquals(1460, opts.mss)
         assertEquals(5, opts.windowScale) // xray-core shift
         assertTrue(opts.sackPermitted)
         assertEquals(TcpPacket.TCP_WINDOW_SCALED, tcp.window)
@@ -244,9 +246,8 @@ class TunForwarderInstrumentTest {
         tcp!!
         assertEquals(4, tcp.options.size) // MSS only
         val opts = TcpPacket.parseTcpOptions(tcp.options)
-        // v1.0.13, fix A6: MSS from the MTU (1360), not the peer
-        // MSS alone (was 1460).
-        assertEquals(1360, opts.mss)
+        // v1.0.15: MSS from the MTU (1460), not XVEON's 1360.
+        assertEquals(1460, opts.mss)
         assertEquals(null, opts.windowScale)
         assertEquals(false, opts.sackPermitted)
         assertEquals(TcpPacket.TCP_WINDOW, tcp.window)

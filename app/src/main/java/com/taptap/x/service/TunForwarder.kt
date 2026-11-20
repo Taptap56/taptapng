@@ -132,13 +132,30 @@ class TunForwarder(
         const val MAX_WRITER_DRAIN = 8
 
         /**
-         * SYN-ACK MSS from the MTU (v1.0.13, fix A6): XVEON offers
-         * clamp(tunMtu - 140, 1140, 1360), capped at the peer's
-         * MSS — the old code echoed the peer MSS capped at 1460
-         * and ignored the user's MTU setting entirely.
+         * Relay read buffer (v1.0.15): one read() from the proxy
+         * stream pulls up to 32 KiB (several VMess chunks / many
+         * TCP segments) instead of one peer-MSS read per segment —
+         * the old loop did one stream read + one buildTcp + one
+         * TUN write per 1360-byte segment. Segments are still
+         * emitted one by one (a TUN write is one IP packet), but
+         * the read calls and the buildTcp/copyOf per segment are
+         * gone; a short tail segment at a chunk boundary is
+         * correct (the app reassembles by sequence number).
+         */
+        const val RELAY_READ_SIZE = 32 * 1024
+
+        /**
+         * SYN-ACK MSS from the MTU (v1.0.15): MSS = MTU − 40 (IP +
+         * TCP headers), clamped 1140..1460, capped at the peer's
+         * MSS. XVEON used clamp(tunMtu − 140, 1140, 1360) — the
+         * extra 100 bytes guarded the OUTER tunnel overhead, which
+         * does not apply to the local TUN link (the IP packet is
+         * 20 + 20 + MSS ≤ tunMtu either way). The old 1360 cost
+         * ~7% more segments per byte than 1460 for no benefit on
+         * this link.
          */
         fun synAckMss(tunMtu: Int, peerMss: Int): Int =
-            minOf(peerMss, (tunMtu - 140).coerceIn(1140, 1360))
+            minOf(peerMss, (tunMtu - 40).coerceIn(1140, 1460))
 
         /**
          * Short human-readable reason for a dial failure, for the
@@ -253,20 +270,26 @@ class TunForwarder(
     }
 
     private fun handlePacket(buf: ByteArray, len: Int) {
-        val ip = TcpPacket.parseIp(buf, len) ?: return
-        when (ip.protocol) {
+        // v1.0.15: the TCP branch parses the IP header in place
+        // (no copy) and copies only the TCP data payload out —
+        // parseIp + parseTcp copied the whole segment twice per
+        // packet. UDP/ICMP keep parseIp (their payload is held
+        // by a thread / rebuilt, so the copy is load-bearing).
+        val ipH = TcpPacket.parseIpHeader(buf, len) ?: return
+        when (ipH.protocol) {
             TcpPacket.PROTO_TCP -> {
-                val tcp = TcpPacket.parseTcp(ip.payload) ?: return
-                logPacket("TCP", ip.src, tcp.srcPort, ip.dst, tcp.dstPort)
-                handleTcp(ip, tcp)
+                val tcp = TcpPacket.parseTcpSegment(buf, ipH.payloadOff, ipH.payloadLen) ?: return
+                logPacket("TCP", ipH.src, tcp.srcPort, ipH.dst, tcp.dstPort)
+                handleTcp(ipH.src, ipH.dst, tcp)
             }
             TcpPacket.PROTO_UDP -> {
+                val ip = TcpPacket.parseIp(buf, len) ?: return
                 val udp = TcpPacket.parseUdp(ip.payload) ?: return
                 logPacket("UDP", ip.src, udp.srcPort, ip.dst, udp.dstPort)
                 handleUdp(ip, udp)
             }
             TcpPacket.PROTO_ICMP -> {
-                logPacket("ICMP", ip.src, 0, ip.dst, 0)
+                logPacket("ICMP", ipH.src, 0, ipH.dst, 0)
                 val reply = TcpPacket.buildIcmpEchoReply(buf, len) ?: return
                 writePacket(reply)
             }
@@ -276,8 +299,8 @@ class TunForwarder(
 
     // ---- TCP ----
 
-    private fun handleTcp(ip: TcpPacket.IpPacket, tcp: TcpPacket.TcpSegment) {
-        val key = Key(ip.src, tcp.srcPort, ip.dst, tcp.dstPort)
+    private fun handleTcp(srcIp: Int, dstIp: Int, tcp: TcpPacket.TcpSegment) {
+        val key = Key(srcIp, tcp.srcPort, dstIp, tcp.dstPort)
         val session = sessions[key]
         if (tcp.flags and TcpPacket.FLAG_RST != 0) {
             if (session != null) closeSession(session)
@@ -307,7 +330,7 @@ class TunForwarder(
                 thread(name = "tun-dial-${tcp.dstPort}", isDaemon = true) { dial(s) }
             } else if (tcp.flags and TcpPacket.FLAG_ACK == 0) {
                 // Stray non-ACK segment for an unknown connection: refuse.
-                sendRst(ip, tcp)
+                sendRst(srcIp, dstIp, tcp)
             }
             // Pure ACKs for unknown sessions are dropped silently.
             return
@@ -534,23 +557,44 @@ class TunForwarder(
 
     private fun relay(session: TcpSession) {
         val stream = session.stream ?: return
-        // Segments never exceed what the app's SYN offered (v1.0.10).
-        val buf = ByteArray(session.peerMss.coerceIn(1, TcpPacket.TCP_MSS))
+        // v1.0.15: one read() pulls up to RELAY_READ_SIZE (several
+        // VMess chunks) instead of one peer-MSS read per segment,
+        // and segments are built straight from the read buffer
+        // into a reusable packet buffer — no copyOf, no
+        // ByteBuffer.allocate, no packet array per segment. A
+        // short tail segment at a chunk boundary is correct (the
+        // app reassembles by sequence number). Segments never
+        // exceed what the app's SYN offered (v1.0.10).
+        val readBuf = ByteArray(RELAY_READ_SIZE)
+        val pktBuf = ByteArray(TcpPacket.MAX_TCP_SEGMENT_BYTES)
+        // Segments never exceed what the app's SYN offered
+        // (v1.0.10); coerce to >= 1 like the old code did — a
+        // peer MSS of 0 would otherwise emit zero-length segments
+        // forever (pos never advances).
+        val segMss = session.peerMss.coerceIn(1, TcpPacket.TCP_MSS)
+        var buffered = 0
+        var pos = 0
         try {
             while (!session.closed.get()) {
-                val n = stream.input.read(buf)
-                if (n == -1) break
-                if (n > 0) {
-                    val pkt = TcpPacket.buildTcp(
-                        session.key.dstIp, session.key.srcIp,
-                        session.key.dstPort, session.key.srcPort,
-                        session.serverSeq, session.clientSeq,
-                        TcpPacket.FLAG_PSH or TcpPacket.FLAG_ACK,
-                        buf.copyOf(n),
-                    )
-                    writePacket(pkt)
-                    session.serverSeq = (session.serverSeq + n) and 0xFFFFFFFFL
+                if (pos >= buffered) {
+                    val n = stream.input.read(readBuf)
+                    if (n == -1) break
+                    if (n <= 0) continue
+                    buffered = n
+                    pos = 0
                 }
+                val take = minOf(segMss, buffered - pos)
+                val pktLen = TcpPacket.buildTcpInto(
+                    pktBuf,
+                    session.key.dstIp, session.key.srcIp,
+                    session.key.dstPort, session.key.srcPort,
+                    session.serverSeq, session.clientSeq,
+                    TcpPacket.FLAG_PSH or TcpPacket.FLAG_ACK,
+                    readBuf, pos, take,
+                )
+                writePacket(pktBuf, pktLen)
+                pos += take
+                session.serverSeq = (session.serverSeq + take) and 0xFFFFFFFFL
             }
         } catch (_: Exception) {
             // Proxy stream broke: fall through to FIN.
@@ -564,9 +608,9 @@ class TunForwarder(
         // stack (sendSyn) — SACK-permitted and window scale (shift
         // 5, window 256 KiB >> 5) only when the peer offered them;
         // otherwise the plain MSS-only SYN-ACK as before.
-        // v1.0.13, fix A6: the MSS we offer comes from the MTU
-        // setting — clamp(tunMtu - 140, 1140, 1360), capped at the
-        // peer's MSS (XVEON) — instead of the peer MSS alone.
+        // v1.0.15: the MSS we offer comes from the MTU setting —
+        // clamp(tunMtu - 40, 1140, 1460), capped at the peer's
+        // MSS — instead of XVEON's clamp(tunMtu - 140, 1140, 1360).
         val extra = ByteArrayOutputStream()
         if (session.sackOffered) extra.write(byteArrayOf(1, 1, 4, 2))
         if (session.wsOffered) {
@@ -619,9 +663,9 @@ class TunForwarder(
         runCatching { session.stream?.close() }
     }
 
-    private fun sendRst(ip: TcpPacket.IpPacket, tcp: TcpPacket.TcpSegment) {
+    private fun sendRst(srcIp: Int, dstIp: Int, tcp: TcpPacket.TcpSegment) {
         val pkt = TcpPacket.buildTcp(
-            ip.dst, ip.src, tcp.dstPort, tcp.srcPort,
+            dstIp, srcIp, tcp.dstPort, tcp.srcPort,
             0, (tcp.seq + 1) and 0xFFFFFFFFL,
             TcpPacket.FLAG_RST or TcpPacket.FLAG_ACK, ByteArray(0),
         )
@@ -721,10 +765,10 @@ class TunForwarder(
         }
     }
 
-    private fun writePacket(pkt: ByteArray) {
+    private fun writePacket(pkt: ByteArray, len: Int = pkt.size) {
         synchronized(writeLock) {
             runCatching {
-                tunOut.write(pkt)
+                tunOut.write(pkt, 0, len)
                 tunOut.flush()
             }
         }

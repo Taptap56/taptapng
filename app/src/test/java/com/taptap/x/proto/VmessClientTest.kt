@@ -146,6 +146,58 @@ class VmessClientTest {
     }
 
     @Test
+    fun `body chunks are 16 KiB on the wire`() {
+        // v1.0.15: MAX_CHUNK_PLAINTEXT 8192 -> 16384 (the xray-core
+        // server's ChunkStreamReader accepts any 2-byte size, so
+        // this is wire-legal). The chunk sizes are decoded from
+        // the wire with the same Shake mask the writer used
+        // (padding length first, then the size mask) — no
+        // decryption needed to measure the framing. Fails on
+        // v1.0.14 code (max chunk 8192, no 16384 on the wire).
+        val session = VmessSession(
+            requestBytes = ByteArray(0),
+            bodyKey = Crypto.randomBytes(16),
+            bodyIV = Crypto.randomBytes(16),
+            responseBodyKey = Crypto.randomBytes(16),
+            responseBodyIV = Crypto.randomBytes(16),
+            responseV = 0,
+            security = VmessSecurity.AES_128_GCM,
+        )
+        val total = 40_000
+        val data = ByteArray(total) { (it % 251).toByte() }
+        val raw = java.io.ByteArrayOutputStream()
+        val out = VmessBodyOutputStream(raw, session)
+        var pos = 0
+        while (pos < total) {
+            val take = minOf(1460, total - pos)
+            out.write(data, pos, take)
+            pos += take
+        }
+        out.flush()
+        out.close()
+        val wire = raw.toByteArray()
+        val mask = Shake128(session.bodyIV)
+        val sizes = mutableListOf<Int>()
+        var p = 0
+        while (p + 2 <= wire.size) {
+            val masked = ((wire[p].toInt() and 0xFF) shl 8) or (wire[p + 1].toInt() and 0xFF)
+            val paddingLen = mask.nextPaddingLen()
+            val wireSize = masked xor mask.nextUint16()
+            val plainLen = wireSize - VmessCrypto.TAG_LEN - paddingLen
+            sizes.add(plainLen)
+            p += 2 + wireSize
+            if (plainLen == 0) break // termination chunk
+        }
+        assertEquals(total, sizes.filter { it > 0 }.sum())
+        assertTrue(
+            sizes.contains(VmessCrypto.MAX_CHUNK_PLAINTEXT),
+            "no full-size chunk on the wire: $sizes",
+        )
+        assertTrue(sizes.all { it <= VmessCrypto.MAX_CHUNK_PLAINTEXT }, "chunk over limit: $sizes")
+        assertEquals(16384, VmessCrypto.MAX_CHUNK_PLAINTEXT)
+    }
+
+    @Test
     fun `second dial does not close the first stream`() {
         // v1.0.6: every client's dial() used to start with close(),
         // killing the previous stream — two apps connecting at once
