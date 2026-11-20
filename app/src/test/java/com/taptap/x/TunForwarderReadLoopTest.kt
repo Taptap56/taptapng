@@ -69,7 +69,7 @@ class TunForwarderReadLoopTest {
                 }
                 else -> {
                     synchronized(this) {
-                        while (!closed.get()) (this as Object).wait(100)
+                        while (!closed.get()) wait(100)
                     }
                     -1
                 }
@@ -85,7 +85,7 @@ class TunForwarderReadLoopTest {
         override fun close() {
             synchronized(this) {
                 closed.set(true)
-                (this as Object).notifyAll()
+                notifyAll()
             }
         }
     }
