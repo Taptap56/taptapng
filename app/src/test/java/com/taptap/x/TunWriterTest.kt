@@ -26,7 +26,11 @@ import org.junit.jupiter.api.Test
  *   has room (the v1.0.17 bug was every relay stalling behind one
  *   lock + one blocking write),
  * - enqueue copies the buffer (the relay reuses pktBuf),
- * - the TUNWRITER aggregate line appears with all four fields,
+ * - the TUNWRITER aggregate line appears with all eight fields
+ *   (tulis/antriMax/tulisMs/blokirMs + the v1.0.20 histogram
+ *   cepat/sedang/lambat + tulisMaxUs),
+ * - the histogram buckets a slow write into lambat (and records
+ *   its max), and its counts always sum to the window's writes,
  * - stop() drains the queue, then exits.
  */
 class TunWriterTest {
@@ -204,6 +208,89 @@ class TunWriterTest {
         assertTrue(line.contains("antriMax="), line)
         assertTrue(line.contains("tulisMs="), line)
         assertTrue(line.contains("blokirMs="), line)
+        assertTrue(line.contains("cepat="), line)
+        assertTrue(line.contains("sedang="), line)
+        assertTrue(line.contains("lambat="), line)
+        assertTrue(line.contains("tulisMaxUs="), line)
+    }
+
+    /** OutputStream whose write() sleeps ~1 ms: every write must
+     * land in the lambat bucket (> 500 us by construction). */
+    private class SleepingOutputStream(private val sleepMs: Long = 1) : OutputStream() {
+        private val delegate = ByteArrayOutputStream()
+
+        override fun write(b: Int) {
+            write(byteArrayOf(b.toByte()), 0, 1)
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            Thread.sleep(sleepMs)
+            synchronized(delegate) { delegate.write(b, off, len) }
+        }
+
+        fun bytes(): ByteArray = synchronized(delegate) { delegate.toByteArray() }
+    }
+
+    /** Extracts a `name=<digits>` field from a TUNWRITER line. */
+    private fun field(line: String, name: String): Long {
+        val m = Regex("(?:^| )$name=(\\d+)").find(line)
+            ?: error("field $name missing in: $line")
+        return m.groupValues[1].toLong()
+    }
+
+    private fun tunwriterLinesAfter(before: Int): List<String> =
+        DialLog.lines().drop(before).filter { it.contains("TUNWRITER") }
+
+    @Test
+    fun `histogram puts slow writes in lambat and records max`() {
+        // v1.0.20: a write() that sleeps 1 ms is > 500 us by
+        // construction, so every write must land in lambat and the
+        // max must be >= 1000 us. Fails on v1.0.19 code (no
+        // histogram fields at all).
+        val before = DialLog.lines().size
+        val out = SleepingOutputStream()
+        val writer = TunWriter(out, capacity = 64, statsIntervalMs = 5000)
+        writer.start()
+        repeat(8) { writer.enqueue(byteArrayOf(it.toByte())) }
+        assertTrue(waitFor(what = "all packets written") {
+            out.bytes().size == 8
+        })
+        writer.stop()
+        val lines = tunwriterLinesAfter(before)
+        assertTrue(lines.isNotEmpty(), "no TUNWRITER line")
+        val line = lines.last()
+        assertEquals(8, field(line, "tulis"))
+        assertEquals(8, field(line, "lambat"))
+        assertEquals(0, field(line, "cepat"))
+        assertEquals(0, field(line, "sedang"))
+        assertTrue(field(line, "tulisMaxUs") >= 1000, line)
+    }
+
+    @Test
+    fun `histogram counts sum to writes on the fast path`() {
+        // v1.0.20: the three buckets must partition the window's
+        // writes, and a ByteArrayOutputStream write is a pure
+        // syscall, so the fast bucket must be non-empty.
+        val before = DialLog.lines().size
+        val out = ByteArrayOutputStream()
+        val writer = TunWriter(out, capacity = 64, statsIntervalMs = 5000)
+        writer.start()
+        repeat(10) { writer.enqueue(ByteArray(100) { it.toByte() }) }
+        assertTrue(waitFor(what = "all packets written") {
+            synchronized(out) { out.size() } == 1000
+        })
+        writer.stop()
+        val lines = tunwriterLinesAfter(before)
+        assertTrue(lines.isNotEmpty(), "no TUNWRITER line")
+        val line = lines.last()
+        val tulis = field(line, "tulis")
+        assertEquals(10, tulis)
+        assertEquals(
+            tulis,
+            field(line, "cepat") + field(line, "sedang") + field(line, "lambat"),
+            line,
+        )
+        assertTrue(field(line, "cepat") > 0, line)
     }
 
     @Test
@@ -221,10 +308,11 @@ class TunWriterTest {
     }
 
     @Test
-    fun `writer line formats all four fields`() {
+    fun `writer line formats all eight fields`() {
         assertEquals(
-            "tulis=1234 antriMax=57 tulisMs=812ms blokirMs=0ms",
-            TunWriter.writerLine(1234, 57, 812, 0),
+            "tulis=1234 antriMax=57 tulisMs=812ms blokirMs=0ms " +
+                "cepat=1200 sedang=30 lambat=4 tulisMaxUs=2341us",
+            TunWriter.writerLine(1234, 57, 812, 0, 1200, 30, 4, 2341),
         )
     }
 }

@@ -1,4 +1,4 @@
-# TaptapX v1.0.19
+# TaptapX v1.0.20
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.19 (vc20)
+- **id** `com.taptap.x`, **versi** 1.0.20 (vc21)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,71 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.20 — Selidiki penulis TUN: histogram durasi write (bukan tebakan)
+
+**Pertanyaan yang harus dijawab — dari log HP v1.0.19, bukan
+tebakan.** Log v1.0.19 (taptapx-f3e2b3f2.txt, Speedtest 16:15,
+52,4 Mbps) membuktikan buffer socket bekerja: `SOCKET
+rcv=2097152 snd=524288` (penuh dikabulkan, kernel gandakan), data
+dari proxy datang 12× lebih cepat (`tls+net` 15170ms → 1281ms per
+koneksi). Tapi bottleneck PINDAH ke antrean TunWriter: `antriMax=
+1024` (penuh) di 3 jendela 5 dtk berturut-turut, `blokirMs=
+53840/72067/26184ms`, relay 81% waktunya nge-blok di enqueue
+(`tun=9811ms` dari 12,1 dtk), penulis tunggal jenuh ~5000
+tulis/dtk (`tulisMs=3918ms` per jendela 5 dtk, ~0,15ms per write).
+Ceiling penulis ≈ 5000 × 1460B ≈ 58 Mbps — Speedtest 52,4 Mbps
+tepat di bawahnya. Yang belum terjawab: kenapa tiap `write()`
+makan ~0,15ms — (a) nge-blok karena antrean TUN kernel penuh
+(laju kuras kernel/app adalah ceiling), atau (b) overhead
+syscall/kernel per write?
+
+**Yang diubah: instrumentasi pemisah, BUKAN jalur tulis.**
+`TunWriter` kini mengukur durasi tiap `write()` dan
+mengelompokkannya di baris agregat `TUNWRITER`: `cepat` (< 50 us,
+syscall murni), `sedang` (50 us–0,5 ms), `lambat` (> 0,5 ms,
+hampir pasti nge-blok di antrean penuh), plus `tulisMaxUs`
+(write terlama di jendela, dalam mikrodetik). Ketiga hitungan
+selalu berjumlah `tulis`. Cara baca: garis bimodal (kebanyakan
+cepat + ekor lambat) membuktikan (a); distribusi rapat di sedang
+membuktikan (b). Tanpa pemisah ini, perbaikan berikutnya cuma
+tebak-tebakan — dan v1.0.15 sudah membuktikan tebak-tebakan gagal.
+
+**Yang TIDAK diubah — dan kenapa (bukti lokal, bukan opini).**
+Benchmark lokal di VM (20.000 write 1460B ke kernel pipe yang
+terus dikuras): write mentah median ~2 us untuk FileOutputStream
+(p50 2,1 us) MAUPUN FileChannel heap/direct (p50 1,4–1,5 us) —
+beda API cuma ~0,7 us per write, tidak ada artinya di samping
+150 us di HP, jadi penulis TIDAK dipindah ke NIO. Dengan drainer
+pelan (buffer pipe penuh, write nge-blok) tandanya bimodal: p50
+tetap ~1,4 us tapi p99 ~1 ms dan 93/3000 write masuk lambat —
+persis yang histogram di atas dirancang untuk mendeteksi. Fd
+non-blocking: tidak menaikkan laju — penulis tidak punya kerja
+lain selagi antrean penuh, dan fd-nya dipakai bersama sisi baca
+(v1.0.11 membersihkan O_NONBLOCK untuk read). Beberapa thread
+penulis: kernel menserialisasi write ke satu fd TUN, dan urutan
+per koneksi yang dijamin TunWriter akan rusak. Antrean lebih
+besar (1024 → 4096): cuma menunda blokir, laju tulis steady-state
+tetap — bukan perbaikan. `txqueuelen` TUN: butuh CAP_NET_ADMIN,
+yang tidak dimiliki app — app tidak bisa memperbesar antrean
+kernel. **Bila histogram membuktikan (a), ceiling-nya adalah
+laju kuras kernel/app dan tidak ada perubahan jalur tulis di app
+yang bisa menaikkannya — log berikutnya yang akan bilang begitu,
+bukan klaim.**
+
+Tidak ada perubahan lain: protokol, relay, buffer socket
+(v1.0.19), TunWriter (kecuali histogram), MSS/chunk, UI tetap
+seperti v1.0.19.
+
+**Tes HP** — konek entry biasa (VMess yang sama), jalankan SATU
+Speedtest sampai SELESAI, BARU export Log + kirim file log +
+screenshot hasil. Yang menentukan: angka download (bandingkan
+langsung dengan 52,4 Mbps di v1.0.19) DAN baris `TUNWRITER` yang
+baru — `cepat`/`sedang`/`lambat` + `tulisMaxUs` menunjukkan
+apakah write nge-blok di antrean penuh (bimodal) atau memang
+mahal per syscall (rapat di sedang). Bila antrean masih penuh
+dan distribusinya bimodal, itu bukti laju kuras kernel/app yang
+membatasi — dan v1.0.20 tidak mengklaim menaikkan angka.
 
 ## v1.0.19 — Buffer socket proxy naik (hipotesis window/RTT)
 

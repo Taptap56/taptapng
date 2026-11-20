@@ -43,7 +43,10 @@ import java.util.concurrent.atomic.AtomicLong
  *     tun means the relay is no longer stuck behind it; the real
  *     fd-write cost is in the TUNWRITER aggregate line — if the
  *     writer is still the bottleneck, tulisMs there stays large
- *     and blokirMs grows).
+ *     and blokirMs grows. v1.0.20 splits that cost into a
+ *     histogram — cepat/sedang/lambat + tulisMaxUs — so a
+ *     blocked-on-full-queue tail can be told apart from a
+ *     uniformly expensive write).
  *
  * Upload (TUN → proxy, light): upW = writer thread's write+flush
  * wall time (VMess seal + WS frame + TLS wrap + socket write,
