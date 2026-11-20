@@ -9,10 +9,11 @@
     android:padding="16dp">
 
     <ImageView
+        android:id="@+id/drawer_logo"
         android:layout_width="120dp"
         android:layout_height="120dp"
         android:contentDescription="@null"
-        android:src="@mipmap/ic_launcher" />
+        android:src="@drawable/avd_cookie_logo" />
 
     <TextView
         android:layout_width="wrap_content"

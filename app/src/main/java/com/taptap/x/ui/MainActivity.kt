@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.drawable.Animatable
 import android.net.VpnService
 import android.os.Bundle
 import android.view.Gravity
@@ -29,6 +30,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -49,6 +51,7 @@ import com.taptap.x.service.TaptapVpnService
 import com.taptap.x.ui.log.LogActivity
 import com.taptap.x.ui.main.MainViewModel
 import com.taptap.x.ui.main.ServerAdapter
+import com.taptap.x.ui.main.buildExportClipboardText
 import com.taptap.x.ui.main.shouldRestartOnSelect
 import com.taptap.x.ui.scanner.ScannerActivity
 import com.taptap.x.ui.server.ServerEditorActivity
@@ -101,20 +104,6 @@ class MainActivity : AppCompatActivity() {
         toastImportResult(count)
     }
 
-    private val fileExportLauncher = registerForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        if (uri == null) return@registerForActivityResult
-        runCatching {
-            contentResolver.openOutputStream(uri)?.bufferedWriter()?.use {
-                it.write(viewModel.exportProfilesJson())
-            }
-            Toast.makeText(this, R.string.toast_exported, Toast.LENGTH_SHORT).show()
-        }.onFailure {
-            Toast.makeText(this, getString(R.string.toast_import_failed, it.message), Toast.LENGTH_SHORT).show()
-        }
-    }
-
     private val qrScanLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -155,6 +144,21 @@ class MainActivity : AppCompatActivity() {
             true
         }
 
+        // v1.0.28: logo kue TB/TC bergerak hanya saat drawer terbuka
+        // (persis CSS TB/TC: animasi jalan hanya bila drawer open).
+        val navHeader = findViewById<NavigationView>(R.id.nav_view).getHeaderView(0)
+        val drawerLogo = navHeader.findViewById<ImageView>(R.id.drawer_logo).drawable as? Animatable
+        drawerLayout.addDrawerListener(object : DrawerLayout.DrawerListener {
+            override fun onDrawerOpened(drawerView: View) {
+                drawerLogo?.start()
+            }
+            override fun onDrawerClosed(drawerView: View) {
+                drawerLogo?.stop()
+            }
+            override fun onDrawerSlide(drawerView: View, slideOffset: Float) = Unit
+            override fun onDrawerStateChanged(newState: Int) = Unit
+        })
+
         adapter = ServerAdapter(object : ServerAdapter.Callbacks {
             override fun onSelect(guid: String) {
                 // v1.0.10: like v2rayNG, tapping a different server
@@ -176,6 +180,42 @@ class MainActivity : AppCompatActivity() {
         })
         recyclerView.adapter = adapter
         applyLayoutManager()
+
+        // v1.0.28: tekan lama = drag untuk mengurutkan (v2rayNG).
+        // Drag hanya di mode list dan bila tidak ada pencarian aktif
+        // (mirip v2rayNG: canReorder = groupId tidak kosong dan
+        // searchQuery kosong). Urutan disimpan sekali saat drag
+        // selesai (clearView), bukan tiap langkah.
+        val touchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(
+            ItemTouchHelper.UP or ItemTouchHelper.DOWN or
+                ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT,
+            0
+        ) {
+            override fun isLongPressDragEnabled(): Boolean =
+                !settings.doubleColumnDisplay && viewModel.searchQuery.value.isEmpty()
+
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder,
+            ): Boolean {
+                val from = viewHolder.bindingAdapterPosition
+                val to = target.bindingAdapterPosition
+                if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) {
+                    return false
+                }
+                adapter.moveItem(from, to)
+                return true
+            }
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) = Unit
+
+            override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
+                super.clearView(recyclerView, viewHolder)
+                viewModel.applyReorderedVisible(adapter.items.map { it.guid })
+            }
+        })
+        touchHelper.attachToRecyclerView(recyclerView)
 
         tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
@@ -213,6 +253,9 @@ class MainActivity : AppCompatActivity() {
     private fun applyLayoutManager() {
         lastDoubleColumn = settings.doubleColumnDisplay
         adapter.gridMode = settings.doubleColumnDisplay
+        // v1.0.28: drag-reorder hanya di mode list (di grid tombol
+        // aksi disembunyikan dan tekan lama membuka menu).
+        adapter.dragReorderEnabled = !settings.doubleColumnDisplay
         recyclerView.layoutManager = if (settings.doubleColumnDisplay) {
             GridLayoutManager(this, 2)
         } else {
@@ -420,7 +463,7 @@ class MainActivity : AppCompatActivity() {
                     val n = viewModel.removeInvalid()
                     Toast.makeText(this, getString(R.string.toast_deleted) + " ($n)", Toast.LENGTH_SHORT).show()
                 }
-                R.id.more_export_all -> fileExportLauncher.launch("taptapx-profiles.json")
+                R.id.more_export_all -> exportVisibleToClipboard()
                 R.id.more_locate_selected -> locateSelected()
                 R.id.more_sort_by_test -> viewModel.sortByDelay()
                 R.id.more_test_all -> viewModel.testAll(false)
@@ -572,9 +615,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * v1.0.28: "Export configs to clipboard" (v2rayNG
+     * exportAllAsync) — salin share link semua config yang tampil
+     * ke clipboard, tanpa file. Kosong = toast, bukan clipboard
+     * kosong.
+     */
+    private fun exportVisibleToClipboard() {
+        val text = buildExportClipboardText(viewModel.visibleProfiles.value)
+        if (text.isBlank()) {
+            Toast.makeText(this, R.string.toast_nothing_to_export, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("TaptapNG", text))
+        Toast.makeText(this, R.string.toast_exported, Toast.LENGTH_SHORT).show()
+    }
+
     private fun copyToClipboard(text: String) {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("TaptapX", text))
+        clipboard.setPrimaryClip(ClipData.newPlainText("TaptapNG", text))
         Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
     }
 

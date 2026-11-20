@@ -29,9 +29,18 @@ class ServerAdapter(
         fun onLongPress(item: ProfileItem)
     }
 
-    var items: List<ProfileItem> = emptyList()
+    /**
+     * v1.0.28: daftar disimpan di backing list privat supaya
+     * [moveItem] bisa menggeser satu baris tanpa memicu setter
+     * (setter = notifyDataSetChanged penuh, yang membatalkan drag
+     * ItemTouchHelper di tengah jalan).
+     */
+    private val mutableItems = mutableListOf<ProfileItem>()
+    var items: List<ProfileItem>
+        get() = mutableItems
         set(value) {
-            field = value
+            mutableItems.clear()
+            mutableItems.addAll(value)
             notifyDataSetChanged()
         }
 
@@ -66,6 +75,27 @@ class ServerAdapter(
             field = value
             notifyDataSetChanged()
         }
+
+    /**
+     * v1.0.28: true di mode list — tekan lama = drag reorder
+     * (ItemTouchHelper), jadi long-click menu dimatikan; false di
+     * mode grid — tekan lama tetap buka menu (tombol aksi
+     * disembunyikan di grid, menu satu-satunya jalan edit/share/
+     * hapus di sana).
+     */
+    var dragReorderEnabled: Boolean = false
+
+    /**
+     * v1.0.28: geser satu baris (drag reorder). Hanya ubah backing
+     * list + notifyItemMoved — persistensi dilakukan pemanggil saat
+     * drag selesai (clearView), bukan di sini.
+     */
+    fun moveItem(from: Int, to: Int) {
+        if (from == to) return
+        if (from !in mutableItems.indices || to !in mutableItems.indices) return
+        mutableItems.add(to, mutableItems.removeAt(from))
+        notifyItemMoved(from, to)
+    }
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val accentBar: View = view.findViewById(R.id.accent_bar)
@@ -122,9 +152,15 @@ class ServerAdapter(
         holder.btnDelete.visibility = buttonsVisible
 
         holder.itemView.setOnClickListener { callbacks.onSelect(item.guid) }
-        holder.itemView.setOnLongClickListener {
-            callbacks.onLongPress(item)
-            true
+        // v1.0.28: tekan lama = drag reorder bila aktif; kalau tidak,
+        // tekan lama buka menu (mode grid).
+        if (dragReorderEnabled) {
+            holder.itemView.setOnLongClickListener(null)
+        } else {
+            holder.itemView.setOnLongClickListener {
+                callbacks.onLongPress(item)
+                true
+            }
         }
         holder.btnShare.setOnClickListener { callbacks.onShare(item) }
         holder.btnEdit.setOnClickListener { callbacks.onEdit(item) }

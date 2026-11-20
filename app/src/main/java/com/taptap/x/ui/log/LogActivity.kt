@@ -50,7 +50,7 @@ class LogActivity : AppCompatActivity() {
             R.id.action_copy -> {
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(
-                    ClipData.newPlainText("TaptapX log", logText.text.toString())
+                    ClipData.newPlainText("TaptapNG log", logText.text.toString())
                 )
                 Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
                 return true

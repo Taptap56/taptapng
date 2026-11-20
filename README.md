@@ -1,4 +1,4 @@
-# TaptapX v1.0.27
+# TaptapNG v1.0.28
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.27 (vc28)
+- **id** `com.taptap.x`, **versi** 1.0.28 (vc29)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,108 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.28 — Hijau TB/TC + logo kue bergerak + reorder + export clipboard + TaptapNG
+
+**Kenapa.** Screenshot + pesan user 2026-11-21 03:02: warna aksen
+oranye minta diganti hijau ala TB/TC; logo drawer minta sama
+seperti TB/TC dan bergerak; 3 tombol aksi tiap baris terlalu
+rapat; tombol hapus langsung menghapus tanpa konfirmasi; tekan
+lama entry di v2rayNG bisa mengurutkan; export config minta ke
+clipboard saja seperti v2rayNG. Plus: nama aplikasi jadi
+**TaptapNG** (sebelumnya TaptapX).
+
+**1. Aksen oranye → hijau TB/TC.** Sumber hijau: WebUI TB/TC
+(`style.css` baris 1): `:root{--acc:#22e6a8; --acc2:#0fb88a;
+--green:#4fe08a;}` + mint pucat `#9df0cf`/`#b6ffe6` dan hijau
+gelap `#0b3a2b`/`#03241b`. Dipakai: tema gelap `#22E6A8`
+(persis `--acc`, WebUI TB/TC memang berlatar gelap), tema terang
+`#0FB88A` (`--acc2`, lebih gelap supaya teks tetap terbaca di
+latar putih); chip terpilih mint pucat `#B6FFE6` + teks hijau
+gelap `#0B3A2B` (terang) / isi `#0B3A2B` + teks `#B6FFE6`
+(gelap); thumb switch nyala `#03241B` (gelap, dulu `#4E2600`),
+terang tetap putih. Yang berubah: `colors.xml` +
+`values-night/colors.xml` (colorAccent, colorSecondary,
+colorConfigType, colorFabActive, chip_selected_*, switch_thumb_
+checked) — jadi FAB, teks protokol baris server, header seksi
+Settings (dulu `#f97910`), chip terpilih, dan rel switch ikut
+hijau. Layout/struktur tetap ala v2rayNG, hanya warnanya.
+
+**2. Logo drawer = kue TB/TC + bergerak.** SVG `#cklogo` WebUI
+TB/TC (`index.html`, viewBox 0.8 0.6 22.4 22.4) diport ke
+VectorDrawable `ic_cookie_logo.xml`: blob badan + gradien
+radial/linear + bintik + 6 chip "T" (posisi/rotasi/skala
+verbatim). Animasi `avd_cookie_logo.xml`: badan bernapas
+(`ckbreath` 3 dtk, scaleX 1→1.012, scaleY 1→0.99), tiap chip
+berlari + melompat 6 dtk dengan stagger 0–5 dtk
+(`cookie_chip_hop1..6.xml`, jalur `ckrun` + puncak `ckhop`
+digabung per chip). Dijalankan MainActivity saat drawer dibuka,
+dihentikan saat ditutup — persis CSS TB/TC yang hanya
+menganimasikan saat drawer terbuka. Yang tidak sama persis:
+animasi masuk chip jatuh dari atas + fade (`ckdrop` 1,5 dtk)
+tidak diport — AVD tidak bisa menganimasikan alpha grup, dan
+animator sekali-jalan-lalu-loop tidak ada; bintik 26 → 12;
+bayangan chip dihilangkan (satu path per chip). Ikon launcher
+tetap X oranye (mipmap, di luar cakupan).
+
+**3. Tombol aksi baris lebih renggang.** `item_server.xml`:
+`btn_edit` dan `btn_delete` masing-masing
+`layout_marginStart="8dp"` — jarak antar ikon 8dp → 20dp
+(v2rayNG 24dp).
+
+**4. Hapus minta konfirmasi OK/No.** `SettingsStore.DEFAULT_
+CONFIRM_REMOVE` false → **true**. Dialog konfirmasi sudah ada
+(`deleteServer` → `confirm()` bila `settings.confirmRemove`),
+tapi default OFF membuatnya tidak pernah muncul di HP user —
+v2rayNG defaultnya juga false. Setting "Delete config
+confirmation" tetap ada di Settings; mematikannya mengembalikan
+hapus langsung. Caveat: bila dialog tetap tidak muncul,
+setting itu pernah dimatikan manual di HP.
+
+**5. Tekan lama = drag reorder (v2rayNG).** `ItemTouchHelper`
+di RecyclerView (long-press drag UP/DOWN/LEFT/RIGHT, mode list
+saja; mati saat pencarian aktif — sama seperti v2rayNG
+`canReorder`). `ServerAdapter.moveItem` geser backing list +
+`notifyItemMoved` (tanpa `notifyDataSetChanged` yang membatalkan
+drag); urutan disimpan sekali saat drag selesai
+(`MainViewModel.applyReorderedVisible` → `ProfileStore.
+replaceAll`, fungsi murni `reorderGroupProfiles`: slot grup
+dipertahankan, anggota grup yang tidak disebut menempel sesudah
+yang disebut dalam urutan semula). Di mode grid tekan lama tetap
+buka menu (tombol aksi disembunyikan di sana). Batas: saat
+pencarian aktif di mode list, tekan lama tidak berbuat apa-apa
+(drag mati karena pencarian aktif, dan menu long-click dimatikan
+selama drag-reorder aktif) — tombol aksi baris tetap jalan.
+
+**6. Export ke clipboard, bukan file.** Menu ⋮ "Export configs
+to file" → **"Export configs to clipboard"** (v2rayNG
+`exportAllAsync` → `shareNonCustomConfigsToClipboard`): share
+link config yang tampil, satu per baris
+(`buildExportClipboardText`, fungsi murni), disalin via
+ClipboardManager; kosong = toast "Nothing to export".
+`fileExportLauncher` (CreateDocument) dan `exportProfilesJson()`
+dihapus — tidak ada lagi export ke file.
+
+**Rename TaptapX → TaptapNG.** Yang berubah HANYA string
+terlihat user: `app_name`, `toast_not_available`, `about_text`,
+channel notifikasi "TaptapNG VPN", judul notifikasi, label
+clipboard, `AppConfig.APP_NAME`. Tetap: package `com.taptap.x`
+(update di tempat, profil/entry kebawa), nama repo, nama class
+Kotlin (`TaptapXApp`, `Theme.TaptapX`, `Widget.TaptapX.Chip.
+Filter`), `DialLog.TAG = "TaptapX-Dial"`. Bonus: `AppConfig.
+VERSION_NAME` yang tertinggal "1.0.25" sejak v1.0.26 kini
+"1.0.28" — About selama ini menampilkan versi salah.
+
+**Tes (JVM, baru):** `ServerOrderTest` (6 tes: reorder dalam
+grup + grup lain diam, anggota tak disebut menempel, guid tak
+dikenal/duplikat diabaikan, grup kosong tak berubah, export 2
+baris `vmess://`, export kosong = "") + `SettingsDefaultsTest`
+(default konfirmasi hapus kini true). **Belum terbukti di HP:**
+warna hijau di semua permukaan (FAB, chip, switch, header
+Settings, teks protokol); kue bergerak saat drawer dibuka dan
+berhenti saat ditutup; jarak tombol; dialog hapus muncul; drag
+reorder tersimpan sesudah tutup-buka aplikasi; export mengisi
+clipboard; nama TaptapNG di launcher/drawer/About/notifikasi.
 
 ## v1.0.27 — Settings dirapikan ala v2rayNG
 

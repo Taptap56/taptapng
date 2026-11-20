@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Logo kue TB/TC bergerak (v1.0.28): badan bernapas 3 dtk,
+     6 chip berlari + melompat 6 dtk dengan stagger seperti di
+     WebUI TB/TC. Dijalankan MainActivity saat drawer dibuka,
+     dihentikan saat drawer ditutup (persis CSS TB/TC yang hanya
+     menganimasikan saat drawer terbuka). -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_cookie_logo">
+    <target
+        android:name="cookie_body"
+        android:animation="@animator/cookie_body_breath" />
+    <target
+        android:name="chip1"
+        android:animation="@animator/cookie_chip_hop1" />
+    <target
+        android:name="chip2"
+        android:animation="@animator/cookie_chip_hop2" />
+    <target
+        android:name="chip3"
+        android:animation="@animator/cookie_chip_hop3" />
+    <target
+        android:name="chip4"
+        android:animation="@animator/cookie_chip_hop4" />
+    <target
+        android:name="chip5"
+        android:animation="@animator/cookie_chip_hop5" />
+    <target
+        android:name="chip6"
+        android:animation="@animator/cookie_chip_hop6" />
+</animated-vector>

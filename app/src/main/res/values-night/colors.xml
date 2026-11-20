@@ -1,15 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- v2rayNG palette, 1:1 (dark). -->
+    <!-- v2rayNG palette, 1:1 (dark) — kecuali aksen: v1.0.28 ganti
+         oranye #F97910 jadi hijau TB/TC (WebUI TB/TC style.css
+         `:root{acc:#22e6a8; acc2:#0fb88a; green:#4fe08a}`).
+         Tema gelap pakai acc #22E6A8 (persis WebUI TB/TC yang
+         memang berlatar gelap). -->
     <color name="colorPrimary">#FFC0C0C0</color>
     <color name="colorPrimaryDark">#FF000000</color>
-    <color name="colorAccent">#FFF97910</color>
-    <color name="colorSecondary">#FFF97910</color>
+    <color name="colorAccent">#FF22E6A8</color>
+    <color name="colorSecondary">#FF22E6A8</color>
     <color name="colorTertiary">#FF83D6B5</color>
     <color name="colorPing">#FF009966</color>
     <color name="colorPingRed">#FFFF0099</color>
-    <color name="colorConfigType">#FFF97910</color>
-    <color name="colorFabActive">#FFF97910</color>
+    <color name="colorConfigType">#FF22E6A8</color>
+    <color name="colorFabActive">#FF22E6A8</color>
     <color name="colorFabInactive">#FF646464</color>
     <color name="windowBackground">#FF1C1B1F</color>
     <color name="surface">#FF1C1B1F</color>
@@ -18,9 +22,13 @@
     <color name="divider">#FF424242</color>
     <!-- v1.0.26: warna M3 FilterChip + Switch v2rayNG (Theme.kt,
          dark): secondaryContainer coklat, onSecondaryContainer oranye
-         pucat, outline abu-abu keunguan, onSecondary coklat tua. -->
-    <color name="chip_selected_background">#FF6F3800</color>
-    <color name="chip_selected_text">#FFFFE8D6</color>
+         pucat, outline abu-abu keunguan, onSecondary coklat tua.
+         v1.0.28: hijau TB/TC — secondaryContainer hijau gelap
+         #0B3A2B, onSecondaryContainer mint pucat #B6FFE6,
+         onSecondary hijau paling gelap #03241B (semuanya dari CSS
+         WebUI TB/TC). -->
+    <color name="chip_selected_background">#FF0B3A2B</color>
+    <color name="chip_selected_text">#FFB6FFE6</color>
     <color name="chip_outline">#FF938F99</color>
-    <color name="switch_thumb_checked">#FF4E2600</color>
+    <color name="switch_thumb_checked">#FF03241B</color>
 </resources>

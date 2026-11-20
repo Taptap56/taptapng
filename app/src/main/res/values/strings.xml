@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">TaptapX</string>
+    <string name="app_name">TaptapNG</string>
 
     <string name="title_server">Config</string>
     <string name="menu_settings">Settings</string>
@@ -49,7 +49,7 @@
     <string name="more_delete_all">Delete configs</string>
     <string name="more_delete_duplicate">Delete duplicate configs</string>
     <string name="more_delete_invalid">Delete invalid configs</string>
-    <string name="more_export_all">Export configs to file</string>
+    <string name="more_export_all">Export configs to clipboard</string>
     <string name="more_locate_selected">Find selected configuration</string>
     <string name="more_sort_by_test">Sort by test results</string>
     <string name="more_test_all">Test TCP delays (TCPing)</string>
@@ -129,7 +129,7 @@
     <string name="toast_import_failed">Import failed: %1$s</string>
     <string name="toast_copied">Copied to clipboard</string>
     <string name="toast_deleted">Deleted</string>
-    <string name="toast_not_available">Not available in TaptapX yet</string>
+    <string name="toast_not_available">Not available in TaptapNG yet</string>
     <string name="toast_no_server_selected">No server selected</string>
     <string name="toast_vpn_denied">VPN permission denied</string>
     <string name="toast_address_required">Address is required</string>
@@ -137,7 +137,8 @@
     <string name="toast_payload_required">Payload is required when the Payload chip is on</string>
     <string name="toast_slowdns_required">SlowDNS needs NS + public key</string>
     <string name="toast_testing">Testing…</string>
-    <string name="toast_exported">Exported to file</string>
+    <string name="toast_exported">Exported to clipboard</string>
+    <string name="toast_nothing_to_export">Nothing to export</string>
     <string name="toast_qr_no_camera">Camera permission is required to scan QR codes</string>
     <string name="toast_qr_invalid">QR code is not a server config</string>
 
@@ -188,5 +189,5 @@
 
     <!-- About. -->
     <string name="about_title">About</string>
-    <string name="about_text">TaptapX %1$s\n\nv2rayNG-style UI, rebuilt with Android Views.\nProtocols run in-app (SSH via JSch, no xray-core bundled).</string>
+    <string name="about_text">TaptapNG %1$s\n\nv2rayNG-style UI, rebuilt with Android Views.\nProtocols run in-app (SSH via JSch, no xray-core bundled).</string>
 </resources>

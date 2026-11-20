@@ -86,6 +86,15 @@ class ProfileStore(private val file: File) {
         }
     }
 
+    /**
+     * v1.0.28: ganti seluruh daftar profil (drag-reorder) lalu
+     * simpan. Isi tiap profil tidak berubah — hanya urutannya.
+     */
+    fun replaceAll(newOrder: List<ProfileItem>) {
+        profiles = newOrder.toMutableList()
+        save()
+    }
+
     fun add(item: ProfileItem) {
         profiles.add(item)
         save()

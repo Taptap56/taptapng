@@ -209,7 +209,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun exportLinks(): List<String> =
         store.profiles.mapNotNull { LinkParser.toUri(it) }
 
-    fun exportProfilesJson(): String = gson.toJson(store.profiles)
+    /**
+     * v1.0.28: simpan urutan hasil drag-reorder (v2rayNG moveServer).
+     * [orderedGuids] = guid baris yang tampil, sesudah digeser.
+     * Hanya grup yang tampil yang diurutkan ulang; profil grup lain
+     * tetap di tempatnya. Tidak ada perubahan bila urutannya sama.
+     */
+    fun applyReorderedVisible(orderedGuids: List<String>) {
+        val reordered = reorderGroupProfiles(store.profiles, _selectedGroup.value, orderedGuids)
+        if (reordered == store.profiles) return
+        store.replaceAll(reordered)
+        afterStoreChange()
+    }
 
     fun sortByDelay() {
         val order = _delays.value
@@ -370,3 +381,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
  */
 fun shouldRestartOnSelect(isRunning: Boolean, currentGuid: String?, newGuid: String): Boolean =
     isRunning && newGuid != currentGuid
+
+/**
+ * Drag-reorder dalam satu grup (v1.0.28 — v2rayNG moveServer):
+ * slot-slot grup di daftar penuh dipertahankan posisinya, diisi
+ * ulang mengikuti [orderedGuids]; profil grup lain tidak bergerak.
+ * Anggota grup yang tidak disebut di [orderedGuids] (mis. disaring
+ * pencarian) menempel sesudah yang disebut, dalam urutan semula.
+ * Pure, jadi bisa dites tanpa Application.
+ */
+fun reorderGroupProfiles(
+    full: List<ProfileItem>,
+    group: String,
+    orderedGuids: List<String>,
+): List<ProfileItem> {
+    val groupItems = full.filter { it.group == group }
+    if (groupItems.isEmpty()) return full
+    val byGuid = groupItems.associateBy { it.guid }
+    val listed = orderedGuids.distinct().mapNotNull { byGuid[it] }
+    val listedSet = listed.map { it.guid }.toSet()
+    val ordered = listed + groupItems.filter { it.guid !in listedSet }
+    val queue = ArrayDeque(ordered)
+    return full.map { if (it.group == group) queue.removeFirst() else it }
+}
+
+/**
+ * Teks "Export configs to clipboard" (v1.0.28 — v2rayNG
+ * exportAllAsync): share link tiap profil yang tampil, satu per
+ * baris; profil yang tidak bisa diserialisasi dilewati. Pure.
+ */
+fun buildExportClipboardText(items: List<ProfileItem>): String =
+    items.mapNotNull { LinkParser.toUri(it) }.joinToString("\n")

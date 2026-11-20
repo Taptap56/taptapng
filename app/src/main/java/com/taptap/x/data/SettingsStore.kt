@@ -307,7 +307,14 @@ class SettingsStore(context: Context) {
 
         // Defaults — v2rayNG values, locked by SettingsDefaultsTest.
         const val DEFAULT_SPEED_ENABLED = false
-        const val DEFAULT_CONFIRM_REMOVE = false
+        /**
+         * v1.0.28: default ON (v2rayNG default is OFF). Tanpa ini
+         * tombol hapus di baris server menghapus langsung tanpa
+         * bertanya — user minta konfirmasi OK/No dulu. Settingnya
+         * tetap ada di Settings; mematikannya mengembalikan hapus
+         * langsung.
+         */
+        const val DEFAULT_CONFIRM_REMOVE = true
         const val DEFAULT_DOUBLE_COLUMN = false
         const val DEFAULT_GROUP_ALL_DISPLAY = false
         const val DEFAULT_DYNAMIC_COLOR = true

@@ -334,7 +334,7 @@ class TaptapVpnService : VpnService() {
         // setMetered(false)) so Android does not throttle or defer
         // traffic on it.
         val builder = Builder()
-            .setSession("TaptapX")
+            .setSession("TaptapNG")
             .addAddress(tunIpv4ClientAddress(settings.vpnInterfaceAddress), 30)
             .addRoute("0.0.0.0", 0)
             .apply {
@@ -525,14 +525,14 @@ class TaptapVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "TaptapX VPN",
+                "TaptapNG VPN",
                 NotificationManager.IMPORTANCE_LOW,
             )
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("TaptapX")
+            .setContentTitle("TaptapNG")
             .setContentText("Connected: $remarks")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
@@ -543,7 +543,7 @@ class TaptapVpnService : VpnService() {
     /** Replace the foreground notification's text (e.g. after a failed probe). */
     private fun updateNotification(text: String) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("TaptapX")
+            .setContentTitle("TaptapNG")
             .setContentText(text)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)

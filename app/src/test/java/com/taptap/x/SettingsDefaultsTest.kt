@@ -18,7 +18,9 @@ class SettingsDefaultsTest {
     @Test
     fun `ui defaults match v2rayNG`() {
         assertFalse(SettingsStore.DEFAULT_SPEED_ENABLED)
-        assertFalse(SettingsStore.DEFAULT_CONFIRM_REMOVE)
+        // v1.0.28: default ON (v2rayNG default is OFF) — tanpa ini
+        // tombol hapus menghapus langsung tanpa konfirmasi.
+        assertTrue(SettingsStore.DEFAULT_CONFIRM_REMOVE)
         assertFalse(SettingsStore.DEFAULT_DOUBLE_COLUMN)
         assertFalse(SettingsStore.DEFAULT_GROUP_ALL_DISPLAY)
         assertTrue(SettingsStore.DEFAULT_DYNAMIC_COLOR)
