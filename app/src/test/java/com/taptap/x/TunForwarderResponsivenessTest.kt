@@ -167,6 +167,11 @@ override fun dial(
 
     /** The ISN the forwarder offered in the SYN-ACK (first drained packet). */
     private fun synAckIsn(h: Harness): Long {
+        // v1.0.18: the SYN-ACK is written by the writer thread
+        // (async) — "Connected" no longer means the bytes are
+        // already drained, so wait for them like SpeedStatsTest
+        // does instead of assuming the synchronous write.
+        assertTrue(waitFor(what = "SYN-ACK drained") { h.drainedBytes().isNotEmpty() })
         val bytes = h.drainedBytes()
         val ip = TcpPacket.parseIp(bytes, bytes.size) ?: error("no SYN-ACK in drained bytes")
         val tcp = TcpPacket.parseTcp(ip.payload) ?: error("no TCP in SYN-ACK")
