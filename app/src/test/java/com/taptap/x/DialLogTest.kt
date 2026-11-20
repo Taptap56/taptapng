@@ -44,7 +44,7 @@ class DialLogTest {
     }
 
     @Test
-    fun `ring buffer holds 5000 lines (v1.0.17)`() {
+    fun `ring buffer holds 5000 lines`() {
         // Phone logs taptapx-40774e0e.txt / taptapx-9c8c1aca.txt
         // (2026-11-20): a Speedtest + background traffic produces
         // well over 500 lines, so the 500-line buffer evicted the
