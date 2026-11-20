@@ -367,7 +367,8 @@ class SettingsStore(context: Context) {
 
         // Display defaults (v2rayNG AppConfig): shown when the stored value is blank.
         const val DISPLAY_VPN_DNS = "1.1.1.1"
-        const val DISPLAY_VPN_MTU = "1500"
+        // v1.0.21: the effective MTU default is 9000 (was 1500).
+        const val DISPLAY_VPN_MTU = "9000"
         const val DISPLAY_VPN_INTERFACE_ADDRESS = "10.10.14.x"
         const val DISPLAY_HEV_TUN_RW_TIMEOUT = "300,60"
         const val DISPLAY_SOCKS_PORT = "10808"

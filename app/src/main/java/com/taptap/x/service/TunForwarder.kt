@@ -171,17 +171,46 @@ class TunForwarder(
         const val RELAY_READ_SIZE = 32 * 1024
 
         /**
-         * SYN-ACK MSS from the MTU (v1.0.15): MSS = MTU − 40 (IP +
-         * TCP headers), clamped 1140..1460, capped at the peer's
-         * MSS. XVEON used clamp(tunMtu − 140, 1140, 1360) — the
-         * extra 100 bytes guarded the OUTER tunnel overhead, which
-         * does not apply to the local TUN link (the IP packet is
-         * 20 + 20 + MSS ≤ tunMtu either way). The old 1360 cost
-         * ~7% more segments per byte than 1460 for no benefit on
-         * this link.
+         * Absolute max MSS (v1.0.21): MTU 9000 − 40 (IP + TCP
+         * headers). The TUN MTU default is 9000 (v1.0.21; sing-box
+         * TUN uses 9000 too) and the Settings range already allows
+         * 576..9000, so this is the largest MSS the forwarder can
+         * ever offer or build.
+         */
+        const val MAX_SEGMENT_MSS = 8960
+
+        /**
+         * Max MSS for a TUN MTU (v1.0.21): MTU − 40, floor 1140
+         * (as before), ceiling [MAX_SEGMENT_MSS]. The old ceiling
+         * was 1460 — with a 1500 MTU that was the whole story, but
+         * a 9000 MTU lets the app offer (and the relay build)
+         * 8960-byte segments: one TUN write then carries ~6x the
+         * bytes, so the writer's ~5000 writes/s ceiling (phone
+         * log 2026-11-20, histogram v1.0.20: ~140 us per write of
+         * kernel delivery cost) stops capping throughput at
+         * ~55 Mbps.
+         */
+        fun maxMssForMtu(tunMtu: Int): Int =
+            (tunMtu - 40).coerceIn(1140, MAX_SEGMENT_MSS)
+
+        /**
+         * Max wire bytes of one relay TCP segment at the biggest
+         * MSS (v1.0.21): IP + TCP headers + [MAX_SEGMENT_MSS].
+         * The relay's reusable packet buffer is sized by this, not
+         * by the old 1500-byte [TcpPacket.MAX_TCP_SEGMENT_BYTES].
+         */
+        const val MAX_PACKET_BYTES = 40 + MAX_SEGMENT_MSS
+
+        /**
+         * SYN-ACK MSS from the MTU (v1.0.15, ceiling raised
+         * v1.0.21): [maxMssForMtu], capped at the peer's MSS.
+         * XVEON used clamp(tunMtu − 140, 1140, 1360) — the extra
+         * 100 bytes guarded the OUTER tunnel overhead, which does
+         * not apply to the local TUN link (the IP packet is
+         * 20 + 20 + MSS ≤ tunMtu either way).
          */
         fun synAckMss(tunMtu: Int, peerMss: Int): Int =
-            minOf(peerMss, (tunMtu - 40).coerceIn(1140, 1460))
+            minOf(peerMss, maxMssForMtu(tunMtu))
 
         /**
          * Short human-readable reason for a dial failure, for the
@@ -213,6 +242,10 @@ class TunForwarder(
     fun start() {
         if (!running.compareAndSet(false, true)) return
         DialLog.log("FORWARDER", "mulai — baca TUN")
+        // v1.0.21: one line proving the MTU/MSS the TUN came up
+        // with — the phone log must show whether the app actually
+        // gets the big MTU (mtu=9000 mss=8960) or falls back.
+        DialLog.log("TUN", "mtu=$tunMtu mss=${maxMssForMtu(tunMtu)}")
         tunWriter.start()
         readerThread = thread(name = "tun-reader", isDaemon = true) { readLoop() }
     }
@@ -357,8 +390,12 @@ class TunForwarder(
                 // xray-core's tun stack (synchronize): the peer MSS
                 // caps our segments, and SACK / window-scale offers
                 // are echoed in the SYN-ACK.
+                // v1.0.21: cap at the MTU-derived max, not the old
+                // 1460 — on a 9000 MTU the app offers up to 8960
+                // and the relay must be allowed to build segments
+                // that big, or the bigger MTU changes nothing.
                 val offered = TcpPacket.parseTcpOptions(tcp.options)
-                offered.mss?.let { s.peerMss = minOf(TcpPacket.TCP_MSS, it) }
+                offered.mss?.let { s.peerMss = minOf(maxMssForMtu(tunMtu), it) }
                 s.wsOffered = offered.windowScale != null
                 s.sackOffered = offered.sackPermitted
                 sessions[key] = s
@@ -632,12 +669,19 @@ class TunForwarder(
         // app reassembles by sequence number). Segments never
         // exceed what the app's SYN offered (v1.0.10).
         val readBuf = ByteArray(RELAY_READ_SIZE)
-        val pktBuf = ByteArray(TcpPacket.MAX_TCP_SEGMENT_BYTES)
+        // v1.0.21: the packet buffer must fit the biggest segment
+        // the MTU allows (IP + TCP + MAX_SEGMENT_MSS = 9000), not
+        // just the old 1500-byte MAX_TCP_SEGMENT_BYTES — a
+        // 8960-byte segment would overflow the old buffer
+        // (buildTcpInto requires out.size >= total). One buffer
+        // per relay thread (max 96 sessions × 9 KiB worst case).
+        val pktBuf = ByteArray(MAX_PACKET_BYTES)
         // Segments never exceed what the app's SYN offered
         // (v1.0.10); coerce to >= 1 like the old code did — a
         // peer MSS of 0 would otherwise emit zero-length segments
-        // forever (pos never advances).
-        val segMss = session.peerMss.coerceIn(1, TcpPacket.TCP_MSS)
+        // forever (pos never advances). v1.0.21: cap at the
+        // MTU-derived max, not the old 1460.
+        val segMss = session.peerMss.coerceIn(1, maxMssForMtu(tunMtu))
         var buffered = 0
         var pos = 0
         // SPEED window bookkeeping: the window starts at the first

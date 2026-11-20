@@ -11,7 +11,9 @@ import java.nio.ByteOrder
  *
  * The forwarder only implements the subset of TCP it needs: SYN /
  * SYN-ACK / ACK / data / FIN / RST, no retransmission (the TUN is a
- * local reliable link), no window scaling, MSS 1460.
+ * local reliable link), no window scaling, MSS 1460 by default
+ * ([TCP_MSS]; the forwarder derives up to 8960 from a 9000 MTU
+ * since v1.0.21, see TunForwarder.maxMssForMtu).
  */
 object TcpPacket {
 

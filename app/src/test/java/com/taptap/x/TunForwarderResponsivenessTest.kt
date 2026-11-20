@@ -181,11 +181,18 @@ override fun dial(
     @Test
     fun `syn-ack mss comes from the mtu setting`() {
         // v1.0.15: clamp(tunMtu - 40, 1140, 1460), capped at the peer MSS.
+        // v1.0.21: ceiling raised to 8960 (MTU 9000 - 40).
         assertEquals(1460, TunForwarder.synAckMss(1500, 1460))
         assertEquals(1200, TunForwarder.synAckMss(1500, 1200))
         assertEquals(1460, TunForwarder.synAckMss(9000, 1460))
         assertEquals(1140, TunForwarder.synAckMss(576, 1460))
         assertEquals(1240, TunForwarder.synAckMss(1280, 1460))
+        assertEquals(8960, TunForwarder.synAckMss(9000, 8960))
+        assertEquals(8960, TunForwarder.synAckMss(9000, 9000))
+        assertEquals(4056, TunForwarder.synAckMss(4096, 8960))
+        assertEquals(8960, TunForwarder.maxMssForMtu(9000))
+        assertEquals(1460, TunForwarder.maxMssForMtu(1500))
+        assertEquals(1140, TunForwarder.maxMssForMtu(576))
     }
 
     @Test

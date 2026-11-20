@@ -270,10 +270,15 @@ class TaptapVpnService : VpnService() {
         val dns = settings.remoteDns.trim()
             .takeIf { it.isNotBlank() && isIpLiteral(it) }
             ?: "8.8.8.8"
-        // MTU comes from Settings (v2rayNG default 1500); out-of-range
-        // values fall back to 1500 instead of breaking establish().
+        // MTU comes from Settings; out-of-range values fall back
+        // to the default instead of breaking establish(). v1.0.21:
+        // the default is 9000 (was v2rayNG's 1500) — the writer's
+        // ~5000 writes/s ceiling caps throughput at ~55 Mbps with
+        // 1460-byte segments, and a 9000 MTU lets the app offer
+        // 8960-byte segments (sing-box TUN uses 9000 too). The
+        // setting still overrides; the 576..9000 range is unchanged.
         val mtu = settings.vpnMtu.trim().toIntOrNull()
-            ?.takeIf { it in 576..9000 } ?: 1500
+            ?.takeIf { it in 576..9000 } ?: 9000
         // v1.0.10: the Builder mirrors v2rayNG's CoreVpnService
         // (configureNetworkSettings + configurePlatformFeatures):
         // the TUN address comes from the user's interface-address

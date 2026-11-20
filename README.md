@@ -1,4 +1,4 @@
-# TaptapX v1.0.20
+# TaptapX v1.0.21
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.x`, **versi** 1.0.20 (vc21)
+- **id** `com.taptap.x`, **versi** 1.0.21 (vc22)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,63 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.21 — MTU TUN 9000 + MSS 8960: segmen lebih besar, tulis lebih sedikit (eksperimen)
+
+**Hipotesis — dari log HP v1.0.20, bukan tebakan.** Histogram
+v1.0.20 (taptapx-77d1f821.txt) menjawab pertanyaan v1.0.20:
+distribusinya RAPAT di `sedang` (91–96% write 50–500 us,
+rata-rata ~140 us), BUKAN bimodal — jadi bukan beberapa write
+yang nge-blok lama, melainkan hampir SETIAP write makan ~140 us
+waktu kernel (API Java terbukti ~2 us di VM; saat drain write
+cepat ~21 us, 17.600/dtk). Penulis tunggal mentok ~5000
+tulis/dtk × 1460B ≈ 55–58 Mbps; Speedtest 52,4 Mbps. Karena
+biaya kernel dihitung PER PAKET, satu-satunya jalan menaikkan
+throughput tanpa menambah tulis/dtk adalah MEMBESARKAN tiap
+paket: segmen 8960B membawa ~6× data per write dibanding 1460B,
+jadi ceiling yang sama (~5000 tulis/dtk) menjadi ~350 Mbps
+secara teori — bila biaya per write tidak ikut membesar.
+sing-box TUN memakai MTU 9000 (dokumen resminya), jadi angka ini
+bukan asal ambil.
+
+**Yang diubah.** (1) MTU TUN default 1500 → 9000
+(`TaptapVpnService`: fallback bila setting kosong/tidak valid;
+setting MTU pengguna tetap dihormati, rentang 576..9000 tidak
+berubah; `DISPLAY_VPN_MTU` ikut jadi "9000" supaya UI tidak
+bohong). (2) MSS mengikuti MTU: `TunForwarder.maxMssForMtu`
+= (MTU − 40), lantai 1140, langit 8960 — dipakai di SYN-ACK
+(`synAckMss`), di cap MSS yang ditawarkan app di SYN, dan di
+batas segmen relay (`segMss`); buffer paket relay membesar
+menjadi 9000 byte (`MAX_PACKET_BYTES`). (3) Satu baris log saat
+TUN naik: `TUN mtu=9000 mss=8960`. Histogram v1.0.20 dijaga
+(cepat/sedang/lambat + tulisMaxUs) supaya log berikutnya
+menunjukkan apakah laju tulis turun dan throughput naik.
+Upload ikut tertangani: app mengirim segmen sampai sebesar MSS
+yang kami iklankan (8960B), dan buffer baca TUN (64 KiB) +
+antrean writer + chunk VMess 16 KiB semuanya muat.
+
+**Yang TIDAK diubah.** Protokol, relay (kecuali batas segmen),
+buffer socket (v1.0.19), TunWriter/antrean (v1.0.18), UI —
+semuanya tetap seperti v1.0.20. Tidak ada batching paket per
+write (TUN = satu paket per write), tidak ada gVisor/stack
+TCP lain.
+
+**Jujur soal batasnya — ini eksperimen.** Hasilnya tergantung
+apakah app benar-benar menawarkan MSS 8960 setelah MTU TUN
+naik (kernel app menghitung MSS dari MTU interface; baris `TUN`
+di log membuktikan nilai yang dipakai, dan segmen di log SPEED
+menunjukkan ukurannya). Bila app tetap menawarkan 1460, segmen
+tetap 1460 dan angka tidak akan naik — itu jawaban juga, bukan
+gagal. Bila angka naik tapi tidak sampai 133 Mbps, bottleneck
+berikutnya akan terlihat di baris SPEED/TUNWRITER yang sama.
+
+**Tes HP** — konek entry biasa (VMess yang sama), jalankan SATU
+Speedtest sampai SELESAI, BARU export Log + kirim file log +
+screenshot hasil. Yang menentukan: angka download (bandingkan
+langsung dengan 52,4 Mbps di v1.0.19 — v1.0.20 hanya
+instrumentasi, tanpa klaim kecepatan); baris `TUN` (mtu/mss) +
+histogram TUNWRITER menunjukkan apakah laju tulis turun
+(tulis/dtk lebih kecil untuk byte yang sama).
 
 ## v1.0.20 — Selidiki penulis TUN: histogram durasi write (bukan tebakan)
 
