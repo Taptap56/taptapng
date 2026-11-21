@@ -1,6 +1,7 @@
 package com.taptap.ng.core.slowdns
 
 import com.taptap.ng.core.DialLog
+import com.taptap.ng.core.proto.AddrCodec
 import com.taptap.ng.core.proto.LadderStream
 import com.taptap.ng.core.proto.SpeedStats
 import com.taptap.ng.core.proto.TimedInputStream
@@ -68,13 +69,21 @@ object SlowDnsTransport {
             if (item.tls) {
                 Transport.noteStage("TLS")
                 try {
+                    // v1.0.2 (XVEON order): same two lines as the
+                    // socket ladder — handshake names the SNI first,
+                    // TlsEngine logs "TLS established: <version>".
+                    val sni = item.sni.ifBlank { item.address }
+                    if (AddrCodec.isIpLiteral(sni)) {
+                        DialLog.log("TLS", "TLS handshake")
+                    } else {
+                        DialLog.log("TLS", "TLS handshake -> SNI: $sni")
+                    }
                     val (tlsIn, tlsOut) = TlsEngine.wrap(input, output, item)
                     input = tlsIn
                     output = tlsOut
                 } catch (e: Exception) {
                     throw IOException("TLS gagal: ${e.message}", e)
                 }
-                DialLog.log("TLS", "${item.address} ok (SlowDNS)")
             }
             // v1.0.16: same transport-read timing as the socket
             // ladder (see Transport.open) — the TlsEngine input /
@@ -85,13 +94,18 @@ object SlowDnsTransport {
             if (network == "ws") {
                 Transport.noteStage("WS")
                 try {
+                    // v1.0.2 (XVEON order): same two lines as the
+                    // socket ladder — WsTransport logs the 101 itself.
+                    DialLog.log(
+                        "WS",
+                        "WebSocket (WS) handshake -> Host: ${Transport.wsHost(item)}, Path: ${Transport.wsPath(item)}",
+                    )
                     val ws = WsTransport.connect(timedIn, output, Transport.wsHost(item), Transport.wsPath(item), stats)
                     input = ws.input
                     output = ws.output
                 } catch (e: Exception) {
                     throw IOException("WS gagal: ${e.message}", e)
                 }
-                DialLog.log("WS", "${Transport.wsHost(item)}${Transport.wsPath(item)} ok (SlowDNS)")
             } else {
                 input = timedIn
             }

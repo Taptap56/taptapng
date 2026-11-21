@@ -1,6 +1,5 @@
 package com.taptap.ng.core
 
-import com.taptap.ng.core.proto.GoHelloTls
 import com.taptap.ng.data.ProfileItem
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
@@ -139,19 +138,6 @@ class PemicuManagerTest {
         )
         assertEquals(8443, target2!!.port)
         assertEquals(60, target2.intervalSec)
-    }
-
-    @Test
-    fun `targetFromProfile carries the Hello Go chip`() {
-        // v1.0.1: the flag only selects the Hello shape — the
-        // target (host/port/interval) is unchanged.
-        val on = PemicuManager.targetFromProfile(itemWithPemicu().copy(goHelloEnabled = true))
-        assertNotNull(on)
-        assertTrue(on!!.goHello)
-        assertEquals("chat.sociomile.com", on.host)
-        val off = PemicuManager.targetFromProfile(itemWithPemicu())
-        assertNotNull(off)
-        assertFalse(off!!.goHello)
     }
 
     @Test
@@ -334,7 +320,7 @@ class PemicuManagerTest {
         }
     }
 
-    // --- Hello Go (v1.0.1): prime dial Hello shape ---
+    // --- Prime dial Hello shape (v1.0.2: Hello Go is gone) ---
 
     /** Parse the first TLS record's ClientHello: cipher suites +
      *  extension types (wire order) + SNI host, if present. */
@@ -378,7 +364,7 @@ class PemicuManagerTest {
      *  The handshake cannot complete against a capture-only server,
      *  so the result is Failed either way; the assertion is on the
      *  captured ClientHello bytes. */
-    private fun captureFirstRecord(host: String, goHello: Boolean): ByteArray {
+    private fun captureFirstRecord(host: String): ByteArray {
         val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
         val captured = ByteArrayOutputStream()
         val acceptThread = Thread({
@@ -400,7 +386,7 @@ class PemicuManagerTest {
             val resolve: (String, Int) -> List<InetAddress> = { _, _ ->
                 listOf(InetAddress.getByName("127.0.0.1"))
             }
-            val target = PemicuManager.PemicuTarget(host, server.localPort, 15, goHello = goHello)
+            val target = PemicuManager.PemicuTarget(host, server.localPort, 15)
             PemicuManager.primeDial(target, protect = null, resolve = resolve)
             acceptThread.join(10_000)
             return captured.toByteArray()
@@ -410,24 +396,13 @@ class PemicuManagerTest {
     }
 
     @Test
-    fun `primeDial sends a Go shaped Hello when the chip is on`() {
-        val (suites, types, sni) = parseHello(captureFirstRecord("front.wetv.vip", goHello = true))
-        assertEquals(GoHelloTls.CIPHER_SUITES.toList(), suites, "cipher suites harus urutan Go")
-        assertTrue(types.contains(0x002b), "harus ada supported_versions")
-        assertTrue(types.contains(0x0033), "harus ada key_share")
-        assertTrue(types.contains(0x000a), "harus ada supported_groups")
-        assertTrue(types.contains(0x000d), "harus ada signature_algorithms")
-        assertTrue(types.contains(0x0032), "harus ada signature_algorithms_cert")
-        assertFalse(types.contains(0x0016), "Go tidak mengirim encrypt_then_mac")
-        assertEquals("front.wetv.vip", sni)
-    }
-
-    @Test
-    fun `primeDial sends a JVM Hello when the chip is off`() {
-        val (suites, _, sni) = parseHello(captureFirstRecord("front.wetv.vip", goHello = false))
-        // The JVM (Conscrypt) Hello is a different shape from Go's:
-        // the cipher list must NOT be Go's list (v1.0.0 behavior).
-        assertTrue(suites != GoHelloTls.CIPHER_SUITES.toList(), "JVM Hello harus beda dari Go")
+    fun `primeDial sends a JVM Hello with SNI equal to the prime host`() {
+        // v1.0.2: Hello Go is gone — the prime dial is always the
+        // plain JVM SSLSocket Hello (v1.0.0 behavior). The SNI must
+        // still be the prime domain itself, never the entry address.
+        // parseHello already asserts the first record is a TLS
+        // ClientHello (content type 0x16, handshake type 0x01).
+        val (_, _, sni) = parseHello(captureFirstRecord("front.wetv.vip"))
         assertEquals("front.wetv.vip", sni)
     }
 

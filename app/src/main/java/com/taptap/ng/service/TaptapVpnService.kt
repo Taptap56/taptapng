@@ -261,6 +261,10 @@ class TaptapVpnService : VpnService() {
     private fun runStart(client: ProxyClient, item: ProfileItem, label: String, gen: Int) {
         try {
             installProtectHooks()
+            // v1.0.2 (XVEON order): the connect log opens with the
+            // profile line — "Starting profile 'iflix cloudfront'..."
+            // — the same first line XVEON logs.
+            DialLog.log("START", "Starting profile '${item.displayName()}'...")
             // v1.0.24 (M5): prime dulu, baru probe — prime dial in-app
             // membuka jendela operator, lalu dial utama memakai jendela
             // yang sudah buka. Best-effort: primeNowSync tidak pernah
@@ -365,6 +369,17 @@ class TaptapVpnService : VpnService() {
         }
         val fd = builder.establish()
             ?: throw IllegalStateException("Gagal establish TUN (izin VPN ditolak?)")
+        // v1.0.2 (XVEON order): the DNS + VPN CONNECTED lines come
+        // right after the protocol handshake (the probe) and before
+        // reportConnected — the same tail XVEON logs. The DNS value
+        // is the tunnel's real one from Settings (default 8.8.8.8);
+        // TaptapNG sets ONE DNS server (no secondary, unlike XVEON),
+        // so only the primary line is logged — never a made-up one.
+        DialLog.log("DNS", "Primary DNS set to $dns")
+        DialLog.log(
+            "VPN",
+            "CONNECTED (${tunIpv4ClientAddress(settings.vpnInterfaceAddress)}/30)",
+        )
         // v1.0.11: the fd from establish() is NON-BLOCKING
         // (O_NONBLOCK) — FileInputStream.read() returns 0 at once
         // when no packet is waiting (EAGAIN), and the reader

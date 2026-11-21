@@ -19,8 +19,12 @@ all) because Views is what keeps the APK small (XVEON-style).
   `:app:compileDebugKotlin` (in CI; Gradle is blocked in this VM).
 - Resources, manifest, Gradle, or dependencies: run
   `:app:assembleRelease` (in CI). Release is R8-minified and signed
-  with the debug keystore; keep the proguard rules for Gson/JSch/
-  ZXing/VpnService up to date when the model or engines change.
+  with the STABLE release keystore (v1.0.2: GitHub secrets
+  KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD;
+  keystore file at ~/workspace/build/taptapng-release.keystore,
+  password ONLY in the secrets — never commit it); keep the proguard
+  rules for Gson/JSch/ZXing/VpnService up to date when the model or
+  engines change.
 - QR scan uses the framework Camera1 API + ZXing core (no CameraX —
   size). Do not add CameraX without checking the APK size impact.
 - Never log credentials, private keys, or full proxy URLs.

@@ -141,8 +141,8 @@ internal class OrderedExtensions : Hashtable<Int, ByteArray>() {
 }
 
 /**
- * Shared Bouncy Castle certificate validation (Onering + Go Hello,
- * v1.0.1): trust-all when insecure, otherwise the platform default
+ * Shared Bouncy Castle certificate validation (Onering, v1.0.23):
+ * trust-all when insecure, otherwise the platform default
  * TrustManager (no hostname verification — a raw TLS client has
  * none, same as the SSLSocket path). OneringTlsTest covers this
  * behavior (platform validation + untrusted rejection).
@@ -199,6 +199,15 @@ internal class OneringTlsClient(
     private val insecure: Boolean,
     private val trustManager: X509TrustManager? = null,
 ) : DefaultTlsClient(crypto) {
+
+    /** Negotiated TLS version, recorded by [notifyServerVersion]. */
+    @Volatile
+    var negotiatedVersion: ProtocolVersion? = null
+        private set
+
+    override fun notifyServerVersion(serverVersion: ProtocolVersion) {
+        negotiatedVersion = serverVersion
+    }
 
     /**
      * TLS 1.3 ONLY — bukan preferensi, tapi syarat agar 0xff00 jadi
@@ -287,7 +296,15 @@ object OneringTls {
         val protocol = TlsClientProtocol(input, output)
         val client = OneringTlsClient(crypto, sni, item.alpn, bug, item.insecure, trustManager)
         protocol.connect(client)
-        DialLog.log("TLS", "Onering ${item.address} ok (bug $bug, SNI $sni)")
+        // v1.0.2 (XVEON order): name the negotiated version —
+        // "TLS established: TLSv1.3" — not just "TLS ok".
+        val protocolName = when (client.negotiatedVersion) {
+            ProtocolVersion.TLSv13 -> "TLSv1.3"
+            ProtocolVersion.TLSv12 -> "TLSv1.2"
+            null -> "TLS?"
+            else -> client.negotiatedVersion.toString()
+        }
+        DialLog.log("TLS", "TLS established: $protocolName")
         return protocol.inputStream to protocol.outputStream
     }
 }

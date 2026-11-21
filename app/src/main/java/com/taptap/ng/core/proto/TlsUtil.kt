@@ -77,6 +77,9 @@ object TlsUtil {
         }
         tls.soTimeout = Transport.HANDSHAKE_TIMEOUT_MS
         tls.startHandshake()
+        // v1.0.2 (XVEON order): name the negotiated version —
+        // "TLS established: TLSv1.3" — not just "TLS ok".
+        DialLog.log("TLS", "TLS established: ${tls.session.protocol}")
         return tls
     }
 }

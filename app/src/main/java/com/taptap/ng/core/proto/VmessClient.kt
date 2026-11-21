@@ -105,10 +105,13 @@ class VmessClient(
                 // Fail fast: the server answers with its response header
                 // right after dispatching; a bad UUID/header dies here.
                 Transport.noteStage("VMess")
+                // v1.0.2 (XVEON order): the verify + ready lines
+                // bracket the response-header read.
+                DialLog.log("VMess", "Verifying VMess authentication & protocol stream...")
                 VmessCrypto.readResponseHeader(transport.input, session)
                 val bodyIn = VmessBodyInputStream(transport.input, session, stats = stats)
                 transport.clearHandshakeTimeout()
-                DialLog.log("VMess", "handshake ok")
+                DialLog.log("VMess", "VMess handshake & transport ready!")
                 return TrackedProxyStream(
                     StreamProxyStream(bodyIn, bodyOut) { transport.close() },
                     openStreams,
@@ -134,6 +137,9 @@ class VmessClient(
             val lazyIn = LazyHeaderInputStream(bodyIn) {
                 try {
                     Transport.noteStage("VMess")
+                    // v1.0.2 (XVEON order): same verify + ready lines
+                    // as the probe branch, around the lazy read.
+                    DialLog.log("VMess", "Verifying VMess authentication & protocol stream...")
                     VmessCrypto.readResponseHeader(transport.input, session)
                 } catch (e: java.net.SocketTimeoutException) {
                     val failure = Transport.preferWatchdogFailure(
@@ -147,7 +153,7 @@ class VmessClient(
                     throw failure
                 }
                 transport.clearHandshakeTimeout()
-                DialLog.log("VMess", "handshake ok")
+                DialLog.log("VMess", "VMess handshake & transport ready!")
             }
             return TrackedProxyStream(
                 StreamProxyStream(lazyIn, bodyOut) { transport.close() },

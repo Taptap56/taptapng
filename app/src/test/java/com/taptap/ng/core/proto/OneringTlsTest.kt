@@ -1,5 +1,6 @@
 package com.taptap.ng.core.proto
 
+import com.taptap.ng.core.DialLog
 import com.taptap.ng.core.slowdns.TlsEngine
 import com.taptap.ng.data.ProfileItem
 import java.io.ByteArrayOutputStream
@@ -124,6 +125,7 @@ class OneringTlsTest {
     }
 
     private fun runHandshake(item: ProfileItem, trustManager: X509TrustManager? = null): ByteArray {
+        val logBefore = DialLog.lines().size
         val clientToServer = QueueChannel()
         val serverToClient = QueueChannel()
         val recording = RecordingOutputStream(clientToServer.output)
@@ -149,6 +151,11 @@ class OneringTlsTest {
         serverThread.start()
 
         val (tlsIn, tlsOut) = OneringTls.wrap(serverToClient.input, recording, item, trustManager)
+        // v1.0.2 (XVEON order): the wrap logs the negotiated version.
+        assertTrue(
+            DialLog.lines().drop(logBefore).any { it.contains("TLS established: TLSv1.3") },
+            "log harus ada 'TLS established: TLSv1.3': ${DialLog.lines().drop(logBefore)}",
+        )
         tlsOut.write("halo-onering".toByteArray(Charsets.UTF_8))
         tlsOut.flush()
         val reply = ByteArray(1024)

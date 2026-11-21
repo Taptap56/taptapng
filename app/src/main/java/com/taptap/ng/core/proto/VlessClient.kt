@@ -59,9 +59,12 @@ class VlessClient(
                 transport.output.flush()
                 DialLog.log("VLESS", "probe body ${probeBody.size}B")
                 Transport.noteStage("VLESS")
+                // v1.0.2 (XVEON order): the verify + ready lines
+                // bracket the response-header read.
+                DialLog.log("VLESS", "Verifying VLESS authentication & protocol stream...")
                 VlessCrypto.readResponseHeader(transport.input)
                 transport.clearHandshakeTimeout()
-                DialLog.log("VLESS", "handshake ok")
+                DialLog.log("VLESS", "VLESS handshake & transport ready!")
                 return TrackedProxyStream(
                     StreamProxyStream(transport.input, transport.output) { transport.close() },
                     openStreams,
@@ -79,6 +82,9 @@ class VlessClient(
             val lazyIn = LazyHeaderInputStream(transport.input) {
                 try {
                     Transport.noteStage("VLESS")
+                    // v1.0.2 (XVEON order): same verify + ready lines
+                    // as the probe branch, around the lazy read.
+                    DialLog.log("VLESS", "Verifying VLESS authentication & protocol stream...")
                     VlessCrypto.readResponseHeader(transport.input)
                 } catch (e: java.net.SocketTimeoutException) {
                     val failure = Transport.preferWatchdogFailure(
@@ -92,7 +98,7 @@ class VlessClient(
                     throw failure
                 }
                 transport.clearHandshakeTimeout()
-                DialLog.log("VLESS", "handshake ok")
+                DialLog.log("VLESS", "VLESS handshake & transport ready!")
             }
             val loggedOut = FirstWriteLoggingOutputStream(transport.output) { n ->
                 DialLog.log("VLESS", "body ${n}B untuk $targetHost:$targetPort")

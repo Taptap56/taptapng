@@ -20,6 +20,22 @@ import javax.net.ssl.SSLException
  * socket when item.tls is set, then the WebSocket handshake runs over
  * whatever stream is underneath (plain TCP or TLS).
  *
+ * v1.0.2 (XVEON order): the DialLog lines follow the XVEON Tunnel Pro
+ * connect log, in the same order — "Connecting to <Proto> outbound
+ * <host>:<port>", "Connecting TCP socket to <host>:<port>" (the DNS
+ * resolve happens INSIDE this step — there is no separate DNS line
+ * before TCP; the 120 s DnsResolver cache is unchanged), "TLS
+ * handshake -> SNI: <sni>", "TLS established: TLSv1.3", "WebSocket
+ * (WS) handshake -> Host: <host>, Path: <path>", "Server response:
+ * HTTP/1.1 101 Switching Protocols", then the protocol client's
+ * "Verifying ..." / "handshake & transport ready!" lines. The DNS
+ * set + VPN CONNECTED lines are logged by the service after the
+ * probe (see TaptapVpnService). This only aligns the VISIBLE order:
+ * the 2026-11-21 08:08 phone evidence (TaptapNG connected iflix
+ * 390 ms right after XVEON connected it) shows the decider is the
+ * operator window / timing, not the log order — no connectivity
+ * improvement is claimed for this change.
+ *
  * The returned socket keeps SO_TIMEOUT = [HANDSHAKE_TIMEOUT_MS] during
  * dial so a dead peer fails fast; clients reset it to 0 (blocking) once
  * the protocol handshake has succeeded. The socket is owned by the
@@ -29,21 +45,6 @@ object Transport {
 
     const val CONNECT_TIMEOUT_MS = 10_000
     const val HANDSHAKE_TIMEOUT_MS = 10_000
-
-    /**
-     * Which TLS implementation the connect/probe dial uses for this
-     * entry (v1.0.1). GO_HELLO wins over ONERING when both chips
-     * are on — the chip promises a Go-shaped Hello, and 0xff00
-     * would break it. JVM = v1.0.0 SSLSocket behavior. (SlowDNS
-     * entries never reach this — their TLS is TlsEngine.wrap.)
-     */
-    internal enum class TlsKind { GO_HELLO, ONERING, JVM }
-
-    internal fun tlsKind(item: ProfileItem): TlsKind = when {
-        GoHelloTls.isGoHello(item) -> TlsKind.GO_HELLO
-        OneringTls.isOnering(item) -> TlsKind.ONERING
-        else -> TlsKind.JVM
-    }
 
     /**
      * Proxy socket buffers (v1.0.19). Phone evidence (v1.0.18 log,
@@ -187,6 +188,13 @@ object Transport {
         require(item.address.isNotBlank()) { "Address proxy kosong" }
         require(item.port in 1..65535) { "Port proxy di luar 1..65535: ${item.port}" }
         val wd = threadWatchdog.get()
+        // v1.0.2 (XVEON order): every dial opens with the outbound
+        // line — "Connecting to VMess outbound front.wetv.vip:443..."
+        // — the same first dial line XVEON logs.
+        DialLog.log(
+            "DIAL",
+            "Connecting to ${item.typeLabel()} outbound ${item.address}:${item.port}...",
+        )
         val plain = Socket()
         try {
             // Arm the watchdog on the plain socket FIRST: a connect
@@ -224,17 +232,23 @@ object Transport {
                 // yang perlu di-bypass, dial langsung (v1.0.7).
                 DialLog.log("PROTECT", "TUN belum naik — dial ${item.address} langsung tanpa protect")
             }
-            // Tahap DNS: resolve langsung (UDP ke 8.8.8.8, bypass TUN),
-            // fallback ke resolver sistem bila gagal (relay DNS mungkin
-            // jalan). JANGAN resolve lewat InetSocketAddress(host, port):
+            // Tahap TCP (v1.0.2, XVEON order): "Connecting TCP socket
+            // to <host>:<port>" — the resolve happens INSIDE this
+            // step, exactly like XVEON (which never logs a separate
+            // DNS line before TCP). The resolve itself still tags
+            // its failures "DNS gagal" (see DnsResolver) and the
+            // watchdog stage is "DNS" while it runs; only the
+            // SUCCESS line "DNS <host> -> <ip>" is gone. JANGAN
+            // resolve lewat InetSocketAddress(host, port):
             // konstruktor itu memanggil resolver sistem TANPA timeout —
             // saat VPN naik lookup-nya masuk ke TUN dan menggantung
             // sampai resolver menyerah (gejala v1.0.4: status macet di
             // "Connecting..." selamanya). Di sini address sudah IP
             // hasil resolve, jadi connect() tidak lookup lagi.
+            noteStage("TCP")
+            DialLog.log("TCP", "Connecting TCP socket to ${item.address}:${item.port}")
             noteStage("DNS")
             val target = DnsResolver.resolveWithSystemFallback(item.address, item.port)
-            DialLog.log("DNS", "${item.address} -> $target")
             noteStage("TCP")
             try {
                 plain.connect(InetSocketAddress(target, item.port), CONNECT_TIMEOUT_MS)
@@ -255,7 +269,8 @@ object Transport {
                     "rcv=${plain.receiveBufferSize} snd=${plain.sendBufferSize}",
                 )
             }
-            DialLog.log("TCP", "${item.address}:${item.port} ok")
+            // No "TCP <host>:<port> ok" line (v1.0.2): XVEON has
+            // none — the next stage's line proves TCP succeeded.
         } catch (e: Exception) {
             runCatching { plain.close() }
             val failure = preferWatchdogFailure(e)
@@ -286,33 +301,30 @@ object Transport {
                 // (sudah di-arm watchdog): protokol BC membaca dari
                 // stream-nya, jadi menutup plain tetap membangunkan
                 // read yang macet.
-                // v1.0.1 (Hello Go): chip Hello Go ON menang atas
-                // Onering bila keduanya ON — chip menjanjikan Hello
-                // bentuk Go, dan 0xff00 akan merusaknya. GoHelloTls
-                // naik BC yang sama (bukan uTLS-Chrome: sudah
-                // terbukti gagal di TB v1.0.73/77).
+                // v1.0.2 (XVEON order): the handshake line names the
+                // SNI BEFORE the handshake runs; the "TLS established:
+                // <version>" line is logged by the TLS implementation
+                // itself (TlsUtil / OneringTls) right after the
+                // handshake — the old "TLS <host> ok" line is gone.
                 noteStage("TLS")
+                val sni = item.sni.ifBlank { item.address }
+                if (AddrCodec.isIpLiteral(sni)) {
+                    DialLog.log("TLS", "TLS handshake")
+                } else {
+                    DialLog.log("TLS", "TLS handshake -> SNI: $sni")
+                }
                 try {
-                    when (tlsKind(item)) {
-                        TlsKind.GO_HELLO -> {
-                            val hs = GoHelloTls.wrap(input, output, item)
-                            input = hs.input
-                            output = hs.output
-                        }
-                        TlsKind.ONERING -> {
-                            val (tlsIn, tlsOut) = OneringTls.wrap(input, output, item)
-                            input = tlsIn
-                            output = tlsOut
-                        }
-                        TlsKind.JVM -> {
-                            socket = TlsUtil.wrap(plain, item, tlsProtocols)
-                            // Re-arm the watchdog on the TLS socket: closing the
-                            // plain socket would not unblock the TLS read.
-                            wd?.arm(socket)
-                            input = socket.getInputStream()
-                            output = socket.getOutputStream()
-                            DialLog.log("TLS", "${item.address} ok")
-                        }
+                    if (OneringTls.isOnering(item)) {
+                        val (tlsIn, tlsOut) = OneringTls.wrap(input, output, item)
+                        input = tlsIn
+                        output = tlsOut
+                    } else {
+                        socket = TlsUtil.wrap(plain, item, tlsProtocols)
+                        // Re-arm the watchdog on the TLS socket: closing the
+                        // plain socket would not unblock the TLS read.
+                        wd?.arm(socket)
+                        input = socket.getInputStream()
+                        output = socket.getOutputStream()
                     }
                 } catch (e: SSLException) {
                     throw SSLException("TLS gagal: ${e.message}")
@@ -328,16 +340,23 @@ object Transport {
             // wrapper, no overhead — byte-identical to v1.0.15.
             val timedIn = if (stats != null) TimedInputStream(input, stats) else input
             if (network == "ws") {
-                // Tahap WS.
+                // Tahap WS (v1.0.2, XVEON order): the handshake line
+                // names Host + Path BEFORE the request goes out; the
+                // "Server response: HTTP/1.1 101 ..." line is logged
+                // by WsTransport.connect itself once the 101 arrives
+                // — the old "WS <host><path> ok" line is gone.
                 noteStage("WS")
                 try {
+                    DialLog.log(
+                        "WS",
+                        "WebSocket (WS) handshake -> Host: ${wsHost(item)}, Path: ${wsPath(item)}",
+                    )
                     val ws = WsTransport.connect(timedIn, output, wsHost(item), wsPath(item), stats)
                     input = ws.input
                     output = ws.output
                 } catch (e: Exception) {
                     throw IOException("WS gagal: ${e.message}", e)
                 }
-                DialLog.log("WS", "${wsHost(item)}${wsPath(item)} ok")
             } else {
                 input = timedIn
             }

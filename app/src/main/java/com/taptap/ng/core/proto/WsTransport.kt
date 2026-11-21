@@ -1,6 +1,7 @@
 package com.taptap.ng.core.proto
 
 import com.taptap.ng.core.Base64Util
+import com.taptap.ng.core.DialLog
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.IOException
@@ -84,6 +85,9 @@ object WsTransport {
         if (!MessageDigest.isEqual(accept.toByteArray(Charsets.UTF_8), expected.toByteArray(Charsets.UTF_8))) {
             throw IOException("WebSocket Sec-WebSocket-Accept tidak cocok")
         }
+        // v1.0.2 (XVEON order): the server's own status line —
+        // "Server response: HTTP/1.1 101 Switching Protocols".
+        DialLog.log("WS", "Server response: $statusLine")
         return WsStream(rawIn, rawOut, stats)
     }
 

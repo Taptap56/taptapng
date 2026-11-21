@@ -44,9 +44,6 @@ class ProfileItemDefaultsTest {
         assertEquals("default", item.sshSniVersion)
         assertEquals("", item.streamSecurity)
         assertFalse(item.tls)
-        // v1.0.1: Hello Go chip defaults OFF — old entries keep the
-        // v1.0.0 JVM SSLSocket Hello until the chip is turned on.
-        assertFalse(item.goHelloEnabled)
     }
 
     @Test
@@ -86,17 +83,43 @@ class ProfileItemDefaultsTest {
         assertEquals("default", loaded.sshSniVersion)
         assertEquals("", loaded.streamSecurity)
         assertFalse(loaded.tls)
-        assertFalse(loaded.goHelloEnabled)
         // Gson round trip keeps the new values once saved.
         val gson = Gson()
         val saved = gson.fromJson(gson.toJson(loaded), ProfileItem::class.java)
         assertEquals("none", saved.headerType)
         assertEquals("default", saved.sshSniVersion)
-        assertFalse(saved.goHelloEnabled)
-        // ...and a turned-on chip survives the round trip.
-        loaded.goHelloEnabled = true
-        val savedOn = gson.fromJson(gson.toJson(loaded), ProfileItem::class.java)
-        org.junit.jupiter.api.Assertions.assertTrue(savedOn.goHelloEnabled)
+    }
+
+    @Test
+    fun `v101 json with goHelloEnabled loads fine, field removed in v102`() {
+        // v1.0.2 deletes ProfileItem.goHelloEnabled (Hello Go is
+        // gone). A profiles.json written by v1.0.1 still contains
+        // the field — Gson must ignore the unknown key and load the
+        // profile with everything else intact, never crash.
+        val dir = Files.createTempDirectory("profiles-migration-test").toFile()
+        val file = File(dir, "profiles.json")
+        file.writeText(
+            """[{"guid":"g3","remarks":"Iflix","configType":"VMESS","address":"front.wetv.vip","port":443,"uuid":"u1","tls":true,"network":"ws","goHelloEnabled":true,"pemicuEnabled":true,"pemicuDomain":"front.wetv.vip"}]"""
+        )
+        val store = ProfileStore(file)
+        store.load()
+        assertEquals(1, store.profiles.size)
+        val loaded = store.profiles[0]
+        assertEquals("Iflix", loaded.remarks)
+        assertEquals(ConfigType.VMESS, loaded.configType)
+        assertEquals("front.wetv.vip", loaded.address)
+        assertEquals(443, loaded.port)
+        assertEquals("u1", loaded.uuid)
+        org.junit.jupiter.api.Assertions.assertTrue(loaded.tls)
+        org.junit.jupiter.api.Assertions.assertTrue(loaded.pemicuEnabled)
+        assertEquals("front.wetv.vip", loaded.pemicuDomain)
+        // Saving drops the dead field: the next load is clean.
+        val gson = Gson()
+        val resaved = gson.toJson(loaded)
+        org.junit.jupiter.api.Assertions.assertFalse(
+            resaved.contains("goHelloEnabled"),
+            "saved json must not contain goHelloEnabled: $resaved",
+        )
     }
 
     @Test

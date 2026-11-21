@@ -83,11 +83,6 @@ data class ProfileItem(
     // standard SNI stays the real domain.
     var oneringEnabled: Boolean = false,
     var oneringBug: String = "",
-    // Hello Go (v1.0.1, Xray method): when ON, the connect dial and
-    // the prime dial send a ClientHello shaped like Go's crypto/tls
-    // DEFAULT Hello (GoHelloTls) instead of the JVM SSLSocket Hello.
-    // OFF = v1.0.0 behavior. Wins over Onering when both are on.
-    var goHelloEnabled: Boolean = false,
     // Pemicu (built-in primer, Xray method): per-entry primer.
     // Empty domain = entry is NOT primed (no fallback to address).
     var pemicuEnabled: Boolean = false,

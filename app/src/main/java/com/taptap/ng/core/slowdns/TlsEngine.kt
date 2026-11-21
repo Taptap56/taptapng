@@ -1,5 +1,6 @@
 package com.taptap.ng.core.slowdns
 
+import com.taptap.ng.core.DialLog
 import com.taptap.ng.core.proto.AddrCodec
 import com.taptap.ng.data.ProfileItem
 import java.io.IOException
@@ -82,6 +83,9 @@ object TlsEngine {
             runCatching { session.close() }
             throw IOException("TLS gagal: ${e.message}", e)
         }
+        // v1.0.2 (XVEON order): name the negotiated version —
+        // "TLS established: TLSv1.3" — not just "TLS ok".
+        DialLog.log("TLS", "TLS established: ${engine.session.protocol}")
         return session.inputStream to session.outputStream
     }
 

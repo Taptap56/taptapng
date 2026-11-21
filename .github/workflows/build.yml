@@ -49,7 +49,23 @@ jobs:
         chmod 755 gradlew
         ./gradlew :app:testDebugUnitTest
 
+    - name: Decode release keystore (stable signing, v1.0.2)
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      run: |
+        if [ -z "$KEYSTORE_BASE64" ]; then
+          echo "ERROR: KEYSTORE_BASE64 secret is missing — without it the APK would be debug-signed and could not update v1.0.2 (same failure as v1.0.1)" >&2
+          exit 1
+        fi
+        echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/taptapng-release.keystore"
+        ls -la "$RUNNER_TEMP/taptapng-release.keystore"
+
     - name: Build APK (release, R8)
+      env:
+        TAPTAPNG_KEYSTORE_PATH: ${{ runner.temp }}/taptapng-release.keystore
+        TAPTAPNG_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        TAPTAPNG_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        TAPTAPNG_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
       run: |
         cd ${{ github.workspace }}
         ./gradlew :app:assembleRelease
@@ -79,10 +95,21 @@ jobs:
         ls -la "$TMPDEX"
         echo "APK size (bytes): $(stat -c%s "$APK")"
         echo "APK SHA256: $(sha256sum "$APK" | cut -d' ' -f1)"
+        # v1.0.2: the signing certificate fingerprint MUST be the
+        # stable release key (SHA-256 D4:65:AE:E6:88:79:87:34:08:EB:
+        # C6:54:24:87:00:34:5A:F8:4D:FF:CE:50:76:C0:C8:57:91:50:DE:
+        # 98:A8:92). It must differ from v1.0.1's ephemeral debug
+        # key (47:F2:F4:EC:...) and stay identical on every build
+        # from here on — a different fingerprint means the update
+        # will fail on the phone ("tidak konsisten dengan tanda
+        # tangan APK yang diinstal").
+        APKSIGNER=$ANDROID_HOME/build-tools/37.0.0/apksigner
+        echo "APK signing certificates:"
+        "$APKSIGNER" verify --print-certs "$APK"
 
     - name: Upload APK
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
-        name: taptapng-v1.0.0-release
+        name: taptapng-v1.0.2-release
         path: ${{ github.workspace }}/app/build/outputs/apk/release/*.apk
