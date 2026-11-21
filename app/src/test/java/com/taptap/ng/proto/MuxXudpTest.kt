@@ -38,7 +38,7 @@ class MuxXudpTest {
         val clientIn = PipedInputStream(serverOut, pipeSize)
     }
 
-    private data class TestFrame(
+    data class TestFrame(
         val id: Int,
         val status: Int,
         val option: Int,
