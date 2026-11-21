@@ -118,49 +118,53 @@ class MuxTest {
         val data: ByteArray?,
     )
 
-    private fun readTestFrame(input: InputStream): TestFrame {
-        val lenBytes = input.readExactBytes(2)
-        val metaLen = ((lenBytes[0].toInt() and 0xFF) shl 8) or (lenBytes[1].toInt() and 0xFF)
-        if (metaLen < 4 || metaLen > 512) throw IOException("stub: metaLen tidak valid: $metaLen")
-        val meta = input.readExactBytes(metaLen)
-        val id = ((meta[0].toInt() and 0xFF) shl 8) or (meta[1].toInt() and 0xFF)
-        val status = meta[2].toInt() and 0xFF
-        val option = meta[3].toInt() and 0xFF
-        var host: String? = null
-        var port = 0
-        if (status == Mux.STATUS_NEW) {
-            val (t, _) = AddrCodec.parseVmessTarget(meta, 5)
-            host = t.host
-            port = t.port
+    companion object {
+        // Static supaya bisa dipakai dari EchoStub (nested class,
+        // tanpa outer) — pola yang sama seperti VlessMuxTest.
+        private fun readTestFrame(input: InputStream): TestFrame {
+            val lenBytes = input.readExactBytes(2)
+            val metaLen = ((lenBytes[0].toInt() and 0xFF) shl 8) or (lenBytes[1].toInt() and 0xFF)
+            if (metaLen < 4 || metaLen > 512) throw IOException("stub: metaLen tidak valid: $metaLen")
+            val meta = input.readExactBytes(metaLen)
+            val id = ((meta[0].toInt() and 0xFF) shl 8) or (meta[1].toInt() and 0xFF)
+            val status = meta[2].toInt() and 0xFF
+            val option = meta[3].toInt() and 0xFF
+            var host: String? = null
+            var port = 0
+            if (status == Mux.STATUS_NEW) {
+                val (t, _) = AddrCodec.parseVmessTarget(meta, 5)
+                host = t.host
+                port = t.port
+            }
+            val data = if ((option and Mux.OPTION_DATA) != 0) {
+                val dl = input.readExactBytes(2)
+                val n = ((dl[0].toInt() and 0xFF) shl 8) or (dl[1].toInt() and 0xFF)
+                input.readExactBytes(n)
+            } else {
+                null
+            }
+            return TestFrame(id, status, option, host, port, data)
         }
-        val data = if ((option and Mux.OPTION_DATA) != 0) {
-            val dl = input.readExactBytes(2)
-            val n = ((dl[0].toInt() and 0xFF) shl 8) or (dl[1].toInt() and 0xFF)
-            input.readExactBytes(n)
-        } else {
-            null
-        }
-        return TestFrame(id, status, option, host, port, data)
-    }
 
-    private fun writeTestFrame(
-        output: OutputStream,
-        id: Int,
-        status: Int,
-        option: Int,
-        data: ByteArray?,
-    ) {
-        val meta = byteArrayOf(
-            ((id ushr 8) and 0xFF).toByte(), (id and 0xFF).toByte(),
-            status.toByte(), option.toByte(),
-        )
-        output.write(byteArrayOf(((meta.size ushr 8) and 0xFF).toByte(), (meta.size and 0xFF).toByte()))
-        output.write(meta)
-        if (data != null) {
-            output.write(byteArrayOf(((data.size ushr 8) and 0xFF).toByte(), (data.size and 0xFF).toByte()))
-            output.write(data)
+        private fun writeTestFrame(
+            output: OutputStream,
+            id: Int,
+            status: Int,
+            option: Int,
+            data: ByteArray?,
+        ) {
+            val meta = byteArrayOf(
+                ((id ushr 8) and 0xFF).toByte(), (id and 0xFF).toByte(),
+                status.toByte(), option.toByte(),
+            )
+            output.write(byteArrayOf(((meta.size ushr 8) and 0xFF).toByte(), (meta.size and 0xFF).toByte()))
+            output.write(meta)
+            if (data != null) {
+                output.write(byteArrayOf(((data.size ushr 8) and 0xFF).toByte(), (data.size and 0xFF).toByte()))
+                output.write(data)
+            }
+            output.flush()
         }
-        output.flush()
     }
 
     /** Sepasang pipa dua arah (klien <-> stub). */
