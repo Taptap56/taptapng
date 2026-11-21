@@ -390,9 +390,9 @@ class TlsFragmentTest {
         override fun close() = delegate.close()
     }
 
-    private fun tlsItem(sni: String) = ProfileItem(
+    private fun tlsItem(sni: String, address: String = "127.0.0.1") = ProfileItem(
         remarks = "Fragment test",
-        address = "127.0.0.1",
+        address = address,
         port = 443,
         tls = true,
         insecure = true,
@@ -518,7 +518,17 @@ class TlsFragmentTest {
         val sni = "fragmentation-test-host.example"
         val config = FragmentConfig(20, 20, 0, 0, 64)
         val fragOut = FragmentingOutputStream(recording, config, sleeper = {})
-        val captured = runHandshake(clientToServer, serverToClient, fragOut, recording, tlsItem(sni))
+        // Address 127.0.0.2: no other test caches a TLS session
+        // for it in TlsEngine's shared trustAllContext, so this
+        // handshake always sends a FRESH ClientHello (~460 byte)
+        // instead of a resumed one with a ~1 KB PSK ticket (see
+        // the resumed test below — that is what failed CI
+        // 44866708458: the resumed hello hit the maxSplit cap and
+        // its last fragment was 279 byte, not <= 20).
+        val captured = runHandshake(
+            clientToServer, serverToClient, fragOut, recording,
+            tlsItem(sni, address = "127.0.0.2"),
+        )
         val (hello, records, helloFragCount) = reassembleClientHello(captured)
         val extensions = parseClientHelloExtensions(hello)
         val sniExt = extensions.firstOrNull { it.first == 0x0000 }
@@ -536,13 +546,71 @@ class TlsFragmentTest {
         // Every fragment is small, and there was real splitting.
         // (helloFragCount counts ONLY the ClientHello pieces —
         // the Finished record after them is also type 22.)
+        val helloFrags = records.take(helloFragCount)
         assertTrue(helloFragCount >= 10, "ClientHello harus terpecah banyak: $helloFragCount")
-        assertTrue(records.take(helloFragCount).all { it.size - 5 <= 20 })
+        assertTrue(
+            helloFrags.dropLast(1).all { it.size - 5 <= 20 },
+            "semua fragmen kecuali terakhir harus <= 20: ${helloFrags.map { it.size - 5 }}",
+        )
+        // The last fragment may exceed the length ONLY when
+        // maxSplit capped the split (a resumed ClientHello is
+        // ~1,5 KB — see the resumed test below).
+        if (helloFragCount < config.maxSplit) {
+            assertTrue(
+                helloFrags.all { it.size - 5 <= 20 },
+                "tanpa cap maxSplit semua fragmen harus <= 20: ${helloFrags.map { it.size - 5 }}",
+            )
+        } else {
+            assertEquals(config.maxSplit, helloFragCount, "cap maxSplit harus tepat")
+        }
         // Only the ClientHello was split: the next record (Finished)
         // is a single handshake record, not fragments.
         val afterHello = records.drop(helloFragCount)
         assertTrue(afterHello.isNotEmpty(), "harus ada record Finished sesudah ClientHello")
         assertEquals(0x16, afterHello[0][0].toInt() and 0xFF, "record sesudah hello harus Finished")
+    }
+
+    @Test
+    fun `fragmented resumed ClientHello honours maxSplit`() {
+        // Warm-up: a plain handshake on the same (host, port)
+        // caches a TLS session in TlsEngine's shared
+        // trustAllContext, so the fragmented handshake resumes
+        // it — the ClientHello grows by the ~1 KB PSK ticket and
+        // the split must cap at maxSplit instead of producing
+        // more fragments. Proves the cap path AND that a big
+        // hello still handshakes (this is the shape that failed
+        // CI 44866708458 before the assertion was fixed).
+        val item = tlsItem("fragmentation-test-host.example")
+        val warmClientToServer = QueueChannel()
+        val warmServerToClient = QueueChannel()
+        val warmRecording = RecordingOutputStream(warmClientToServer.output)
+        runHandshake(warmClientToServer, warmServerToClient, warmRecording, warmRecording, item)
+
+        val clientToServer = QueueChannel()
+        val serverToClient = QueueChannel()
+        val recording = RecordingOutputStream(clientToServer.output)
+        val config = FragmentConfig(20, 20, 0, 0, 64)
+        val fragOut = FragmentingOutputStream(recording, config, sleeper = {})
+        val captured = runHandshake(clientToServer, serverToClient, fragOut, recording, item)
+        val (hello, records, helloFragCount) = reassembleClientHello(captured)
+        assertTrue(hello.size > 63 * 20, "hello resume harus > 1260 byte: ${hello.size}")
+        assertEquals(config.maxSplit, helloFragCount, "split harus mentok di maxSplit")
+        val helloFrags = records.take(helloFragCount)
+        assertTrue(
+            helloFrags.dropLast(1).all { it.size - 5 == 20 },
+            "63 fragmen pertama harus 20 byte: ${helloFrags.map { it.size - 5 }}",
+        )
+        assertTrue(
+            helloFrags.last().size - 5 > 20,
+            "fragmen terakhir menampung sisa ticket PSK: ${helloFrags.last().size - 5}",
+        )
+        // Reassembly + SNI still intact: the SNI sits near the
+        // start of the hello, far from the big last fragment.
+        val extensions = parseClientHelloExtensions(hello)
+        assertEquals(
+            "fragmentation-test-host.example",
+            parseSniHost(extensions.first { it.first == 0x0000 }.second),
+        )
     }
 
     @Test
