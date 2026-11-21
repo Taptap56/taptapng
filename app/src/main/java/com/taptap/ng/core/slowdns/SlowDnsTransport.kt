@@ -2,6 +2,7 @@ package com.taptap.ng.core.slowdns
 
 import com.taptap.ng.core.DialLog
 import com.taptap.ng.core.proto.AddrCodec
+import com.taptap.ng.core.proto.HttpUpgradeTransport
 import com.taptap.ng.core.proto.LadderStream
 import com.taptap.ng.core.proto.SpeedStats
 import com.taptap.ng.core.proto.TimedInputStream
@@ -18,9 +19,11 @@ import java.io.OutputStream
  * runs over a DNSTT smux stream instead of a TCP socket.
  *
  * Ladder: smux stream → TLS (via [TlsEngine], only when item.tls)
- * → WS (only when network == "ws"). The VMess/VLESS header is then
- * written over the resulting stream exactly like on the socket path
- * — the protocol clients ([com.taptap.ng.core.proto.VmessClient] /
+ * → WS (only when network == "ws") or HTTPUpgrade (only when
+ * network == "httpupgrade", v1.0.13 — raw stream after the 101).
+ * The VMess/VLESS header is then written over the resulting stream
+ * exactly like on the socket path — the protocol clients
+ * ([com.taptap.ng.core.proto.VmessClient] /
  * [com.taptap.ng.core.proto.VlessClient]) do not know or care which
  * ladder produced the stream.
  *
@@ -72,9 +75,9 @@ object SlowDnsTransport {
             stream.readDeadlineMs = Transport.HANDSHAKE_TIMEOUT_MS.toLong()
             Transport.armWatchdogCloseable(Closeable { stream?.close() })
             val network = item.network.ifBlank { "tcp" }.lowercase()
-            if (network != "tcp" && network != "ws") {
+            if (network != "tcp" && network != "ws" && network != "httpupgrade") {
                 runCatching { stream.close() }
-                throw IllegalArgumentException("network $network belum didukung (hanya tcp/ws)")
+                throw IllegalArgumentException("network $network belum didukung (hanya tcp/ws/httpupgrade)")
             }
             if (item.tls) {
                 Transport.noteStage("TLS")
@@ -115,6 +118,21 @@ object SlowDnsTransport {
                     output = ws.output
                 } catch (e: Exception) {
                     throw IOException("WS gagal: ${e.message}", e)
+                }
+            } else if (network == "httpupgrade") {
+                // v1.0.13: same as the socket ladder — the upgrade
+                // request is standard, the stream stays raw after
+                // the 101 (no WS framing).
+                Transport.noteStage("HTTPUpgrade")
+                try {
+                    DialLog.log(
+                        "HTTPUpgrade",
+                        "HTTPUpgrade handshake -> Host: ${Transport.wsHost(item)}, Path: ${Transport.wsPath(item)}",
+                    )
+                    HttpUpgradeTransport.connect(timedIn, output, Transport.wsHost(item), Transport.wsPath(item))
+                    input = timedIn
+                } catch (e: Exception) {
+                    throw IOException("HTTPUpgrade gagal: ${e.message}", e)
                 }
             } else {
                 input = timedIn

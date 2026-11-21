@@ -9,9 +9,10 @@ import com.taptap.ng.data.ProfileItem
  * (one shared JSch session, one direct-tcpip channel per dial).
  *
  * Rules:
- * - network must be tcp or ws (blank = tcp). Anything else throws.
- * - Shadowsocks only runs over raw TCP: network ws (or tls) on an SS
- *   profile throws instead of being silently ignored.
+ * - network must be tcp, ws, or httpupgrade (blank = tcp). Anything
+ *   else throws.
+ * - Shadowsocks only runs over raw TCP: network ws/httpupgrade (or
+ *   tls) on an SS profile throws instead of being silently ignored.
  * - Unknown configType / SS method / VMess security throw
  *   IllegalArgumentException with a clear message.
  */
@@ -24,8 +25,8 @@ object ProxyClientFactory {
      */
     fun create(item: ProfileItem, muxConfig: MuxConfig = MuxConfig.DISABLED): ProxyClient {
         val network = item.network.ifBlank { "tcp" }.lowercase()
-        if (network != "tcp" && network != "ws") {
-            throw IllegalArgumentException("network $network belum didukung (hanya tcp/ws)")
+        if (network != "tcp" && network != "ws" && network != "httpupgrade") {
+            throw IllegalArgumentException("network $network belum didukung (hanya tcp/ws/httpupgrade)")
         }
         return when (item.configType) {
             ConfigType.VMESS -> VmessClient(item, muxConfig = muxConfig)
@@ -34,7 +35,7 @@ object ProxyClientFactory {
             ConfigType.SHADOWSOCKS -> {
                 if (network != "tcp") {
                     throw IllegalArgumentException(
-                        "Shadowsocks hanya jalan di TCP (network ws tidak didukung)",
+                        "Shadowsocks hanya jalan di TCP (network $network tidak didukung)",
                     )
                 }
                 // Validate the method eagerly so a bad profile fails
