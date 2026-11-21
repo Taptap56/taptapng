@@ -39,7 +39,7 @@ import com.google.android.material.tabs.TabLayout
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.WriterException
 import com.google.zxing.qrcode.QRCodeWriter
-import com.taptap.ng.AppConfig
+import com.taptap.ng.BuildConfig
 import com.taptap.ng.R
 import com.taptap.ng.TaptapNGApp
 import com.taptap.ng.core.DialLog
@@ -554,7 +554,7 @@ class MainActivity : AppCompatActivity() {
             R.id.nav_logcat -> startActivity(Intent(this, LogActivity::class.java))
             R.id.nav_about -> AlertDialog.Builder(this)
                 .setTitle(R.string.about_title)
-                .setMessage(getString(R.string.about_text, AppConfig.VERSION_NAME))
+                .setMessage(formatAboutText(getString(R.string.about_text), BuildConfig.VERSION_NAME))
                 .setPositiveButton(android.R.string.ok, null)
                 .show()
             else -> Toast.makeText(this, R.string.toast_not_available, Toast.LENGTH_SHORT).show()
