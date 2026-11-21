@@ -213,10 +213,12 @@ class MuxFallbackTest {
                 val addonLen = head[17].toInt() and 0xFF
                 input.readExactBytes(2) // port tujuan
                 val atyp = input.read()
+                // ATYP VMess/VLESS (bukan SOCKS!): 1=IPv4, 2=domain,
+                // 3=IPv6 — lihat AddrCodec.encodeVmessAddress.
                 val addrLen = when (atyp) {
                     0x01 -> 4
-                    0x03 -> input.read()
-                    0x04 -> 16
+                    0x02 -> input.read()
+                    0x03 -> 16
                     else -> throw IOException("atyp VLESS tidak dikenal: $atyp")
                 }
                 input.readExactBytes(addrLen)
