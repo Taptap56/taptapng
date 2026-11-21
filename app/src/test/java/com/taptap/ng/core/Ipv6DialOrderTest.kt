@@ -59,8 +59,11 @@ class Ipv6DialOrderTest {
         }
         assertEquals(2, all.size)
         assertTrue(all[0] is java.net.Inet4Address, "first must be IPv4, was ${all[0]}")
-        assertEquals("10.0.0.1", all[0].hostAddress)
-        assertEquals("2001:db8::1", all[1].hostAddress)
+        // Compare InetAddress objects, NOT hostAddress strings:
+        // Java returns IPv6 in long form ("2001:db8:0:0:0:0:0:1"),
+        // never the compressed literal.
+        assertEquals(InetAddress.getByName("10.0.0.1"), all[0])
+        assertEquals(InetAddress.getByName("2001:db8::1"), all[1])
     }
 
     @Test
@@ -69,8 +72,8 @@ class Ipv6DialOrderTest {
             DnsResolver.resolveAll("example.com", 443, timeoutMs = 1000)
         }
         assertEquals(2, all.size)
-        assertEquals("2001:db8::1", all[0].hostAddress)
-        assertEquals("10.0.0.1", all[1].hostAddress)
+        assertEquals(InetAddress.getByName("2001:db8::1"), all[0])
+        assertEquals(InetAddress.getByName("10.0.0.1"), all[1])
     }
 
     @Test
@@ -81,8 +84,8 @@ class Ipv6DialOrderTest {
             val b = DnsResolver.resolveAll("example.com", 443, timeoutMs = 1000)
             listOf(a, b)
         }
-        assertEquals(first.map { it.hostAddress }, second.map { it.hostAddress })
-        assertEquals("2001:db8::1", second[0].hostAddress)
+        assertEquals(first, second)
+        assertEquals(InetAddress.getByName("2001:db8::1"), second[0])
     }
 
     @Test
@@ -90,6 +93,6 @@ class Ipv6DialOrderTest {
         val all = runWithHook(preferIpv6 = true) {
             DnsResolver.resolveAll("2001:db8::9", 443, timeoutMs = 1000)
         }
-        assertEquals(listOf("2001:db8::9"), all.map { it.hostAddress })
+        assertEquals(listOf(InetAddress.getByName("2001:db8::9")), all)
     }
 }
