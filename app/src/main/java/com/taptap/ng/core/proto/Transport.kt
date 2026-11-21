@@ -3,6 +3,7 @@ package com.taptap.ng.core.proto
 import com.taptap.ng.core.DialLog
 import com.taptap.ng.core.DnsResolver
 import com.taptap.ng.core.TunnelState
+import com.taptap.ng.data.ConfigType
 import com.taptap.ng.data.ProfileItem
 import java.io.IOException
 import java.io.InputStream
@@ -196,6 +197,45 @@ object Transport {
     fun preferWatchdogFailure(e: Exception): Exception = watchdogFailure() ?: e
 
     /**
+     * v1.0.10 (XVEON proxy): the protocols the HTTP CONNECT proxy
+     * + Xray payload apply to. SSH has its own payload +
+     * remote-proxy chain (SshPayload / SshProxyClient) and
+     * Shadowsocks is out of scope — both still call
+     * [Transport.open], so the gate lives here, not in the
+     * callers. SlowDNS entries reach this ladder too
+     * (SlowDnsTransport delegates when dnsttEnabled is off); a
+     * SlowDNS entry with proxy on is NOT proxied — its DNSTT
+     * branch bypasses this ladder entirely (see README-v1.0.10).
+     */
+    internal val PROXY_TYPES = setOf(ConfigType.VMESS, ConfigType.VLESS, ConfigType.TROJAN)
+
+    internal fun isProxyCapable(item: ProfileItem): Boolean = item.configType in PROXY_TYPES
+
+    /**
+     * The [XrayPayload.Ctx] for this dial, or null when the
+     * payload chip is off. One Sec-WebSocket-Key per dial, shared
+     * by the proxy payload and the WS handshake. `[ip]` resolves
+     * the server best-effort (cached, operator-first — the same
+     * announce shape as the v1.0.4 main dial); a failed lookup
+     * falls back to the hostname instead of killing the dial.
+     */
+    internal fun payloadCtx(item: ProfileItem): XrayPayload.Ctx? {
+        if (!item.xrayUsePayload || !isProxyCapable(item)) return null
+        val ip = runCatching {
+            DnsResolver.resolveWithSystemFallback(item.address, item.port).hostAddress
+        }.getOrNull() ?: item.address
+        return XrayPayload.Ctx(
+            wsHost = wsHost(item),
+            path = wsPath(item),
+            sni = item.sni.ifBlank { item.address },
+            host = item.address,
+            ip = ip,
+            port = item.port,
+            wsKey = XrayPayload.newWsKey(),
+        )
+    }
+
+    /**
      * v1.0.4: apakah kegagalan TLS ini berarti "IP ini menggantung
      * di TLS" sehingga dial berikutnya harus merotasi ke alamat
      * berikutnya di cache? Ya hanya bila benar-benar timeout — read
@@ -236,6 +276,24 @@ object Transport {
     ): OpenStream {
         require(item.address.isNotBlank()) { "Address proxy kosong" }
         require(item.port in 1..65535) { "Port proxy di luar 1..65535: ${item.port}" }
+        // v1.0.10 (XVEON proxy): the TCP target is the proxy, not
+        // the server — the server is named only in the CONNECT
+        // request that follows. A proxy chip with an empty host is
+        // a config error: fail fast with a clear stage instead of
+        // silently dialling direct (the editor already refuses to
+        // save it, but an imported entry can still carry it).
+        val useProxy = item.proxyEnabled && isProxyCapable(item)
+        if (useProxy && item.proxyHost.isBlank()) {
+            throw IllegalArgumentException("Proxy gagal: host proxy kosong")
+        }
+        val proxyTarget = if (useProxy) {
+            XrayPayload.parseProxyTarget(item.proxyHost, item.proxyPort)
+        } else {
+            null
+        }
+        // One payload template context per dial (null = chip off);
+        // the WS handshake reuses it with the handshake's own key.
+        val payloadCtx = payloadCtx(item)
         val wd = threadWatchdog.get()
         // v1.0.3 (XVEON parity): "Connecting to Xray outbound
         // front.wetv.vip:443..." — no protocol name in this line
@@ -296,13 +354,22 @@ object Transport {
             // sampai resolver menyerah (gejala v1.0.4: status macet di
             // "Connecting..." selamanya). Di sini address sudah IP
             // hasil resolve, jadi connect() tidak lookup lagi.
+            // v1.0.10 (XVEON proxy): the TCP target is the proxy —
+            // its host resolves operator-first, exactly like the
+            // server resolve in v1.0.4 (the same announce that opens
+            // the operator window).
+            val dialHost = proxyTarget?.first ?: item.address
+            val dialPort = proxyTarget?.second ?: item.port
+            if (useProxy) {
+                DialLog.log("PROXY", "Proxy $dialHost:$dialPort -> ${item.address}:${item.port}")
+            }
             noteStage("TCP")
-            DialLog.log("TCP", "Connecting TCP socket to ${item.address}:${item.port}")
+            DialLog.log("TCP", "Connecting TCP socket to $dialHost:$dialPort")
             noteStage("DNS")
-            val target = DnsResolver.resolveWithSystemFallback(item.address, item.port)
+            val target = DnsResolver.resolveWithSystemFallback(dialHost, dialPort)
             noteStage("TCP")
             try {
-                plain.connect(InetSocketAddress(target, item.port), CONNECT_TIMEOUT_MS)
+                plain.connect(InetSocketAddress(target, dialPort), CONNECT_TIMEOUT_MS)
             } catch (e: SocketTimeoutException) {
                 throw SocketTimeoutException("TCP gagal: ${e.message}")
             } catch (e: ConnectException) {
@@ -333,6 +400,21 @@ object Transport {
             throw IllegalArgumentException("network $network belum didukung (hanya tcp/ws)")
         }
         try {
+            if (useProxy) {
+                // v1.0.10 (XVEON proxy): payload first, then CONNECT,
+                // then TLS wraps the same socket. The payload is
+                // fire-and-forget (no response read — XVEON's
+                // "Sending proxy custom payload..." writes and moves
+                // on); CONNECT must answer 200 or the dial dies here
+                // with a tagged stage ("Proxy CONNECT ditolak: ...").
+                noteStage("Proxy")
+                if (payloadCtx != null) {
+                    DialLog.log("PROXY", "Sending proxy custom payload...")
+                    val expanded = XrayPayload.expand(XrayPayload.templateFor(item), payloadCtx)
+                    XrayPayload.writeSegments(output, expanded)
+                }
+                HttpConnectProxy.doConnect(input, output, item.address, item.port)
+            }
             if (item.tls) {
                 // Tahap TLS. SNI tetap domain asli (item.sni atau
                 // item.address): TlsUtil.wrap menerima item apa adanya
@@ -414,7 +496,27 @@ object Transport {
                         "WS",
                         "WebSocket (WS) handshake -> Host: ${wsHost(item)}, Path: ${wsPath(item)}",
                     )
-                    val ws = WsTransport.connect(timedIn, output, wsHost(item), wsPath(item), stats)
+                    // v1.0.10 (XVEON payload): the handshake request
+                    // is the entry's expanded payload template
+                    // (default = the standard WS upgrade) with this
+                    // dial's key — WsTransport injects the
+                    // Sec-WebSocket-Key headers when the template
+                    // asks for an upgrade but carries no key, so the
+                    // Accept check below still works.
+                    val ws = if (payloadCtx != null) {
+                        WsTransport.connect(
+                            timedIn, output, wsHost(item), wsPath(item), stats,
+                            wsKey = payloadCtx.wsKey,
+                            customHandshake = { key ->
+                                XrayPayload.expand(
+                                    XrayPayload.templateFor(item),
+                                    payloadCtx.copy(wsKey = key),
+                                )
+                            },
+                        )
+                    } else {
+                        WsTransport.connect(timedIn, output, wsHost(item), wsPath(item), stats)
+                    }
                     input = ws.input
                     output = ws.output
                 } catch (e: Exception) {

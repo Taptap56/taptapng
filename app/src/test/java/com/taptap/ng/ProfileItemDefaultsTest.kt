@@ -44,6 +44,12 @@ class ProfileItemDefaultsTest {
         assertEquals("default", item.sshSniVersion)
         assertEquals("", item.streamSecurity)
         assertFalse(item.tls)
+        // v1.0.10: XVEON proxy + Xray payload fields, both off.
+        assertFalse(item.xrayUsePayload)
+        assertEquals("", item.xrayPayload)
+        assertFalse(item.proxyEnabled)
+        assertEquals("", item.proxyHost)
+        assertNull(item.proxyPort)
     }
 
     @Test
@@ -83,6 +89,13 @@ class ProfileItemDefaultsTest {
         assertEquals("default", loaded.sshSniVersion)
         assertEquals("", loaded.streamSecurity)
         assertFalse(loaded.tls)
+        // v1.0.10: an old file has no proxy/payload keys — Gson
+        // must fill the declared defaults, never null/crash.
+        assertFalse(loaded.xrayUsePayload)
+        assertEquals("", loaded.xrayPayload)
+        assertFalse(loaded.proxyEnabled)
+        assertEquals("", loaded.proxyHost)
+        assertNull(loaded.proxyPort)
         // Gson round trip keeps the new values once saved.
         val gson = Gson()
         val saved = gson.fromJson(gson.toJson(loaded), ProfileItem::class.java)

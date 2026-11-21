@@ -89,6 +89,17 @@ data class ProfileItem(
     var pemicuDomain: String = "",
     var pemicuPort: Int? = null, // null/empty = 443
     var pemicuInterval: Int? = null, // null = 15
+    // Payload + Proxy ala XVEON 6.1 (Xray method, v1.0.10):
+    // HTTP CONNECT proxy (proxyHost = domain bug, dukung
+    // [rotate=bug1;bug2]) + template payload custom yang dikirim
+    // ke proxy sebelum CONNECT dan dipakai lagi sebagai WS
+    // handshake. Semua default mati/kosong — entry lama tanpa
+    // field ini (Gson) jalan persis seperti v1.0.9.
+    var xrayUsePayload: Boolean = false,
+    var xrayPayload: String = "",
+    var proxyEnabled: Boolean = false,
+    var proxyHost: String = "",
+    var proxyPort: Int? = null, // null/empty = 80
 ) {
     /** Display name for the server list row. */
     fun displayName(): String = remarks.ifBlank { address }
@@ -105,6 +116,7 @@ data class ProfileItem(
         if (tls) parts += "TLS"
         if (dnsttEnabled) parts += "SlowDNS"
         if (oneringEnabled) parts += "Onering"
+        if (proxyEnabled) parts += "Proxy"
         return parts.joinToString(" · ")
     }
 

@@ -282,6 +282,9 @@ class ServerEditorActivity : AppCompatActivity() {
         setText(R.id.input_pemicu_domain, item.pemicuDomain)
         setText(R.id.input_pemicu_port, item.pemicuPort?.toString() ?: "")
         setText(R.id.input_pemicu_interval, item.pemicuInterval?.toString() ?: "15")
+        setText(R.id.input_proxy_host, item.proxyHost)
+        setText(R.id.input_proxy_port, item.proxyPort?.toString() ?: "")
+        setText(R.id.input_xray_payload, item.xrayPayload)
     }
 
     // ---- chips / sections ----
@@ -322,6 +325,8 @@ class ServerEditorActivity : AppCompatActivity() {
         // Xray method chips toggle their field sections.
         chip(R.id.chip_slowdns).setOnCheckedChangeListener { _, _ -> updateXraySections() }
         chip(R.id.chip_onering).setOnCheckedChangeListener { _, _ -> updateXraySections() }
+        chip(R.id.chip_proxy).setOnCheckedChangeListener { _, _ -> updateXraySections() }
+        chip(R.id.chip_xray_payload).setOnCheckedChangeListener { _, _ -> updateXraySections() }
         // v1.0.31: the SSH Pemicu chip mirrors the Xray Pemicu chip —
         // one field (ProfileItem.pemicuEnabled), two controls. The
         // Xray chip stays the canonical state holder (save +
@@ -345,6 +350,8 @@ class ServerEditorActivity : AppCompatActivity() {
             chip(R.id.chip_slowdns).isChecked = item.dnsttEnabled
             chip(R.id.chip_onering).isChecked = item.oneringEnabled
             chip(R.id.chip_pemicu).isChecked = item.pemicuEnabled
+            chip(R.id.chip_proxy).isChecked = item.proxyEnabled
+            chip(R.id.chip_xray_payload).isChecked = item.xrayUsePayload
             chip(R.id.chip_ssh_pemicu).isChecked = item.pemicuEnabled
         }
     }
@@ -461,6 +468,8 @@ class ServerEditorActivity : AppCompatActivity() {
         show(R.id.section_dnstt, slowdns)
         show(R.id.section_onering, chip(R.id.chip_onering).isChecked)
         show(R.id.section_pemicu, chip(R.id.chip_pemicu).isChecked)
+        show(R.id.section_proxy, chip(R.id.chip_proxy).isChecked)
+        show(R.id.section_xray_payload, chip(R.id.chip_xray_payload).isChecked)
     }
 
     // Menu inflated here (see MainActivity): `app:menu` in the layout
@@ -593,6 +602,22 @@ class ServerEditorActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.toast_pemicu_required, Toast.LENGTH_SHORT).show()
             return
         }
+        // v1.0.10 (XVEON proxy): chip Proxy nyala tapi host kosong
+        // = dial tidak akan pernah sampai ke proxy — tolak save
+        // seperti Pemicu (domain wajib). Port non-angka di luar
+        // 1..65535 ditolak; kosong berarti 80.
+        if (chip(R.id.chip_proxy).isChecked && text(R.id.input_proxy_host).isBlank()) {
+            Toast.makeText(this, R.string.toast_proxy_required, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val proxyPortText = text(R.id.input_proxy_port)
+        if (proxyPortText.isNotBlank()) {
+            val proxyPort = proxyPortText.toIntOrNull()
+            if (proxyPort == null || proxyPort !in 1..65535) {
+                Toast.makeText(this, R.string.toast_port_invalid, Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
 
         val network = dropdownValue(R.id.input_network).ifBlank { "tcp" }
         val streamSecurity = dropdownValue(R.id.input_stream_security)
@@ -675,6 +700,11 @@ class ServerEditorActivity : AppCompatActivity() {
             pemicuDomain = text(R.id.input_pemicu_domain),
             pemicuPort = text(R.id.input_pemicu_port).toIntOrNull(),
             pemicuInterval = text(R.id.input_pemicu_interval).toIntOrNull(),
+            xrayUsePayload = chip(R.id.chip_xray_payload).isChecked,
+            xrayPayload = text(R.id.input_xray_payload),
+            proxyEnabled = chip(R.id.chip_proxy).isChecked,
+            proxyHost = text(R.id.input_proxy_host).trim(),
+            proxyPort = text(R.id.input_proxy_port).toIntOrNull(),
         )
         if (existing == null) store.add(item) else store.update(item)
         finish()

@@ -53,20 +53,38 @@ object WsTransport {
         host: String,
         path: String,
         stats: SpeedStats? = null,
+        /**
+         * v1.0.10 (XVEON payload): a fixed Sec-WebSocket-Key to use
+         * instead of generating one — Transport.open generates one
+         * key per dial and reuses it for the proxy payload, so the
+         * proxy payload and the WS handshake carry the same key.
+         * Null = generate here (the old behaviour).
+         */
+        wsKey: String? = null,
+        /**
+         * v1.0.10 (XVEON payload): when set, the WS handshake
+         * request is `customHandshake(key)` instead of the standard
+         * request — the entry's expanded payload template. The key
+         * is inserted as Sec-WebSocket-Key (+ Version 13) when the
+         * template asks for a WS upgrade but carries no key
+         * (XVEON's default template has none), so the Accept check
+         * below still works. `[split]` segments in the request are
+         * written one flush at a time. Null = the standard request.
+         */
+        customHandshake: ((String) -> String)? = null,
     ): WsStream {
-        val keyBytes = Crypto.randomBytes(16)
-        val key = Base64Util.encode(keyBytes)
-        val request = buildString {
-            append("GET ").append(path).append(" HTTP/1.1\r\n")
-            append("Host: ").append(host).append("\r\n")
-            append("Upgrade: websocket\r\n")
-            append("Connection: Upgrade\r\n")
-            append("Sec-WebSocket-Key: ").append(key).append("\r\n")
-            append("Sec-WebSocket-Version: 13\r\n")
-            append("\r\n")
-        }
-        rawOut.write(request.toByteArray(Charsets.UTF_8))
-        rawOut.flush()
+        val key = wsKey ?: Base64Util.encode(Crypto.randomBytes(16))
+        val request = customHandshake?.let { XrayPayload.addWsHandshakeHeaders(it(key), key) }
+            ?: buildString {
+                append("GET ").append(path).append(" HTTP/1.1\r\n")
+                append("Host: ").append(host).append("\r\n")
+                append("Upgrade: websocket\r\n")
+                append("Connection: Upgrade\r\n")
+                append("Sec-WebSocket-Key: ").append(key).append("\r\n")
+                append("Sec-WebSocket-Version: 13\r\n")
+                append("\r\n")
+            }
+        XrayPayload.writeSegments(rawOut, request)
         val headerBytes = readHttpHeader(rawIn)
         val header = String(headerBytes, Charsets.UTF_8)
         val lines = header.split("\r\n")

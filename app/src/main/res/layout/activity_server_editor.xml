@@ -867,6 +867,18 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Pemicu" />
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chip_proxy"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Proxy" />
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chip_xray_payload"
+                    style="@style/Widget.TaptapNG.Chip.Filter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Payload" />
             </com.google.android.material.chip.ChipGroup>
 
             <LinearLayout
@@ -992,6 +1004,63 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:inputType="number" />
+                </com.google.android.material.textfield.TextInputLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/section_proxy"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:hint="@string/field_proxy_host">
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/input_proxy_host"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:hint="@string/field_proxy_port">
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/input_proxy_port"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number" />
+                </com.google.android.material.textfield.TextInputLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/section_xray_payload"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:hint="@string/field_xray_payload"
+                    app:placeholderText="@string/hint_xray_payload">
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/input_xray_payload"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="top"
+                        android:inputType="textMultiLine"
+                        android:minLines="4" />
                 </com.google.android.material.textfield.TextInputLayout>
             </LinearLayout>
 
