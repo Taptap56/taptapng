@@ -253,8 +253,8 @@ class VlessTrojanTest {
         serverError?.let { throw AssertionError("Fake VLESS server gagal", it) }
         val logLines = DialLog.lines().drop(logBefore)
         assertTrue(
-            logLines.any { it.contains("VLESS body 4B untuk example.com:443") },
-            "log harus ada 'VLESS body 4B ...': $logLines",
+            logLines.any { it.contains("body 4B untuk example.com:443") },
+            "log harus ada 'body 4B ...': $logLines",
         )
         assertTrue(
             logLines.any { it.contains("Xray VLESS handshake & transport ready!") },

@@ -550,8 +550,8 @@ class VmessClientTest {
         // The log must prove the body went out and the header arrived.
         val logLines = DialLog.lines().drop(logBefore)
         assertTrue(
-            logLines.any { it.contains("VMess body 14B untuk example.com:443") },
-            "log harus ada 'VMess body 14B ...': $logLines",
+            logLines.any { it.contains("body 14B untuk example.com:443") },
+            "log harus ada 'body 14B ...': $logLines",
         )
         assertTrue(
             logLines.any { it.contains("Xray VMess handshake & transport ready!") },

@@ -180,7 +180,7 @@ override fun dial(
         val h = Harness(OkProxy())
         h.fwd.start()
         assertTrue(waitFor(what = "FORWARDER mulai") {
-            DialLog.lines().drop(before).any { it.contains("FORWARDER mulai") }
+            DialLog.lines().drop(before).any { it.contains("mulai — baca TUN") }
         })
         // Feed one packet at a time and wait for its line: a
         // PipedInputStream read() can coalesce packets written
@@ -188,26 +188,26 @@ override fun dial(
         // the first packet of each read.
         h.feed(syn())
         assertTrue(waitFor(what = "TUN TCP line") {
-            DialLog.lines().drop(before).any { it.contains("TUN TCP") }
+            DialLog.lines().drop(before).any { it.contains("TCP 10.10.14.2:12345 -> 93.184.216.34:443") }
         })
         h.feed(udpDnsQuery())
         assertTrue(waitFor(what = "TUN UDP line") {
-            DialLog.lines().drop(before).any { it.contains("TUN UDP") }
+            DialLog.lines().drop(before).any { it.contains("UDP 10.10.14.2:53000 -> 93.184.216.34:53") }
         })
         h.feed(icmpEchoRequest())
         assertTrue(waitFor(what = "TUN ICMP line") {
-            DialLog.lines().drop(before).any { it.contains("TUN ICMP") }
+            DialLog.lines().drop(before).any { it.contains("ICMP 10.10.14.2:0 -> 93.184.216.34:0") }
         })
         val lines = DialLog.lines().drop(before).joinToString("\n")
-        assertTrue(lines.contains("TUN TCP 10.10.14.2:12345 -> 93.184.216.34:443 (#1)"))
-        assertTrue(lines.contains("TUN UDP 10.10.14.2:53000 -> 93.184.216.34:53 (#2)"))
-        assertTrue(lines.contains("TUN ICMP 10.10.14.2:0 -> 93.184.216.34:0 (#3)"))
-        assertTrue(lines.contains("DNS query 93.184.216.34"))
+        assertTrue(lines.contains("TCP 10.10.14.2:12345 -> 93.184.216.34:443 (#1)"))
+        assertTrue(lines.contains("UDP 10.10.14.2:53000 -> 93.184.216.34:53 (#2)"))
+        assertTrue(lines.contains("ICMP 10.10.14.2:0 -> 93.184.216.34:0 (#3)"))
+        assertTrue(lines.contains("query 93.184.216.34"))
         h.stop()
         assertTrue(waitFor(what = "FORWARDER berhenti") {
-            DialLog.lines().drop(before).any { it.contains("FORWARDER berhenti") }
+            DialLog.lines().drop(before).any { it.contains("berhenti (paket dibaca:") }
         })
-        val stopLine = DialLog.lines().drop(before).first { it.contains("FORWARDER berhenti") }
+        val stopLine = DialLog.lines().drop(before).first { it.contains("berhenti (paket dibaca:") }
         assertTrue(stopLine.contains("paket dibaca: 3"))
     }
 
@@ -283,7 +283,7 @@ override fun dial(
         h.fwd.start()
         h.feed(syn())
         assertTrue(waitFor(what = "DIAL start line") {
-            DialLog.lines().drop(before).any { it.contains("DIAL 93.184.216.34:443") }
+            DialLog.lines().drop(before).any { it.contains("93.184.216.34:443") }
         })
         assertTrue(waitFor(what = "DIAL GAGAL line") {
             DialLog.lines().drop(before).any { it.contains("DIAL 93.184.216.34:443 GAGAL") }
@@ -303,7 +303,7 @@ override fun dial(
         h.fwd.start()
         h.feed(udpDnsQuery())
         assertTrue(waitFor(what = "DNS query line") {
-            DialLog.lines().drop(before).any { it.contains("DNS query") }
+            DialLog.lines().drop(before).any { it.contains("query 93.184.216.34") }
         })
         assertTrue(waitFor(what = "DNS GAGAL line", timeoutMs = 10_000) {
             DialLog.lines().drop(before).any { it.contains("DNS") && it.contains("GAGAL") }

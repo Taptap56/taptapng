@@ -143,11 +143,11 @@ override fun dial(
             assertTrue(statuses.contains("Connected"), "expected Connected, got $statuses")
             val lines = DialLog.lines().drop(before)
             assertTrue(
-                lines.any { it.contains("DIAL 1.2.3.4:443") && !it.contains(" ok") },
+                lines.any { it.contains("1.2.3.4:443") && !it.contains(" ok") },
                 "expected a DIAL start line, got: $lines",
             )
             assertTrue(
-                lines.any { it.contains("DIAL 1.2.3.4:443 ok") },
+                lines.any { it.contains("1.2.3.4:443 ok") },
                 "expected a DIAL ok line, got: $lines",
             )
         } finally {

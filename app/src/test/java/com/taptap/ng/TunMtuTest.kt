@@ -166,7 +166,7 @@ class TunMtuTest {
         h.fwd.start()
         assertTrue(
             waitFor(what = "TUN mtu/mss log line") {
-                DialLog.lines().any { it.contains("TUN mtu=9000 mss=8960") }
+                DialLog.lines().any { it.contains("mtu=9000 mss=8960") }
             },
         )
         h.feed(syn(mss = 8960))

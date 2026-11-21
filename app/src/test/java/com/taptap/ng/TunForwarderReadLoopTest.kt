@@ -176,7 +176,7 @@ override fun dial(
             DialLog.lines().drop(before).any { it.contains("loop baca TUN jalan") }
         })
         assertTrue(waitFor(what = "TUN TCP line after zero read") {
-            DialLog.lines().drop(before).any { it.contains("TUN TCP") }
+            DialLog.lines().drop(before).any { it.contains("TCP 10.10.14.2:12345 -> 93.184.216.34:443") }
         })
         // The reader is still alive waiting for more packets —
         // no "selesai" while the VPN is up.
@@ -215,13 +215,13 @@ override fun dial(
         h.tunInWrite.write(syn())
         h.tunInWrite.flush()
         assertTrue(waitFor(what = "TUN TCP line") {
-            DialLog.lines().drop(before).any { it.contains("TUN TCP") }
+            DialLog.lines().drop(before).any { it.contains("TCP 10.10.14.2:12345 -> 93.184.216.34:443") }
         })
         h.stop()
         assertTrue(waitFor(what = "baca TUN selesai line") {
             DialLog.lines().drop(before).any { it.contains("baca TUN selesai (paket: 1)") }
         })
         val lines = DialLog.lines().drop(before).joinToString("\n")
-        assertEquals(1, lines.split("TUN TCP").size - 1)
+        assertEquals(1, lines.split("TCP 10.10.14.2:12345").size - 1)
     }
 }

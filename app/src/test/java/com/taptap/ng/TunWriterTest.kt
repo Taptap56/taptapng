@@ -199,11 +199,11 @@ class TunWriterTest {
             writer.enqueue(ByteArray(100) { it.toByte() })
             Thread.sleep(30)
         }
-        assertTrue(waitFor(what = "TUNWRITER line", timeoutMs = 5000) {
-            DialLog.lines().drop(before).any { it.contains("TUNWRITER") }
+        assertTrue(waitFor(what = "tunwriter aggregate line", timeoutMs = 5000) {
+            DialLog.lines().drop(before).any { it.contains("tulis=") }
         })
         writer.stop()
-        val line = DialLog.lines().drop(before).first { it.contains("TUNWRITER") }
+        val line = DialLog.lines().drop(before).first { it.contains("tulis=") }
         assertTrue(line.contains("tulis="), line)
         assertTrue(line.contains("antriMax="), line)
         assertTrue(line.contains("tulisMs="), line)
@@ -239,7 +239,7 @@ class TunWriterTest {
     }
 
     private fun tunwriterLinesAfter(before: Int): List<String> =
-        DialLog.lines().drop(before).filter { it.contains("TUNWRITER") }
+        DialLog.lines().drop(before).filter { it.contains("tulis=") }
 
     @Test
     fun `histogram puts slow writes in lambat and records max`() {
@@ -257,7 +257,7 @@ class TunWriterTest {
         })
         writer.stop()
         val lines = tunwriterLinesAfter(before)
-        assertTrue(lines.isNotEmpty(), "no TUNWRITER line")
+        assertTrue(lines.isNotEmpty(), "no tunwriter aggregate line")
         val line = lines.last()
         assertEquals(8, field(line, "tulis"))
         assertEquals(8, field(line, "lambat"))
@@ -281,7 +281,7 @@ class TunWriterTest {
         })
         writer.stop()
         val lines = tunwriterLinesAfter(before)
-        assertTrue(lines.isNotEmpty(), "no TUNWRITER line")
+        assertTrue(lines.isNotEmpty(), "no tunwriter aggregate line")
         val line = lines.last()
         val tulis = field(line, "tulis")
         assertEquals(10, tulis)
