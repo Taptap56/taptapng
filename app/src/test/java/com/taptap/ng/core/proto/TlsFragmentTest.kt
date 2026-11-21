@@ -563,11 +563,27 @@ class TlsFragmentTest {
         } else {
             assertEquals(config.maxSplit, helloFragCount, "cap maxSplit harus tepat")
         }
-        // Only the ClientHello was split: the next record (Finished)
-        // is a single handshake record, not fragments.
+        // Only the ClientHello was split. The next record on the
+        // wire is the middlebox-compat ChangeCipherSpec (type 20,
+        // 1 byte) the JDK client sends after its first flight —
+        // NOT a handshake record: in TLS 1.3 every ENCRYPTED
+        // record (Finished, alert, app data) carries outer type
+        // 23 (application_data); the Finished is the 23/69 record
+        // after the CCS, a single record, not fragments. (An
+        // earlier version of this test asserted the next record
+        // was type 22 — wrong for TLS 1.3, fixed after the local
+        // JVM repro showed the real wire shape.)
         val afterHello = records.drop(helloFragCount)
-        assertTrue(afterHello.isNotEmpty(), "harus ada record Finished sesudah ClientHello")
-        assertEquals(0x16, afterHello[0][0].toInt() and 0xFF, "record sesudah hello harus Finished")
+        assertEquals(
+            4, afterHello.size,
+            "sesudah hello harus 4 record: CCS + Finished + appdata + close_notify, dapat ${afterHello.size}",
+        )
+        assertEquals(0x14, afterHello[0][0].toInt() and 0xFF, "record sesudah hello harus ChangeCipherSpec")
+        assertEquals(1, afterHello[0].size - 5, "CCS harus 1 byte")
+        assertTrue(
+            afterHello.drop(1).all { (it[0].toInt() and 0xFF) == 0x17 },
+            "record sesudah CCS harus outer type 23 (terenkripsi)",
+        )
     }
 
     @Test
