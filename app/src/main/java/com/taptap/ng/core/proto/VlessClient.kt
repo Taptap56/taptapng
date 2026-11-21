@@ -42,6 +42,9 @@ class VlessClient(
     // v1.0.6: see VmessClient — streams stay open independently.
     private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
+    /** v1.0.6 (M6): every UDP session this client opened (same rule). */
+    private val openUdpSessions = ConcurrentHashMap.newKeySet<ProxyUdpSession>()
+
     // M3: one DNSTT session per client (see VmessClient).
     private val slowDns = slowDnsPool ?: SlowDnsSessionPool(item)
 
@@ -134,6 +137,69 @@ class VlessClient(
             return TrackedProxyStream(
                 StreamProxyStream(lazyIn, loggedOut) { transport.close() },
                 openStreams,
+            )
+        } catch (e: Exception) {
+            transport.close()
+            val failure = Transport.preferWatchdogFailure(e)
+            DialLog.failure("VLESS", failure)
+            throw failure
+        }
+    }
+
+    /**
+     * v1.0.6 (M6): UDP over VLESS. Command UDP (0x02) in the
+     * header; datagrams are length-prefixed over the raw stream
+     * (see [UdpFraming]). The response header is read LAZILY on
+     * the first receive (same deadlock as the TCP relay, v1.0.12).
+     * Mux ON = XUDP over the mux pool instead (see [Mux]).
+     */
+    override fun dialUdp(
+        targetHost: String,
+        targetPort: Int,
+        stats: SpeedStats?,
+    ): ProxyUdpSession {
+        val encryption = item.method.ifBlank { "none" }.lowercase()
+        require(encryption == "none") {
+            "VLESS encryption tidak didukung: $encryption (hanya none)"
+        }
+        val pool = muxPool
+        if (pool != null) {
+            val (_, session) = pool.openUdpSession(targetHost, targetPort, stats)
+            return TrackedProxyUdpSession(MuxUdpSession(session), openUdpSessions)
+        }
+        val transport = SlowDnsTransport.open(item, slowDns, stats)
+        try {
+            val header = VlessCrypto.buildRequestHeader(
+                item.uuid, targetHost, targetPort, VlessCrypto.CMD_UDP,
+            )
+            transport.output.write(header)
+            transport.output.flush()
+            val lazyIn = LazyHeaderInputStream(transport.input) {
+                try {
+                    Transport.noteStage("VLESS")
+                    DialLog.log("VLESS", "Verifying Xray VLESS authentication & protocol stream...")
+                    VlessCrypto.readResponseHeader(transport.input)
+                } catch (e: java.net.SocketTimeoutException) {
+                    val failure = Transport.preferWatchdogFailure(
+                        java.net.SocketTimeoutException("VLESS gagal: ${e.message}"),
+                    )
+                    DialLog.failure("VLESS", failure)
+                    throw failure
+                } catch (e: Exception) {
+                    val failure = Transport.preferWatchdogFailure(e)
+                    DialLog.failure("VLESS", failure)
+                    throw failure
+                }
+                transport.clearHandshakeTimeout()
+                DialLog.log("VLESS", "Xray VLESS handshake & transport ready!")
+            }
+            val loggedOut = FirstWriteLoggingOutputStream(transport.output) { n ->
+                DialLog.log("VLESS", "UDP body ${n}B untuk $targetHost:$targetPort")
+            }
+            DialLog.log("VLESS", "UDP $targetHost:$targetPort")
+            return TrackedProxyUdpSession(
+                LengthPrefixedUdpSession(lazyIn, loggedOut) { transport.close() },
+                openUdpSessions,
             )
         } catch (e: Exception) {
             transport.close()
@@ -246,6 +312,7 @@ class VlessClient(
     }
 
     override fun close() {
+        openUdpSessions.toList().forEach { runCatching { it.close() } }
         openStreams.toList().forEach { runCatching { it.close() } }
         // v1.0.5 (kelompok D): tutup semua koneksi mux (lihat VmessClient).
         runCatching { muxPool?.close() }
@@ -258,6 +325,12 @@ object VlessCrypto {
 
     const val VERSION: Byte = 0x00
     const val CMD_TCP: Byte = 0x01
+    /**
+     * v1.0.6 (M6): command UDP (xray-core common/protocol
+     * RequestCommandUDP = 0x02). Datagrams are length-prefixed
+     * over the raw stream (see [UdpFraming]).
+     */
+    const val CMD_UDP: Byte = 0x02
     /**
      * v1.0.5 (kelompok D): command Mux (xray-core
      * common/protocol RequestCommandMux = 0x03). Header mux TIDAK
@@ -306,7 +379,9 @@ object VlessCrypto {
             }
             return ParsedRequest(uuidBytes, null)
         }
-        require(command == CMD_TCP) { "Command VLESS bukan TCP: $command" }
+        require(command == CMD_TCP || command == CMD_UDP) {
+            "Command VLESS bukan TCP/UDP: $command"
+        }
         // Addon (addonLen bytes) sits AFTER the address, at the end.
         val (target, afterTarget) = AddrCodec.parseVmessTarget(bytes, 19)
         require(afterTarget + addonLen == bytes.size) {

@@ -38,10 +38,14 @@ import java.util.concurrent.atomic.AtomicInteger
  *   dinyalakan di sisi klien; server menyesuaikan otomatis.
  *
  * Yang TIDAK diimplementasikan di sini:
- * - XUDP (UDP di atas mux): M2 tidak punya jalur UDP sama sekali
- *   (TunForwarder TCP saja), jadi muxXudpConcurrency /
- *   muxXudpQuic hanya disimpan di [MuxConfig] dan tidak pernah
- *   dipakai — lihat [MuxConfig.xudpSupported].
+ * - XUDP (UDP di atas mux): v1.0.6 (M6) — [MuxSession] UDP
+ *   ([Mux.TARGET_NETWORK_UDP]): tiap datagram adalah satu frame
+ *   data (New pertama membawa target, Keep sesudahnya); sisi baca
+ *   mengembalikan datagram utuh lewat [MuxSession.pollDatagram],
+ *   bukan byte stream. Dipakai [VmessClient.dialUdp] /
+ *   [VlessClient.dialUdp] bila mux nyala. Datagram > 8 KiB
+ *   ditolak (satu frame max [Mux.MAX_FRAME_DATA]) — datagram
+ *   aplikasi biasa (QUIC/DNS/game) jauh di bawah itu.
  * - KeepAlive: klien ini tidak mengirim frame KeepAlive; koneksi
  *   idle boleh ditutup server dan dibuka lagi saat perlu (pool
  *   membuang koneksi mati).
@@ -98,7 +102,8 @@ object Mux {
      * status][1B option][target]. [targetHost] null = tanpa target
      * (Keep/End/KeepAlive). Target memakai urutan yang sama dengan
      * VMess/VLESS: network 1B, PORT 2B BE, lalu ATYP + address
-     * ([AddrCodec.encodeVmessTarget]).
+     * ([AddrCodec.encodeVmessTarget]). [targetNetwork] =
+     * [TARGET_NETWORK_TCP] default; UDP untuk frame New XUDP.
      */
     fun encodeMeta(
         sessionId: Int,
@@ -106,6 +111,7 @@ object Mux {
         option: Int,
         targetHost: String? = null,
         targetPort: Int = 0,
+        targetNetwork: Int = TARGET_NETWORK_TCP,
     ): ByteArray {
         require(sessionId in 0..0xFFFF) { "Mux session id di luar 0..65535: $sessionId" }
         val meta = mutableListOf<Byte>()
@@ -114,7 +120,7 @@ object Mux {
         meta += status.toByte()
         meta += option.toByte()
         if (targetHost != null) {
-            meta += TARGET_NETWORK_TCP.toByte()
+            meta += targetNetwork.toByte()
             meta += AddrCodec.encodeVmessTarget(targetHost, targetPort).toList()
         }
         require(meta.size <= MAX_META_LEN) { "Mux metadata terlalu panjang: ${meta.size}" }
@@ -213,12 +219,14 @@ data class MuxConfig(
     }
 
     /**
-     * XUDP (UDP di atas mux) TIDAK diimplementasikan: M2 tidak
-     * punya jalur UDP (TunForwarder TCP saja), jadi
-     * [xudpConcurrency] / [xudpQuic] hanya disimpan dan tidak
-     * pernah dipakai. Selalu false sampai ada jalur UDP.
+     * XUDP (UDP di atas mux) TERSEDIA bila mux nyala (v1.0.6,
+     * M6): [MuxSession] UDP + [MuxConnectionPool.openUdpSession].
+     * [xudpConcurrency] / [xudpQuic] dari Settings tetap hanya
+     * disimpan — batas concurrency XUDP mengikuti [concurrency]
+     * yang sama; xudpQuic ("reject"/"accept") tidak mengubah
+     * framing di sisi klien ini.
      */
-    val xudpSupported: Boolean get() = false
+    val xudpSupported: Boolean get() = enabled
 }
 
 /**
@@ -313,16 +321,26 @@ class MuxConnection(
      * Buka satu session logis ke [targetHost]:[targetPort], atau
      * null bila koneksi ini sudah penuh / sudah ditutup (pool lalu
      * membuat koneksi baru). Alokasi id + registrasi atomik.
+     * [network] = [Mux.TARGET_NETWORK_TCP] default; UDP untuk
+     * sesi XUDP (lihat [tryOpenUdpSession]).
      */
-    fun tryOpenSession(targetHost: String, targetPort: Int): MuxSession? {
+    fun tryOpenSession(
+        targetHost: String,
+        targetPort: Int,
+        network: Int = Mux.TARGET_NETWORK_TCP,
+    ): MuxSession? {
         synchronized(sessionsLock) {
             if (closed.get() || sessions.size >= maxConcurrency) return null
             val id = allocateId()
-            val session = MuxSession(id, targetHost, targetPort, this)
+            val session = MuxSession(id, targetHost, targetPort, this, network)
             sessions[id] = session
             return session
         }
     }
+
+    /** Buka satu sesi UDP (XUDP) ke [targetHost]:[targetPort]. */
+    fun tryOpenUdpSession(targetHost: String, targetPort: Int): MuxSession? =
+        tryOpenSession(targetHost, targetPort, Mux.TARGET_NETWORK_UDP)
 
     /**
      * Id session: 1..65535 berurutan, membungkus ke 1, melewati id
@@ -348,7 +366,8 @@ class MuxConnection(
      * session ini, Keep sesudahnya) + 2B panjang data + data.
      * Satu frame max [Mux.MAX_FRAME_DATA]; pemanggil memecah
      * tulisan yang lebih besar. [isFirst] = frame pertama session
-     * (New + target); sesudahnya Keep tanpa target.
+     * (New + target); sesudahnya Keep tanpa target. [targetNetwork]
+     * hanya dipakai di frame New (TCP default; UDP untuk XUDP).
      */
     internal fun writeDataFrame(
         sessionId: Int,
@@ -356,6 +375,7 @@ class MuxConnection(
         isFirst: Boolean,
         targetHost: String,
         targetPort: Int,
+        targetNetwork: Int = Mux.TARGET_NETWORK_TCP,
     ) {
         require(data.isNotEmpty() && data.size <= Mux.MAX_FRAME_DATA) {
             "Mux frame data harus 1..${Mux.MAX_FRAME_DATA} byte: ${data.size}"
@@ -363,7 +383,10 @@ class MuxConnection(
         synchronized(writeLock) {
             if (closed.get()) throw IOException("mux connection is closed")
             val meta = if (isFirst) {
-                Mux.encodeMeta(sessionId, Mux.STATUS_NEW, Mux.OPTION_DATA, targetHost, targetPort)
+                Mux.encodeMeta(
+                    sessionId, Mux.STATUS_NEW, Mux.OPTION_DATA,
+                    targetHost, targetPort, targetNetwork,
+                )
             } else {
                 Mux.encodeMeta(sessionId, Mux.STATUS_KEEP, Mux.OPTION_DATA)
             }
@@ -433,7 +456,12 @@ class MuxConnection(
                         // Frame data kosong (len 0) dibuang — chunk
                         // kosong membuat InputStream.read() mengembalikan
                         // 0 dan bisa memutar relay tanpa henti.
-                        if (session != null && data != null && data.isNotEmpty()) session.onData(data)
+                        // v1.0.6 (M6): sesi UDP mendapat datagram
+                        // utuh (satu frame = satu datagram), bukan
+                        // byte stream.
+                        if (session != null && data != null && data.isNotEmpty()) {
+                            if (session.isUdp) session.onDatagram(data) else session.onData(data)
+                        }
                         // Keep tanpa data, atau session tak dikenal: buang.
                     }
                     Mux.STATUS_END -> {
@@ -471,13 +499,20 @@ class MuxSession internal constructor(
     val targetHost: String,
     val targetPort: Int,
     private val connection: MuxConnection,
+    /** v1.0.6 (M6): [Mux.TARGET_NETWORK_TCP] atau [Mux.TARGET_NETWORK_UDP]. */
+    val network: Int = Mux.TARGET_NETWORK_TCP,
 ) {
     private class Chunk(val data: ByteArray, var pos: Int = 0) {
         val remaining: Int get() = data.size - pos
     }
 
+    /** True bila sesi ini XUDP (datagram, bukan byte stream). */
+    val isUdp: Boolean get() = network == Mux.TARGET_NETWORK_UDP
+
     private val lock = Object()
     private val buffers = ArrayDeque<Chunk>()
+    /** v1.0.6 (M6): antrean datagram utuh untuk sesi UDP. */
+    private val datagrams = ArrayDeque<ByteArray>()
     private var peerEnded = false
     private var peerError = false
     private var closed = false
@@ -530,6 +565,73 @@ class MuxSession internal constructor(
         }
     }
 
+    /**
+     * v1.0.6 (M6): satu datagram utuh dari thread pembaca (sesi
+     * UDP — satu frame = satu datagram). Antrean dibatasi 64
+     * datagram; yang lebih tua dibuang supaya banjir tidak OOM.
+     */
+    internal fun onDatagram(data: ByteArray) {
+        synchronized(lock) {
+            if (closed) return
+            if (datagrams.size >= 64) datagrams.removeFirst()
+            datagrams.addLast(data)
+            (lock as Object).notifyAll()
+        }
+    }
+
+    /**
+     * v1.0.6 (M6): ambil satu datagram (sesi UDP), menunggu paling
+     * lama [timeoutMs]. Null bila timeout / sesi ditutup / peer
+     * mengakhiri sesi.
+     */
+    fun pollDatagram(timeoutMs: Long): ByteArray? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (true) {
+            synchronized(lock) {
+                if (datagrams.isNotEmpty()) return datagrams.removeFirst()
+                if (closed || peerEnded) return null
+            }
+            val left = deadline - System.currentTimeMillis()
+            if (left <= 0) return null
+            synchronized(lock) {
+                try {
+                    (lock as Object).wait(minOf(left, 100))
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return null
+                }
+            }
+        }
+    }
+
+    /**
+     * v1.0.6 (M6): kirim satu datagram (sesi UDP) sebagai satu
+     * frame. Datagram > [Mux.MAX_FRAME_DATA] ditolak — tidak
+     * dipecah, karena pecahan akan bergabung lagi di sisi baca
+     * dan merusak batas datagram.
+     */
+    fun sendDatagram(datagram: ByteArray) {
+        require(isUdp) { "sendDatagram hanya untuk sesi UDP" }
+        require(datagram.isNotEmpty() && datagram.size <= Mux.MAX_FRAME_DATA) {
+            "Datagram mux harus 1..${Mux.MAX_FRAME_DATA} byte: ${datagram.size}"
+        }
+        synchronized(writeLock) {
+            synchronized(lock) {
+                if (writeClosed) throw IOException("mux session output is closed")
+                if (closed) throw IOException("mux session is closed")
+                if (peerEnded) throw IOException("mux session closed by peer")
+            }
+            val first: Boolean
+            synchronized(lock) {
+                first = !opened
+                opened = true
+            }
+            connection.writeDataFrame(
+                id, datagram, first, targetHost, targetPort, Mux.TARGET_NETWORK_UDP,
+            )
+        }
+    }
+
     internal fun onEnd(error: Boolean) {
         synchronized(lock) {
             peerEnded = true
@@ -543,6 +645,7 @@ class MuxSession internal constructor(
         synchronized(lock) {
             closed = true
             buffers.clear()
+            datagrams.clear()
             (lock as Object).notifyAll()
         }
     }
@@ -667,13 +770,35 @@ class MuxConnectionPool(
         targetPort: Int,
         stats: SpeedStats? = null,
     ): Pair<MuxConnection, MuxSession> {
+        return openSessionInternal(targetHost, targetPort, Mux.TARGET_NETWORK_TCP, stats)
+    }
+
+    /**
+     * v1.0.6 (M6): buka satu sesi UDP (XUDP) ke
+     * [targetHost]:[targetPort] — sama seperti [openSession],
+     * hanya network-nya UDP.
+     */
+    fun openUdpSession(
+        targetHost: String,
+        targetPort: Int,
+        stats: SpeedStats? = null,
+    ): Pair<MuxConnection, MuxSession> {
+        return openSessionInternal(targetHost, targetPort, Mux.TARGET_NETWORK_UDP, stats)
+    }
+
+    private fun openSessionInternal(
+        targetHost: String,
+        targetPort: Int,
+        network: Int,
+        stats: SpeedStats? = null,
+    ): Pair<MuxConnection, MuxSession> {
         repeat(4) {
             val candidate = synchronized(lock) {
                 connections.removeAll { it.isClosed }
                 connections.firstOrNull { !it.isFull && !it.isClosed }
             }
             if (candidate != null) {
-                val session = candidate.tryOpenSession(targetHost, targetPort)
+                val session = candidate.tryOpenSession(targetHost, targetPort, network)
                 if (session != null) return candidate to session
                 // Penuh di antara cek dan buka — coba lagi (nanti
                 // membuat koneksi baru bila semua penuh).
@@ -697,7 +822,7 @@ class MuxConnectionPool(
                 fresh.close()
                 return@repeat
             }
-            val session = fresh.tryOpenSession(targetHost, targetPort)
+            val session = fresh.tryOpenSession(targetHost, targetPort, network)
                 ?: throw IOException("mux: koneksi baru langsung penuh")
             return fresh to session
         }
@@ -718,4 +843,26 @@ class MuxConnectionPool(
         }
         for (c in snapshot) runCatching { c.close() }
     }
+}
+
+/**
+ * Satu sesi UDP (XUDP) di atas [MuxSession] (v1.0.6, M6):
+ * [ProxyUdpSession] yang mengirim tiap datagram sebagai satu
+ * frame mux dan menerima datagram utuh dari
+ * [MuxSession.pollDatagram]. Menutup sesi mengirim End frame;
+ * koneksi fisiknya tetap di pool (bukan ditutup di sini).
+ */
+class MuxUdpSession(
+    private val session: MuxSession,
+) : ProxyUdpSession {
+    init {
+        require(session.isUdp) { "MuxUdpSession butuh sesi UDP" }
+    }
+
+    override fun send(datagram: ByteArray) = session.sendDatagram(datagram)
+
+    override fun receive(timeoutMs: Long): ByteArray? =
+        session.pollDatagram(timeoutMs)
+
+    override fun close() = session.close()
 }

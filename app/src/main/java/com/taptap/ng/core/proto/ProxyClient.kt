@@ -25,6 +25,28 @@ interface ProxyStream {
     fun close()
 }
 
+/**
+ * One UDP session to a target (v1.0.6, M6): datagrams, not a byte
+ * stream. Each [send] is one datagram to the session's target; each
+ * [receive] returns one datagram from it (or null when the session
+ * is closed — stream-backed sessions block until a datagram arrives
+ * or [close] unblocks them; [timeoutMs] is honoured only by
+ * socket-backed sessions, e.g. Shadowsocks UDP). The target is fixed at [ProxyClient.dialUdp]
+ * time — the forwarder / SOCKS server keeps one session per
+ * 4-tuple, exactly like a TCP session.
+ *
+ * Framing per protocol (see the client that builds it):
+ * VMess/VLESS command UDP (0x02) + 2-byte length-prefixed
+ * datagrams; Trojan UDP ASSOCIATE (0x03) + SOCKS target + length +
+ * CRLF; Shadowsocks UDP relay (one AEAD packet per datagram over
+ * its own protected DatagramSocket).
+ */
+interface ProxyUdpSession {
+    fun send(datagram: ByteArray)
+    fun receive(timeoutMs: Long): ByteArray?
+    fun close()
+}
+
 interface ProxyClient {
     /**
      * Open one proxied byte stream to [targetHost]:[targetPort].
@@ -52,6 +74,22 @@ interface ProxyClient {
          */
         stats: SpeedStats? = null,
     ): ProxyStream
+
+    /**
+     * Open one UDP session to [targetHost]:[targetPort] (v1.0.6,
+     * M6). Default: unsupported — SSH has no UDP forwarding
+     * (direct-tcpip is TCP-only) and any client that does not
+     * override this keeps the old behaviour. VMess / VLESS /
+     * Trojan / Shadowsocks override it with their own UDP framing.
+     */
+    fun dialUdp(
+        targetHost: String,
+        targetPort: Int,
+        stats: SpeedStats? = null,
+    ): ProxyUdpSession = throw UnsupportedOperationException(
+        "UDP tidak didukung untuk entry ini",
+    )
+
     fun close()
 }
 
@@ -130,6 +168,30 @@ class TrackedProxyStream(
         registry.add(this)
     }
 
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            registry.remove(this)
+            inner.close()
+        }
+    }
+}
+
+/**
+ * A [ProxyUdpSession] that removes itself from [registry] when closed
+ * (v1.0.6, M6 — same idea as [TrackedProxyStream] for TCP streams).
+ */
+class TrackedProxyUdpSession(
+    private val inner: ProxyUdpSession,
+    private val registry: MutableSet<ProxyUdpSession>,
+) : ProxyUdpSession {
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    init {
+        registry.add(this)
+    }
+
+    override fun send(datagram: ByteArray) = inner.send(datagram)
+    override fun receive(timeoutMs: Long): ByteArray? = inner.receive(timeoutMs)
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             registry.remove(this)

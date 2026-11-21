@@ -109,6 +109,21 @@ class TunForwarder(
 
     private data class Key(val srcIp: Int, val srcPort: Int, val dstIp: Int, val dstPort: Int)
 
+    /**
+     * v1.0.6 (M6): satu sesi UDP lewat proxy — satu [ProxyUdpSession]
+     * per 4-tuple, seperti sesi TCP. Balasan dibaca thread khusus
+     * ([replyThread]) dan ditulis balik ke TUN sebagai paket UDP.
+     * DNS (port 53) TIDAK lewat sini — tetap relay langsung
+     * (lihat [handleUdp]).
+     */
+    private data class UdpKey(val srcIp: Int, val srcPort: Int, val dstIp: Int, val dstPort: Int)
+
+    private class UdpSession(val key: UdpKey, val udp: com.taptap.ng.core.proto.ProxyUdpSession) {
+        @Volatile var lastActivityMs: Long = System.currentTimeMillis()
+        val closed = AtomicBoolean(false)
+        @Volatile var replyThread: Thread? = null
+    }
+
     private class TcpSession(val key: Key, val isn: Long) {
         @Volatile var state: State = State.DIALING
         @Volatile var clientSeq: Long = 0 // next byte expected from the app
@@ -163,6 +178,13 @@ class TunForwarder(
 
     private val sessions = ConcurrentHashMap<Key, TcpSession>()
     /**
+     * v1.0.6 (M6): sesi UDP lewat proxy (kunci 4-tuple IPv4).
+     * Terpisah dari [sessions] (TCP) — eviksi + lifecycle sendiri.
+     */
+    private val udpSessions = ConcurrentHashMap<UdpKey, UdpSession>()
+    /** Thread penyapu sesi UDP idle (lihat [UDP_IDLE_MS]). */
+    private var udpSweeperThread: Thread? = null
+    /**
      * v1.0.18: the TUN write moved to a single writer thread
      * (TunWriter) — the old synchronized(writeLock) + blocking
      * write() per segment stalled every relay thread whenever one
@@ -212,6 +234,25 @@ class TunForwarder(
          * at 96 and evicts the oldest by last activity — the old
          * map was unbounded, so a SYN flood grew it forever. */
         const val MAX_SESSIONS = 96
+
+        /**
+         * v1.0.6 (M6): max sesi UDP lewat proxy (XVEON memakai
+         * batas yang sama dengan TCP; UDP tanpa balasan tidak boleh
+         * menumbuhkan map tanpa batas).
+         */
+        const val MAX_UDP_SESSIONS = 64
+
+        /**
+         * v1.0.6 (M6): sesi UDP yang tidak ada paketnya selama ini
+         * ditutup penyapu (datagram tanpa balasan — mis. QUIC yang
+         * pindah koneksi — tidak boleh menahan sesi selamanya).
+         * 120 dtk: jauh di atas interval keepalive QUIC (~25 dtk)
+         * tapi cukup pendek untuk tidak menumpuk.
+         */
+        const val UDP_IDLE_MS = 120_000L
+
+        /** Interval penyapu sesi UDP idle. */
+        const val UDP_SWEEP_MS = 30_000L
 
         /** Max queued app-data chunks per connection (XVEON: 48). */
         const val MAX_QUEUE_CHUNKS = 48
@@ -316,6 +357,9 @@ class TunForwarder(
     /** Sessions currently tracked (tests). */
     fun sessionCount(): Int = sessions.size
 
+    /** UDP sessions currently tracked (tests, v1.0.6). */
+    fun udpSessionCount(): Int = udpSessions.size
+
     /** Known destinations (tests): dst IP int → hostname. */
     fun knownHostsSnapshot(): Map<Int, String> = knownHosts.toMap()
 
@@ -332,7 +376,29 @@ class TunForwarder(
         // gets the big MTU (mtu=9000 mss=8960) or falls back.
         DialLog.log("TUN", "mtu=$tunMtu mss=${maxMssForMtu(tunMtu)}")
         tunWriter.start()
+        udpSweeperThread = thread(name = "tun-udp-sweep", isDaemon = true) { udpSweepLoop() }
         readerThread = thread(name = "tun-reader", isDaemon = true) { readLoop() }
+    }
+
+    /**
+     * v1.0.6 (M6): penyapu sesi UDP idle — tiap [UDP_SWEEP_MS],
+     * tutup sesi yang tidak ada paketnya selama [UDP_IDLE_MS].
+     * close() membangunkan thread balasan sesi itu (baca stream
+     * gagal → null → thread keluar).
+     */
+    private fun udpSweepLoop() {
+        while (running.get()) {
+            try {
+                Thread.sleep(UDP_SWEEP_MS)
+            } catch (_: InterruptedException) {
+                break
+            }
+            if (!running.get()) break
+            val now = System.currentTimeMillis()
+            udpSessions.values.toList()
+                .filter { now - it.lastActivityMs > UDP_IDLE_MS }
+                .forEach { closeUdpSession(it) }
+        }
     }
 
     fun stop() {
@@ -348,6 +414,10 @@ class TunForwarder(
         tunWriter.clear()
         sessions.values.toList().forEach { closeSession(it) }
         sessions.clear()
+        udpSessions.values.toList().forEach { closeUdpSession(it) }
+        udpSessions.clear()
+        udpSweeperThread?.interrupt()
+        udpSweeperThread = null
         runCatching { tunOut.close() }
         DialLog.log(
             "FORWARDER",
@@ -972,7 +1042,14 @@ class TunForwarder(
     // ---- UDP (DNS only) ----
 
     private fun handleUdp(ip: TcpPacket.IpPacket, udp: TcpPacket.UdpDatagram) {
-        if (udp.dstPort != 53) return
+        // v1.0.6 (M6): UDP non-DNS diteruskan lewat proxy (sesi
+        // per 4-tuple); DNS port 53 TETAP relay langsung ke upstream
+        // (lihat di bawah) — jangan dialihkan lewat proxy, supaya
+        // resolve aplikasi tidak bergantung pada tunnel yang sama.
+        if (udp.dstPort != 53) {
+            handleProxyUdp(ip, udp)
+            return
+        }
         val query = udp.payload
         val srcIp = ip.src
         val srcPort = udp.srcPort
@@ -1038,6 +1115,80 @@ class TunForwarder(
                 DialLog.failure("DNS", e)
             }
         }
+    }
+
+    /**
+     * v1.0.6 (M6): UDP non-DNS lewat proxy. Satu sesi per 4-tuple
+     * (dibuat saat datagram pertama, ditutup penyapu bila idle);
+     * datagram dikirim apa adanya lewat [ProxyClient.dialUdp],
+     * balasan ditulis balik ke TUN oleh thread balasan sesi itu.
+     * Entry yang tidak mendukung UDP (SSH — dialUdp default
+     * melempar UnsupportedOperationException) membuat datagram
+     * dibuang + satu baris log, bukan crash reader.
+     */
+    private fun handleProxyUdp(ip: TcpPacket.IpPacket, udp: TcpPacket.UdpDatagram) {
+        val key = UdpKey(ip.src, udp.srcPort, ip.dst, udp.dstPort)
+        var session = udpSessions[key]
+        if (session == null || session.closed.get()) {
+            if (udpSessions.size >= MAX_UDP_SESSIONS) {
+                udpSessions.values.minByOrNull { it.lastActivityMs }
+                    ?.let { closeUdpSession(it) }
+            }
+            // FakeDNS (v1.0.5): tujuan IP fake dipetakan balik ke
+            // hostname aslinya SEBELUM dial — sama seperti TCP.
+            val dialHost = dnsPolicy.fakeDns?.lookupHost(ip.dst)?.also {
+                DialLog.log("DNS", "fake ${TcpPacket.ipToString(ip.dst)}:${udp.dstPort} -> $it")
+            } ?: TcpPacket.ipToString(ip.dst)
+            val proxySession = try {
+                proxy.dialUdp(dialHost, udp.dstPort)
+            } catch (e: Exception) {
+                DialLog.failure("UDP ${TcpPacket.ipToString(ip.dst)}:${udp.dstPort}", e)
+                return
+            }
+            val created = UdpSession(key, proxySession)
+            val raced = udpSessions.putIfAbsent(key, created)
+            if (raced != null && !raced.closed.get()) {
+                runCatching { proxySession.close() }
+                session = raced
+            } else {
+                session = created
+                DialLog.log("UDP", "sesi ${TcpPacket.ipToString(ip.dst)}:${udp.dstPort}")
+                created.replyThread = thread(
+                    name = "tun-udp-reply-${udp.dstPort}", isDaemon = true,
+                ) { udpReplyLoop(created) }
+            }
+        }
+        val s = session ?: return
+        s.lastActivityMs = System.currentTimeMillis()
+        try {
+            s.udp.send(udp.payload)
+        } catch (e: Exception) {
+            DialLog.failure("UDP ${TcpPacket.ipToString(ip.dst)}:${udp.dstPort}", e)
+            closeUdpSession(s)
+        }
+    }
+
+    /** Thread balasan satu sesi UDP: datagram dari proxy → paket TUN. */
+    private fun udpReplyLoop(session: UdpSession) {
+        val key = session.key
+        try {
+            while (!session.closed.get()) {
+                val data = session.udp.receive(1000) ?: break
+                session.lastActivityMs = System.currentTimeMillis()
+                val pkt = TcpPacket.buildUdp(key.dstIp, key.srcIp, key.dstPort, key.srcPort, data)
+                writePacket(pkt)
+            }
+        } catch (_: Exception) {
+            // Sesi mati (proxy putus / TUN tutup): keluar, tutup sesi.
+        } finally {
+            closeUdpSession(session)
+        }
+    }
+
+    private fun closeUdpSession(session: UdpSession) {
+        if (!session.closed.compareAndSet(false, true)) return
+        udpSessions.remove(session.key, session)
+        runCatching { session.udp.close() }
     }
 
     /**

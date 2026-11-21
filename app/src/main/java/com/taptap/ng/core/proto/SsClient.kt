@@ -1,10 +1,15 @@
 package com.taptap.ng.core.proto
 
 import com.taptap.ng.core.DialLog
+import com.taptap.ng.core.DnsResolver
+import com.taptap.ng.core.TunnelState
 import com.taptap.ng.data.ProfileItem
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.AEADBadTagException
 
@@ -30,6 +35,9 @@ class SsClient(private val item: ProfileItem) : ProxyClient {
 
     // v1.0.6: see VmessClient — streams stay open independently.
     private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
+
+    /** v1.0.6 (M6): every UDP session this client opened (same rule). */
+    private val openUdpSessions = ConcurrentHashMap.newKeySet<ProxyUdpSession>()
 
     override fun dial(
         targetHost: String,
@@ -69,8 +77,94 @@ class SsClient(private val item: ProfileItem) : ProxyClient {
         }
     }
 
+    /**
+     * v1.0.6 (M6): UDP over Shadowsocks. One protected
+     * DatagramSocket to the SS server (resolved via
+     * [DnsResolver.resolveAll] — operator-first, same as the TCP
+     * dial, so the operator announce for the proxy host is
+     * preserved); each datagram is one AEAD packet (see
+     * [SsCrypto.sealUdpPacket]). No WS/TLS — raw UDP only, like
+     * the TCP path.
+     */
+    override fun dialUdp(
+        targetHost: String,
+        targetPort: Int,
+        stats: SpeedStats?,
+    ): ProxyUdpSession {
+        val cipher = SsCrypto.resolveCipher(item.method)
+        require(item.password.isNotEmpty()) { "Password Shadowsocks kosong" }
+        // Resolve the SERVER (not the target) — the target address
+        // travels inside each UDP packet, like the TCP first chunk.
+        val serverAddrs = DnsResolver.resolveAll(item.address, item.port)
+        val serverAddr = serverAddrs.firstOrNull()
+            ?: throw IOException("SS gagal: server ${item.address} tidak ter-resolve")
+        val socket = DatagramSocket()
+        try {
+            val protect = Transport.protectUdpSocket
+            if (protect != null && !protect(socket) && TunnelState.up && !TunnelState.appBypass) {
+                throw IOException("SS UDP gagal: protect() gagal")
+            }
+            socket.connect(serverAddr, item.port)
+            DialLog.log("SS", "UDP $targetHost:$targetPort via ${item.address}:${item.port}")
+            return TrackedProxyUdpSession(
+                SsUdpSession(socket, item.password, cipher, targetHost, targetPort),
+                openUdpSessions,
+            )
+        } catch (e: Exception) {
+            runCatching { socket.close() }
+            val failure = Transport.preferWatchdogFailure(e)
+            DialLog.failure("SS", failure)
+            throw failure
+        }
+    }
+
     override fun close() {
+        openUdpSessions.toList().forEach { runCatching { it.close() } }
         openStreams.toList().forEach { runCatching { it.close() } }
+    }
+}
+
+/**
+ * One Shadowsocks UDP session over a connected DatagramSocket
+ * (v1.0.6, M6). [receive] honours [timeoutMs] via soTimeout
+ * (null on timeout); [close] closes the socket, unblocking a
+ * pending receive.
+ */
+class SsUdpSession(
+    private val socket: DatagramSocket,
+    private val password: String,
+    private val cipher: SsCipher,
+    private val targetHost: String,
+    private val targetPort: Int,
+) : ProxyUdpSession {
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    override fun send(datagram: ByteArray) {
+        check(!closed.get()) { "Sesi UDP sudah ditutup" }
+        val packet = SsCrypto.sealUdpPacket(password, cipher, targetHost, targetPort, datagram)
+        socket.send(DatagramPacket(packet, packet.size))
+    }
+
+    override fun receive(timeoutMs: Long): ByteArray? {
+        if (closed.get()) return null
+        return try {
+            socket.soTimeout = timeoutMs.coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+            val buf = ByteArray(65535)
+            val packet = DatagramPacket(buf, buf.size)
+            socket.receive(packet)
+            val bytes = packet.data.copyOf(packet.length)
+            SsCrypto.openUdpPacket(bytes, password, cipher).second
+        } catch (_: SocketTimeoutException) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            runCatching { socket.close() }
+        }
     }
 }
 
@@ -177,6 +271,57 @@ object SsCrypto {
             throw IOException("Chunk SS gagal diverifikasi (payload)", e)
         }
         return payload to (counter + 2)
+    }
+
+    /**
+     * v1.0.6 (M6): one Shadowsocks UDP packet (SIP004). Unlike TCP
+     * (chunked, counter nonces), each UDP datagram is ONE AEAD
+     * operation: [salt][AEAD(address + payload)] with nonce 0 and
+     * a fresh random salt per datagram (so a fresh subkey per
+     * datagram). The reply has the same shape — the server's
+     * plaintext also carries the target address first (as in
+     * shadowsocks-libev's UDP relay, so one client socket can
+     * demux several targets); [openUdpPacket] parses and returns
+     * it, the caller ignores it (the session's target is fixed).
+     * Assumption to verify on the phone: a server that replies
+     * WITHOUT the address header would misparse here (see README
+     * v1.0.6).
+     */
+    fun sealUdpPacket(
+        password: String,
+        cipher: SsCipher,
+        targetHost: String,
+        targetPort: Int,
+        payload: ByteArray,
+    ): ByteArray {
+        require(password.isNotEmpty()) { "Password Shadowsocks kosong" }
+        val masterKey = Crypto.evpBytesToKey(password.toByteArray(Charsets.UTF_8), cipher.keyLen)
+        val salt = Crypto.randomBytes(cipher.keyLen)
+        val subkey = deriveSubkey(masterKey, salt, cipher.keyLen)
+        val plain = AddrCodec.encodeSocksTarget(targetHost, targetPort) + payload
+        return salt + sealChunk(subkey, cipher, 0, plain)
+    }
+
+    /** Open one UDP packet (see [sealUdpPacket]). Returns target + payload. */
+    fun openUdpPacket(
+        packet: ByteArray,
+        password: String,
+        cipher: SsCipher,
+    ): Pair<AddrCodec.Target, ByteArray> {
+        require(password.isNotEmpty()) { "Password Shadowsocks kosong" }
+        require(packet.size > cipher.keyLen + TAG_LEN) {
+            "Paket UDP SS terlalu pendek: ${packet.size}"
+        }
+        val masterKey = Crypto.evpBytesToKey(password.toByteArray(Charsets.UTF_8), cipher.keyLen)
+        val salt = packet.copyOfRange(0, cipher.keyLen)
+        val subkey = deriveSubkey(masterKey, salt, cipher.keyLen)
+        val plain = try {
+            openChunk(subkey, cipher, 0, packet.copyOfRange(cipher.keyLen, packet.size))
+        } catch (e: AEADBadTagException) {
+            throw IOException("Paket UDP SS gagal diverifikasi", e)
+        }
+        val (target, afterTarget) = AddrCodec.parseSocksTarget(plain, 0)
+        return target to plain.copyOfRange(afterTarget, plain.size)
     }
 }
 
