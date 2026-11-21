@@ -55,7 +55,7 @@ class ObservatoryRunnerTest {
     }
 
     @Test
-    @Timeout(30, TimeUnit.SECONDS)
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
     fun `isActive false — tidak ada probe dan itemsProvider tidak dipanggil`() {
         Observatory.clear()
         try {
@@ -76,7 +76,7 @@ class ObservatoryRunnerTest {
                     listOf(item("a"), item("b"))
                 },
                 prober = prober,
-                onBestChanged = {},
+                onBestChanged = { _, _ -> },
                 isActive = {
                     isActiveCalls.incrementAndGet()
                     false
@@ -102,7 +102,7 @@ class ObservatoryRunnerTest {
     }
 
     @Test
-    @Timeout(30, TimeUnit.SECONDS)
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
     fun `kurang dari 2 item — ronde dilewati tanpa probe`() {
         Observatory.clear()
         try {
@@ -122,7 +122,7 @@ class ObservatoryRunnerTest {
                     listOf(item("a"))
                 },
                 prober = prober,
-                onBestChanged = {},
+                onBestChanged = { _, _ -> },
                 isActive = { true },
             )
             runner.start()
@@ -143,7 +143,7 @@ class ObservatoryRunnerTest {
     }
 
     @Test
-    @Timeout(30, TimeUnit.SECONDS)
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
     fun `tidur sampai jatuh tempo — provider tidak dipanggil sebelum 5 detik`() {
         Observatory.clear()
         try {
@@ -164,7 +164,7 @@ class ObservatoryRunnerTest {
                     listOf(item("a"), item("b"))
                 },
                 prober = prober,
-                onBestChanged = {},
+                onBestChanged = { _, _ -> },
                 isActive = { true },
             )
             runner.start()

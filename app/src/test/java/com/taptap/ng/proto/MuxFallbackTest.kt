@@ -253,7 +253,7 @@ class MuxFallbackTest {
     // ---- VMess ----
 
     @Test
-    @Timeout(20, TimeUnit.SECONDS)
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
     fun `vmess probe via mux gagal lalu direct jalan — mux dimatikan untuk sesi ini`() {
         val server = VmessDirectServer(uuid).apply { start() }
         val openerCalls = AtomicInteger(0)
@@ -296,7 +296,7 @@ class MuxFallbackTest {
     }
 
     @Test
-    @Timeout(20, TimeUnit.SECONDS)
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
     fun `vmess probe via mux gagal dan direct juga gagal — exception mux yang dilempar`() {
         val openerCalls = AtomicInteger(0)
         val item = vmessItem(freeClosedPort())
@@ -307,14 +307,14 @@ class MuxFallbackTest {
         )
         try {
             val probeBody = ProbeBody.forEntry(item)
-            val e = assertThrows<IOException> {
+            val e = assertThrows(IOException::class.java) {
                 client.dial("example.com", 443, probeBody)
             }
             assertTrue(e.message?.contains("mux down") == true, "exception asli mux harus dilempar, dapat: ${e.message}")
             assertEquals(1, openerCalls.get())
             // Direct TIDAK terbukti jalan, jadi mux tetap nyala:
             // relay berikutnya masih mencoba mux (opener dipanggil lagi).
-            val e2 = assertThrows<IOException> {
+            val e2 = assertThrows(IOException::class.java) {
                 client.dial("example.com", 443)
             }
             assertTrue(e2.message?.contains("mux down") == true, "relay masih lewat mux, dapat: ${e2.message}")
@@ -325,7 +325,7 @@ class MuxFallbackTest {
     }
 
     @Test
-    @Timeout(20, TimeUnit.SECONDS)
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
     fun `vmess relay via mux gagal — tidak ada fallback, mux tetap nyala`() {
         val openerCalls = AtomicInteger(0)
         val item = vmessItem(freeClosedPort())
@@ -338,11 +338,11 @@ class MuxFallbackTest {
             // Relay tidak bisa diverifikasi per-dial (header respons
             // baru keluar sesudah data mengalir), jadi tidak ada
             // fallback: exception mux langsung dilempar.
-            val e = assertThrows<IOException> { client.dial("example.com", 443) }
+            val e = assertThrows(IOException::class.java) { client.dial("example.com", 443) }
             assertTrue(e.message?.contains("mux down") == true, "exception mux harus dilempar, dapat: ${e.message}")
             assertEquals(1, openerCalls.get())
             // Relay kedua: mux masih nyala — opener dipanggil lagi.
-            val e2 = assertThrows<IOException> { client.dial("example.com", 443) }
+            val e2 = assertThrows(IOException::class.java) { client.dial("example.com", 443) }
             assertTrue(e2.message?.contains("mux down") == true, "relay kedua masih lewat mux, dapat: ${e2.message}")
             assertEquals(2, openerCalls.get())
         } finally {
@@ -351,7 +351,7 @@ class MuxFallbackTest {
     }
 
     @Test
-    @Timeout(20, TimeUnit.SECONDS)
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
     fun `vmess udp ikut muxDisabled sesudah fallback probe`() {
         val server = VmessDirectServer(uuid).apply { start() }
         val openerCalls = AtomicInteger(0)
@@ -391,7 +391,7 @@ class MuxFallbackTest {
     // ---- VLESS ----
 
     @Test
-    @Timeout(20, TimeUnit.SECONDS)
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
     fun `vless probe via mux gagal lalu direct jalan — mux dimatikan untuk sesi ini`() {
         val server = VlessDirectServer().apply { start() }
         val openerCalls = AtomicInteger(0)
@@ -431,7 +431,7 @@ class MuxFallbackTest {
     }
 
     @Test
-    @Timeout(20, TimeUnit.SECONDS)
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
     fun `vless probe via mux gagal dan direct juga gagal — exception mux yang dilempar`() {
         val openerCalls = AtomicInteger(0)
         val item = vlessItem(freeClosedPort())
@@ -442,12 +442,12 @@ class MuxFallbackTest {
         )
         try {
             val probeBody = ProbeBody.forEntry(item)
-            val e = assertThrows<IOException> {
+            val e = assertThrows(IOException::class.java) {
                 client.dial("example.com", 443, probeBody)
             }
             assertTrue(e.message?.contains("mux down") == true, "exception asli mux harus dilempar, dapat: ${e.message}")
             assertEquals(1, openerCalls.get())
-            val e2 = assertThrows<IOException> {
+            val e2 = assertThrows(IOException::class.java) {
                 client.dial("example.com", 443)
             }
             assertTrue(e2.message?.contains("mux down") == true, "relay masih lewat mux, dapat: ${e2.message}")
@@ -458,7 +458,7 @@ class MuxFallbackTest {
     }
 
     @Test
-    @Timeout(20, TimeUnit.SECONDS)
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
     fun `vless relay via mux gagal — tidak ada fallback, mux tetap nyala`() {
         val openerCalls = AtomicInteger(0)
         val item = vlessItem(freeClosedPort())
@@ -468,10 +468,10 @@ class MuxFallbackTest {
             muxLadderOpener = failingOpener(openerCalls),
         )
         try {
-            val e = assertThrows<IOException> { client.dial("example.com", 443) }
+            val e = assertThrows(IOException::class.java) { client.dial("example.com", 443) }
             assertTrue(e.message?.contains("mux down") == true, "exception mux harus dilempar, dapat: ${e.message}")
             assertEquals(1, openerCalls.get())
-            val e2 = assertThrows<IOException> { client.dial("example.com", 443) }
+            val e2 = assertThrows(IOException::class.java) { client.dial("example.com", 443) }
             assertTrue(e2.message?.contains("mux down") == true, "relay kedua masih lewat mux, dapat: ${e2.message}")
             assertEquals(2, openerCalls.get())
         } finally {
@@ -480,7 +480,7 @@ class MuxFallbackTest {
     }
 
     @Test
-    @Timeout(20, TimeUnit.SECONDS)
+    @Timeout(value = 20, unit = TimeUnit.SECONDS)
     fun `vless udp ikut muxDisabled sesudah fallback probe`() {
         val server = VlessDirectServer().apply { start() }
         val openerCalls = AtomicInteger(0)
