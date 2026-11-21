@@ -1,5 +1,6 @@
 package com.taptap.ng.proto
 
+import com.taptap.ng.core.proto.SsCipher
 import com.taptap.ng.core.proto.SsClient
 import com.taptap.ng.core.proto.SsCrypto
 import com.taptap.ng.data.ConfigType
@@ -22,7 +23,7 @@ import org.junit.jupiter.api.Timeout
 class SsUdpTest {
 
     private val password = "ss-password"
-    private val cipher = SsCrypto.SsCipher.AES_128_GCM
+    private val cipher = SsCipher.AES_128_GCM
 
     @Test
     fun `seal dan open paket UDP round trip`() {
