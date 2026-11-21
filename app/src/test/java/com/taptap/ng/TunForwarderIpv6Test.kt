@@ -217,14 +217,17 @@ class TunForwarderIpv6Test {
             )
             assertArrayEquals(data, proxy.lastStream!!.sink.toByteArray())
             // Balasan dari server → paket data ke TUN.
+            // drained[1] adalah ACK murni untuk data aplikasi
+            // (handleData mengirim ACK begitu data diterima) —
+            // balasan server jadi paket ke-3.
             val stream = proxy.lastStream!!
             stream.feedOut.write("world-v6".toByteArray())
             stream.feedOut.flush()
             assertTrue(
-                waitFor(what = "balasan data v6") { drainedIpv6Packets(h).size >= 2 },
+                waitFor(what = "balasan data v6") { drainedIpv6Packets(h).size >= 3 },
                 "tidak ada paket balasan IPv6",
             )
-            val reply = drainedIpv6Packets(h)[1]
+            val reply = drainedIpv6Packets(h)[2]
             val replyH = TcpPacket.parseIpv6Header(reply, reply.size)!!
             val replyTcp = TcpPacket.parseTcpSegment(reply, replyH.payloadOff, replyH.payloadLen)!!
             assertArrayEquals("world-v6".toByteArray(), replyTcp.payload)
