@@ -14,10 +14,12 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 
 /**
- * Dial-log order (v1.0.2): the Transport ladder logs the XVEON
- * connect-log lines in XVEON's order — outbound, TCP socket, WS
- * handshake, 101 — with the DNS resolve inside the TCP step (no
- * separate DNS line before TCP) and no "ok" line per stage.
+ * Dial-log order (v1.0.3): the Transport ladder logs the XVEON
+ * connect-log lines in XVEON's order — "Connecting to Xray
+ * outbound", TCP socket, WS handshake, 101 — with the DNS resolve
+ * inside the TCP step (no separate DNS line before TCP), no "ok"
+ * line per stage, no "[STAGE]" tag prefix, no "PROTECT TUN belum
+ * naik" line and no "SOCKET rcv=... snd=..." line.
  * The fake server is plain TCP on loopback (::1, like
  * VmessClientTest — the dev VM blackholes JVM connects to IPv4
  * loopback). TLS is not exercised here (JVM SSLSocket loopback is
@@ -89,7 +91,7 @@ class TransportOrderTest {
         serverThread.join(5_000)
         val lines = DialLog.lines().drop(logBefore)
         fun idx(fragment: String): Int = lines.indexOfFirst { it.contains(fragment) }
-        val iOutbound = idx("Connecting to VMess outbound ::1:$port")
+        val iOutbound = idx("Connecting to Xray outbound ::1:$port")
         val iTcp = idx("Connecting TCP socket to ::1:$port")
         // wsHost appends the non-standard port to the Host header.
         val iWs = idx("WebSocket (WS) handshake -> Host: example.com:$port, Path: /vmess")
@@ -110,6 +112,15 @@ class TransportOrderTest {
         assertTrue(
             lines.none { it.contains("WS example.com:$port/vmess ok") },
             "baris WS ok harus hilang: $lines",
+        )
+        // v1.0.3: no stage tag, no SOCKET line, no PROTECT line.
+        assertTrue(
+            lines.none { it.contains("rcv=") },
+            "baris SOCKET rcv= harus hilang: $lines",
+        )
+        assertTrue(
+            lines.none { it.contains("TUN belum naik") },
+            "baris PROTECT TUN belum naik harus hilang: $lines",
         )
     }
 
@@ -142,7 +153,7 @@ class TransportOrderTest {
         serverThread.join(5_000)
         val lines = DialLog.lines().drop(logBefore)
         fun idx(fragment: String): Int = lines.indexOfFirst { it.contains(fragment) }
-        val iOutbound = idx("Connecting to VMess outbound ::1:$port")
+        val iOutbound = idx("Connecting to Xray outbound ::1:$port")
         val iTcp = idx("Connecting TCP socket to ::1:$port")
         assertTrue(iOutbound >= 0, "log harus ada outbound line: $lines")
         assertTrue(iTcp > iOutbound, "TCP socket harus sesudah outbound: $lines")
@@ -153,6 +164,15 @@ class TransportOrderTest {
         assertTrue(
             lines.none { it.contains("TCP ::1:$port ok") },
             "baris TCP ok harus hilang: $lines",
+        )
+        // v1.0.3: no stage tag, no SOCKET line, no PROTECT line.
+        assertTrue(
+            lines.none { it.contains("rcv=") },
+            "baris SOCKET rcv= harus hilang: $lines",
+        )
+        assertTrue(
+            lines.none { it.contains("TUN belum naik") },
+            "baris PROTECT TUN belum naik harus hilang: $lines",
         )
     }
 }

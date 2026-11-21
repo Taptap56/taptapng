@@ -66,7 +66,12 @@ class ProtectGateTest {
     }
 
     @Test
-    fun `probe dial with TUN down logs that it goes direct`() {
+    fun `probe dial with TUN down goes direct with no PROTECT line`() {
+        // v1.0.3 (XVEON parity): the pre-TUN dial still goes direct
+        // (protect is skipped when there is no VPN yet — same as the
+        // test above), but XVEON logs no PROTECT line, so the
+        // "TUN belum naik — dial ... langsung tanpa protect" line
+        // is gone. The dial succeeding IS the behaviour proof.
         val (server, port) = listener()
         TunnelState.up = false
         Transport.protectSocket = { false }
@@ -76,8 +81,8 @@ class ProtectGateTest {
             stream.close()
             assertTrue(
                 com.taptap.ng.core.DialLog.lines().drop(before)
-                    .any { it.contains("langsung tanpa protect") },
-                "DialLog must record the skipped pre-TUN protect",
+                    .none { it.contains("TUN belum naik") || it.contains("langsung tanpa protect") },
+                "baris PROTECT TUN belum naik harus hilang",
             )
         } finally {
             Transport.protectSocket = null

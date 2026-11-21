@@ -554,8 +554,8 @@ class VmessClientTest {
             "log harus ada 'VMess body 14B ...': $logLines",
         )
         assertTrue(
-            logLines.any { it.contains("VMess handshake & transport ready!") },
-            "log harus ada 'VMess handshake & transport ready!': $logLines",
+            logLines.any { it.contains("Xray VMess handshake & transport ready!") },
+            "log harus ada 'Xray VMess handshake & transport ready!': $logLines",
         )
     }
 

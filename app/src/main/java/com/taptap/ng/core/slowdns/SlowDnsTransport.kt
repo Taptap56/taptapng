@@ -51,6 +51,16 @@ object SlowDnsTransport {
         }
         var stream: SmuxStream? = null
         try {
+            // v1.0.3 (XVEON parity): the SlowDNS ladder logs the
+            // same outbound line as the socket ladder — XVEON logs
+            // "Connecting to Xray outbound ..." for every entry,
+            // including DNSTT ones (its ol() logs it before the
+            // probe regardless of transport). v1.0.2 missed it
+            // here because this branch bypasses Transport.open.
+            DialLog.log(
+                "DIAL",
+                "Connecting to Xray outbound ${item.address}:${item.port}...",
+            )
             Transport.noteStage("SlowDNS")
             stream = pool.stream()
             var input: InputStream = stream.input

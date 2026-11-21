@@ -20,8 +20,10 @@ import org.junit.jupiter.api.Test
  * (tls+net=15170ms of 16,0 s, 0,50 MB/s per connection) while
  * every app-side stage was tiny. Throughput per connection ≈ TCP
  * window / RTT — and the proxy socket was never tuned (plain
- * Socket() defaults). v1.0.19 raises the buffers before connect()
- * and logs the effective values the kernel grants.
+ * Socket() defaults). v1.0.19 raises the buffers before connect().
+ * v1.0.3 removed the "SOCKET rcv=... snd=..." log line (XVEON
+ * logs no such line); the tuning itself is unchanged and is now
+ * asserted on the socket itself, not on the log.
  *
  * Linux doubles SO_RCVBUF/SO_SNDBUF on read-back and clamps them
  * to net.core.rmem_max/wmem_max, so a test that requests 1 MB on
@@ -71,7 +73,7 @@ class TransportSocketBufferTest {
     }
 
     @Test
-    fun `open() applies the tuning and logs the effective values`() {
+    fun `open() applies the tuning without logging the buffers`() {
         val server = ServerSocket(0, 50, InetAddress.getByName("::1"))
         val port = server.localPort
         val acceptThread = Thread {
@@ -110,9 +112,12 @@ class TransportSocketBufferTest {
                     "tuning must never shrink the receive buffer: " +
                         "got ${socket.receiveBufferSize}, baseline $baselineRcv",
                 )
+                // v1.0.3 (XVEON parity): the effective values are
+                // NO LONGER logged — the "SOCKET rcv=..." line is
+                // gone; the tuning is proven by the socket above.
                 assertTrue(
-                    DialLog.lines().drop(dialLogBefore).any { it.contains("SOCKET rcv=") },
-                    "DialLog must record the effective socket buffers",
+                    DialLog.lines().drop(dialLogBefore).none { it.contains("rcv=") },
+                    "baris SOCKET rcv= harus hilang",
                 )
             } finally {
                 stream.close()

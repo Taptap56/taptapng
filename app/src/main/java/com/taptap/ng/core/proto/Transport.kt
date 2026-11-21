@@ -21,7 +21,7 @@ import javax.net.ssl.SSLException
  * whatever stream is underneath (plain TCP or TLS).
  *
  * v1.0.2 (XVEON order): the DialLog lines follow the XVEON Tunnel Pro
- * connect log, in the same order — "Connecting to <Proto> outbound
+ * connect log, in the same order — "Connecting to Xray outbound
  * <host>:<port>", "Connecting TCP socket to <host>:<port>" (the DNS
  * resolve happens INSIDE this step — there is no separate DNS line
  * before TCP; the 120 s DnsResolver cache is unchanged), "TLS
@@ -30,11 +30,15 @@ import javax.net.ssl.SSLException
  * HTTP/1.1 101 Switching Protocols", then the protocol client's
  * "Verifying ..." / "handshake & transport ready!" lines. The DNS
  * set + VPN CONNECTED lines are logged by the service after the
- * probe (see TaptapVpnService). This only aligns the VISIBLE order:
- * the 2026-11-21 08:08 phone evidence (TaptapNG connected iflix
- * 390 ms right after XVEON connected it) shows the decider is the
- * operator window / timing, not the log order — no connectivity
- * improvement is claimed for this change.
+ * probe (see TaptapVpnService). v1.0.3: no "[STAGE]" tag prefix on
+ * any line (see DialLog), no "PROTECT TUN belum naik" line and no
+ * "SOCKET rcv=... snd=..." line — XVEON logs neither; the protect
+ * behavior and the buffer tuning themselves are unchanged. This
+ * only aligns the VISIBLE order: the 2026-11-21 08:08 phone
+ * evidence (TaptapNG connected iflix 390 ms right after XVEON
+ * connected it) shows the decider is the operator window / timing,
+ * not the log order — no connectivity improvement is claimed for
+ * this change.
  *
  * The returned socket keeps SO_TIMEOUT = [HANDSHAKE_TIMEOUT_MS] during
  * dial so a dead peer fails fast; clients reset it to 0 (blocking) once
@@ -58,8 +62,10 @@ object Transport {
      *
      * Linux doubles SO_RCVBUF/SO_SNDBUF on read-back and clamps
      * them to net.core.rmem_max/wmem_max, so the effective values
-     * can be smaller than requested (the SOCKET log line after
-     * connect shows what the kernel actually granted).
+     * can be smaller than requested (v1.0.3 removed the SOCKET
+     * log line that used to show them — XVEON logs no such line;
+     * TransportSocketBufferTest asserts the values on the socket
+     * itself instead).
      */
     const val SOCKET_RECV_BUFFER_SIZE = 1024 * 1024
     const val SOCKET_SEND_BUFFER_SIZE = 256 * 1024
@@ -188,12 +194,13 @@ object Transport {
         require(item.address.isNotBlank()) { "Address proxy kosong" }
         require(item.port in 1..65535) { "Port proxy di luar 1..65535: ${item.port}" }
         val wd = threadWatchdog.get()
-        // v1.0.2 (XVEON order): every dial opens with the outbound
-        // line — "Connecting to VMess outbound front.wetv.vip:443..."
-        // — the same first dial line XVEON logs.
+        // v1.0.3 (XVEON parity): "Connecting to Xray outbound
+        // front.wetv.vip:443..." — no protocol name in this line
+        // (the protocol is in the "Initializing Xray Core (...)"
+        // line the service logs before the dial).
         DialLog.log(
             "DIAL",
-            "Connecting to ${item.typeLabel()} outbound ${item.address}:${item.port}...",
+            "Connecting to Xray outbound ${item.address}:${item.port}...",
         )
         val plain = Socket()
         try {
@@ -227,11 +234,12 @@ object Transport {
                     throw IllegalStateException("protect() gagal — dial tidak bisa bypass VPN")
                 }
             }
-            if (protect != null && !TunnelState.up) {
-                // Probe-first dial, TUN belum naik: tidak ada VPN
-                // yang perlu di-bypass, dial langsung (v1.0.7).
-                DialLog.log("PROTECT", "TUN belum naik — dial ${item.address} langsung tanpa protect")
-            }
+            // Probe-first dial, TUN belum naik: tidak ada VPN
+            // yang perlu di-bypass, dial langsung (v1.0.7).
+            // v1.0.3 (XVEON parity): no log line for this — XVEON
+            // logs no PROTECT line; the direct dial itself is
+            // unchanged, so the whole branch (which only logged)
+            // is gone.
             // Tahap TCP (v1.0.2, XVEON order): "Connecting TCP socket
             // to <host>:<port>" — the resolve happens INSIDE this
             // step, exactly like XVEON (which never logs a separate
@@ -260,15 +268,11 @@ object Transport {
                 throw IOException("TCP gagal: ${e.message}", e)
             }
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
-            // v1.0.19: log the EFFECTIVE values the kernel granted
-            // (Linux doubles and clamps to rmem_max/wmem_max — the
-            // phone log shows whether the 1 MB request survived).
-            runCatching {
-                DialLog.log(
-                    "SOCKET",
-                    "rcv=${plain.receiveBufferSize} snd=${plain.sendBufferSize}",
-                )
-            }
+            // v1.0.3 (XVEON parity): the effective buffer values
+            // are NO LONGER logged ("SOCKET rcv=... snd=..." is
+            // gone — XVEON logs no such line). The tuning itself
+            // is unchanged; the values are still asserted by
+            // TransportSocketBufferTest on the socket itself.
             // No "TCP <host>:<port> ok" line (v1.0.2): XVEON has
             // none — the next stage's line proves TCP succeeded.
         } catch (e: Exception) {

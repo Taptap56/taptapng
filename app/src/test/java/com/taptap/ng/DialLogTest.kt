@@ -41,8 +41,12 @@ class DialLogTest {
             DialLog.log("TCP", "example.com:443 ok")
             val lines = DialLog.lines()
             assertEquals(2, lines.size)
-            assertTrue(lines[0].contains("DNS example.com -> 1.2.3.4"), lines[0])
-            assertTrue(lines[1].contains("TCP example.com:443 ok"), lines[1])
+            // v1.0.3 (XVEON parity): no "[STAGE]" prefix — the
+            // line is timestamp + message only.
+            assertTrue(lines[0].contains("example.com -> 1.2.3.4"), lines[0])
+            assertTrue(lines[1].contains("example.com:443 ok"), lines[1])
+            assertFalse(lines[0].contains("DNS example.com"), lines[0])
+            assertFalse(lines[1].contains("TCP example.com"), lines[1])
         } finally {
             DialLog.clear()
         }
@@ -145,7 +149,9 @@ class DialLogTest {
             DialLog.log("PROBE", "dial test ok")
             assertEquals(1, seen.size)
             assertEquals(DialLog.TAG, seen[0].first)
-            assertTrue(seen[0].second.contains("PROBE dial test ok"), seen[0].second)
+            // v1.0.3 (XVEON parity): the tag is not rendered.
+            assertTrue(seen[0].second.contains("dial test ok"), seen[0].second)
+            assertFalse(seen[0].second.contains("PROBE dial test ok"), seen[0].second)
         } finally {
             DialLog.logcatSink = null
             DialLog.clear()

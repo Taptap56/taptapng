@@ -174,6 +174,61 @@ class TaptapVpnService : VpnService() {
             val i = index?.trim()?.toIntOrNull() ?: 0
             return clients.getOrElse(i) { clients[0] }
         }
+
+        /**
+         * Tunnel DNS servers (v1.0.3, XVEON parity). Verified from
+         * the XVEON APK (see README-v1.0.3.md): 1.1.1.1 (Primary)
+         * and 1.0.0.1 (Secondary) are XVEON's profile DEFAULTS, and
+         * its TUN establish sets both via addDnsServer (falling back
+         * to 1.1.1.1 when the set is empty). The tunnel DNS is now
+         * these two fixed values — Settings "Remote DNS" no longer
+         * affects the tunnel (it stays in Settings, unused for now).
+         * The proxy-host RESOLVER is a different thing and stays
+         * 8.8.8.8 (DnsResolver): XVEON resolves the proxy host with
+         * the system resolver, never via 1.1.1.1, so there is no
+         * evidence for changing it — and the direct-UDP resolver is
+         * the v1.0.4 fix for the system resolver hanging while the
+         * TUN is up.
+         */
+        const val PRIMARY_DNS = "1.1.1.1"
+        const val SECONDARY_DNS = "1.0.0.1"
+
+        /**
+         * The "Initializing Xray Core (...)" line (v1.0.3, XVEON
+         * parity), or null for SSH entries. Verified from the XVEON
+         * APK: its engine-init method (Ld9.ol()) logs
+         * "Initializing Xray Core (<Transport> over <Network>[ +
+         * TLS][ + DNSTT])" at entry — the transport/network names
+         * come from the profile, " + TLS" is appended when TLS is
+         * on, " + DNSTT" when SlowDNS is on. There is no xray-core
+         * binary behind it — Ld9 IS XVEON's "Xray Core", a
+         * hand-written stream factory — so this line is a LABEL for
+         * the in-app engine init, exactly as it is here: the line
+         * is logged where the ProxyClient engine is created and
+         * the profile validated (runStart, right after "Starting
+         * profile"), and no core/library/binary is added.
+         * SSH returns null: XVEON's transport enum (Lm8) has no
+         * SSH — its SSH path is separate — so an SSH entry must
+         * not claim an "Xray Core" init. The "TCP" network label
+         * is inferred, not proven from the dex (no standalone
+         * "TCP" enum string was found; "WebSocket (WS)" is proven).
+         */
+        fun initializingLine(item: ProfileItem): String? {
+            val transport = when (item.configType) {
+                ConfigType.VMESS -> "VMess"
+                ConfigType.VLESS -> "VLESS"
+                ConfigType.TROJAN -> "Trojan"
+                ConfigType.SHADOWSOCKS -> "Shadowsocks"
+                ConfigType.SSH -> return null
+            }
+            val network = when (item.network.ifBlank { "tcp" }.lowercase()) {
+                "ws" -> "WebSocket (WS)"
+                else -> "TCP"
+            }
+            val tls = if (item.tls) " + TLS" else ""
+            val dnstt = if (item.dnsttEnabled) " + DNSTT" else ""
+            return "Initializing Xray Core ($transport over $network$tls$dnstt)"
+        }
     }
 
     /** Result of [prepareStart]: rejected with a message, or ready to dial. */
@@ -265,6 +320,12 @@ class TaptapVpnService : VpnService() {
             // profile line — "Starting profile 'iflix cloudfront'..."
             // — the same first line XVEON logs.
             DialLog.log("START", "Starting profile '${item.displayName()}'...")
+            // v1.0.3 (XVEON parity): "Initializing Xray Core
+            // (VMess over WebSocket (WS) + TLS)" right after
+            // Starting profile and before the outbound dial —
+            // the same second line XVEON logs. Label only (see
+            // initializingLine); null for SSH entries.
+            initializingLine(item)?.let { DialLog.log("START", it) }
             // v1.0.24 (M5): prime dulu, baru probe — prime dial in-app
             // membuka jendela operator, lalu dial utama memakai jendela
             // yang sudah buka. Best-effort: primeNowSync tidak pernah
@@ -310,13 +371,10 @@ class TaptapVpnService : VpnService() {
 
     /** Build the TUN + forwarder. Runs under [tunnelLock] (see runStart). */
     private fun establishTunnel(client: ProxyClient, item: ProfileItem) {
-        // DNS server comes from Settings (remote DNS), default 8.8.8.8.
-        // Only an IP literal is accepted here — a hostname would need
-        // DNS to resolve, which itself goes through the tunnel.
+        // v1.0.3 (XVEON parity): the tunnel DNS is the fixed pair
+        // PRIMARY_DNS + SECONDARY_DNS (see companion) — Settings
+        // "Remote DNS" no longer affects the tunnel.
         val settings = SettingsStore(this)
-        val dns = settings.remoteDns.trim()
-            .takeIf { it.isNotBlank() && isIpLiteral(it) }
-            ?: "8.8.8.8"
         // MTU comes from Settings; out-of-range values fall back
         // to the default instead of breaking establish(). v1.0.21:
         // the default is 9000 (was v2rayNG's 1500) — the writer's
@@ -344,7 +402,8 @@ class TaptapVpnService : VpnService() {
                 if (settings.ipv6Enabled) addRoute("::", 0)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
             }
-            .addDnsServer(dns)
+            .addDnsServer(PRIMARY_DNS)
+            .addDnsServer(SECONDARY_DNS)
             .setMtu(mtu)
         // v1.0.9: exclude our own package from the VPN — v2rayNG's
         // CoreVpnService.configurePerAppProxy does exactly this
@@ -369,16 +428,22 @@ class TaptapVpnService : VpnService() {
         }
         val fd = builder.establish()
             ?: throw IllegalStateException("Gagal establish TUN (izin VPN ditolak?)")
-        // v1.0.2 (XVEON order): the DNS + VPN CONNECTED lines come
-        // right after the protocol handshake (the probe) and before
-        // reportConnected — the same tail XVEON logs. The DNS value
-        // is the tunnel's real one from Settings (default 8.8.8.8);
-        // TaptapNG sets ONE DNS server (no secondary, unlike XVEON),
-        // so only the primary line is logged — never a made-up one.
-        DialLog.log("DNS", "Primary DNS set to $dns")
+        // v1.0.3 (XVEON parity): the DNS + VPN CONNECTED lines
+        // come right after the protocol handshake (the probe) and
+        // before reportConnected — the same tail XVEON logs:
+        // "DNS: Primary DNS set to 1.1.1.1" /
+        // "DNS: Secondary DNS set to 1.0.0.1" /
+        // "VPN CONNECTED (1 - 10.11.12.2/30)". The "1" in XVEON's
+        // line is the PROFILE NAME — its log opens with
+        // "Starting profile '1'..." — so here it is the entry's
+        // display name, not a hardcoded 1. The TUN address stays
+        // TaptapNG's own (from the interface-address setting,
+        // default 10.10.14.1); only the format is XVEON's.
+        DialLog.log("DNS", "DNS: Primary DNS set to $PRIMARY_DNS")
+        DialLog.log("DNS", "DNS: Secondary DNS set to $SECONDARY_DNS")
         DialLog.log(
             "VPN",
-            "CONNECTED (${tunIpv4ClientAddress(settings.vpnInterfaceAddress)}/30)",
+            "VPN CONNECTED (${item.displayName()} - ${tunIpv4ClientAddress(settings.vpnInterfaceAddress)}/30)",
         )
         // v1.0.11: the fd from establish() is NON-BLOCKING
         // (O_NONBLOCK) — FileInputStream.read() returns 0 at once
@@ -564,14 +629,6 @@ class TaptapVpnService : VpnService() {
             .build()
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         runCatching { manager.notify(NOTIFICATION_ID, notification) }
-    }
-
-    private fun isIpLiteral(s: String): Boolean {
-        // IPv4 literal, or IPv6 literal (contains ':'; may be bracketed).
-        val v4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$").matches(s)
-        if (v4) return true
-        val v6 = s.removeSurrounding("[", "]")
-        return v6.contains(':') && v6.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == ':' || it == '.' }
     }
 
     override fun onDestroy() {

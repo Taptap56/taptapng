@@ -50,7 +50,13 @@ class SsClient(private val item: ProfileItem) : ProxyClient {
             val bodyIn = SsBodyInputStream(transport.input, session)
             transport.socket.soTimeout = 0
             Transport.clearWatchdogSocket()
-            DialLog.log("SS", "dial ok")
+            // v1.0.3 (XVEON parity): same "Xray <Proto> handshake
+            // & transport ready!" shape as VMess / VLESS / Trojan
+            // (Shadowsocks has no response handshake to verify —
+            // the stream is raw right after the salt + target
+            // header — so there is no "Verifying Xray Shadowsocks
+            // ..." line, same reasoning as Trojan).
+            DialLog.log("SS", "Xray Shadowsocks handshake & transport ready!")
             return TrackedProxyStream(
                 SocketProxyStream(transport.socket, bodyIn, bodyOut),
                 openStreams,

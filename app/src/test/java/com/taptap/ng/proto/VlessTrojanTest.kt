@@ -257,8 +257,8 @@ class VlessTrojanTest {
             "log harus ada 'VLESS body 4B ...': $logLines",
         )
         assertTrue(
-            logLines.any { it.contains("VLESS handshake & transport ready!") },
-            "log harus ada 'VLESS handshake & transport ready!': $logLines",
+            logLines.any { it.contains("Xray VLESS handshake & transport ready!") },
+            "log harus ada 'Xray VLESS handshake & transport ready!': $logLines",
         )
     }
 

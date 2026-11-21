@@ -52,8 +52,20 @@ object DialLog {
     private val lock = Any()
     private val lines = ArrayDeque<String>()
 
+    /**
+     * v1.0.3 (XVEON parity): a line is timestamp + message ONLY —
+     * no "[STAGE]" prefix. XVEON's log has no stage tags
+     * ("Connecting TCP socket to ...", not "TCP Connecting TCP
+     * socket to ..."). The [stage] parameter stays so the 70+
+     * call sites keep compiling and so the failure label below
+     * keeps working; it is deliberately NOT rendered here.
+     * Messages are self-describing ("TLS handshake -> SNI: ...",
+     * "PRIME OK ..."), and [failure] still renders the stage as
+     * the failure label ("TLS GAGAL: ...") — see below.
+     */
     fun log(stage: String, message: String) {
-        add("$stage $message")
+        // The stage is deliberately NOT rendered (see KDoc above).
+        add(message)
     }
 
     fun failure(stage: String, e: Throwable) {

@@ -46,10 +46,13 @@ class TrojanClient(private val item: ProfileItem) : ProxyClient {
             transport.output.flush()
             transport.socket.soTimeout = 0
             Transport.clearWatchdogSocket()
-            // v1.0.2 (XVEON order): same "ready!" shape as VMess /
-            // VLESS (Trojan has no response handshake to verify —
-            // the stream is raw right after the header).
-            DialLog.log("Trojan", "Trojan handshake & transport ready!")
+            // v1.0.3 (XVEON parity): "Xray Trojan handshake &
+            // transport ready!" (Trojan has no response handshake
+            // to verify — the stream is raw right after the
+            // header — so there is no "Verifying Xray Trojan ..."
+            // line, same as v1.0.2's reasoning; only the ready
+            // line is renamed).
+            DialLog.log("Trojan", "Xray Trojan handshake & transport ready!")
             return TrackedProxyStream(
                 SocketProxyStream(transport.socket, transport.input, transport.output),
                 openStreams,
