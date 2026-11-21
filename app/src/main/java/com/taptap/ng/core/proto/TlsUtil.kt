@@ -52,13 +52,27 @@ object TlsUtil {
         }
     }
 
-    fun wrap(plain: Socket, item: ProfileItem, enabledProtocols: Array<String>? = null): SSLSocket {
+    fun wrap(
+        plain: Socket,
+        item: ProfileItem,
+        enabledProtocols: Array<String>? = null,
+        /**
+         * v1.0.5: fragment the ClientHello (Fragment settings).
+         * Null = v1.0.4 path untouched. Non-null wraps [plain]
+         * in a [FragmentSocket] so the SSLSocket writes its
+         * records through a [FragmentingOutputStream] — the
+         * SSLSocket itself is unchanged (see TlsFragment).
+         */
+        fragmentConfig: FragmentConfig? = null,
+    ): SSLSocket {
+        val socketForTls: Socket =
+            if (fragmentConfig != null) FragmentSocket(plain, fragmentConfig) else plain
         val factory: SSLSocketFactory = if (item.insecure) {
             trustAllContext.socketFactory
         } else {
             SSLSocketFactory.getDefault() as SSLSocketFactory
         }
-        val tls = factory.createSocket(plain, item.address, item.port, true) as SSLSocket
+        val tls = factory.createSocket(socketForTls, item.address, item.port, true) as SSLSocket
         applyTlsSettings(tls, item, enabledProtocols)
         tls.soTimeout = Transport.HANDSHAKE_TIMEOUT_MS
         tls.startHandshake()

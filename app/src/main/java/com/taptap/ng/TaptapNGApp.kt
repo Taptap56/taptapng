@@ -7,6 +7,8 @@ import android.os.Build
 import android.util.Log
 import com.google.android.material.color.DynamicColors
 import com.taptap.ng.core.DialLog
+import com.taptap.ng.core.proto.FragmentConfig
+import com.taptap.ng.core.proto.Transport
 import com.taptap.ng.data.SettingsStore
 import java.util.Locale
 
@@ -23,6 +25,22 @@ class TaptapNGApp : Application() {
         // as well as to the in-app ring buffer.
         DialLog.logcatSink = { tag, msg -> Log.d(tag, msg) }
         val settings = SettingsStore(this)
+        // v1.0.5 (Fragment): the dial reads the live settings on
+        // every Transport.open, so toggling Fragment applies
+        // without restarting the app or the VPN.
+        Transport.fragmentConfigProvider = {
+            val s = SettingsStore(this)
+            if (s.fragmentEnabled) {
+                FragmentConfig.fromSettings(
+                    s.fragmentPackets,
+                    s.fragmentLength,
+                    s.fragmentInterval,
+                    s.fragmentMaxSplit,
+                )
+            } else {
+                null
+            }
+        }
         settings.applyThemeMode()
         if (settings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             DynamicColors.applyToActivitiesIfAvailable(this)

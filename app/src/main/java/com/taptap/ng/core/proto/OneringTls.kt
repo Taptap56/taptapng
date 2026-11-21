@@ -288,12 +288,21 @@ object OneringTls {
         output: OutputStream,
         item: ProfileItem,
         trustManager: X509TrustManager? = null,
+        /**
+         * v1.0.5: fragment the ClientHello (Fragment settings).
+         * Null = v1.0.4 path untouched. Non-null wraps [output]
+         * in a [FragmentingOutputStream] — BC writes its records
+         * through it, so the first (ClientHello) record is split
+         * before it reaches the socket (see TlsFragment).
+         */
+        fragmentConfig: FragmentConfig? = null,
     ): Pair<InputStream, OutputStream> {
         val sni = item.sni.ifBlank { item.address }
         val bug = item.oneringBug.trim()
         require(bug.isNotBlank()) { "Bug domain Onering kosong" }
         val crypto = BcTlsCrypto(SecureRandom())
-        val protocol = TlsClientProtocol(input, output)
+        val out = if (fragmentConfig != null) FragmentingOutputStream(output, fragmentConfig) else output
+        val protocol = TlsClientProtocol(input, out)
         val client = OneringTlsClient(crypto, sni, item.alpn, bug, item.insecure, trustManager)
         protocol.connect(client)
         // v1.0.2 (XVEON order): name the negotiated version —
