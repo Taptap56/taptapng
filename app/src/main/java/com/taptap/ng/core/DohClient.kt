@@ -56,7 +56,7 @@ class DohClient(
     fun query(host: String, qtype: Int = DnsResolver.TYPE_A): List<InetAddress> {
         val id = ThreadLocalRandom.current().nextInt(0, 65536)
         val wire = DnsResolver.buildQuery(host, id, qtype)
-        val resp = exchange(url, wire, false, timeoutMs)
+        val resp = exchange.exchange(url, wire, false, timeoutMs)
         val addrs = DnsResolver.parseAnswers(resp, id)
         if (addrs.isEmpty()) throw IOException("DoH tanpa jawaban A/AAAA untuk $host")
         return addrs
@@ -67,7 +67,7 @@ class DohClient(
     fun queryViaGet(host: String, qtype: Int = DnsResolver.TYPE_A): List<InetAddress> {
         val id = ThreadLocalRandom.current().nextInt(0, 65536)
         val wire = DnsResolver.buildQuery(host, id, qtype)
-        val resp = exchange(url, wire, true, timeoutMs)
+        val resp = exchange.exchange(url, wire, true, timeoutMs)
         val addrs = DnsResolver.parseAnswers(resp, id)
         if (addrs.isEmpty()) throw IOException("DoH tanpa jawaban A/AAAA untuk $host")
         return addrs
