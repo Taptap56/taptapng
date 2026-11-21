@@ -17,6 +17,7 @@ import org.bouncycastle.tls.NamedGroup
 import org.bouncycastle.tls.ProtocolName
 import org.bouncycastle.tls.ProtocolVersion
 import org.bouncycastle.tls.ServerName
+import org.bouncycastle.tls.SignatureAndHashAlgorithm
 import org.bouncycastle.tls.SignatureScheme
 import org.bouncycastle.tls.TlsClientProtocol
 import org.bouncycastle.tls.TlsUtils
@@ -241,14 +242,32 @@ internal class GoHelloTlsClient(
     }
 
     override fun getSupportedSignatureAlgorithms(): java.util.Vector<*>? {
-        val algs = java.util.Vector<Int>()
-        GoHelloTls.SIGNATURE_ALGORITHMS.forEach { algs.add(it) }
+        // BC 1.86 wants SignatureAndHashAlgorithm objects here, NOT
+        // raw scheme ints — encodeSupportedSignatureAlgorithms casts
+        // each element (a Vector<Int> throws ClassCastException, CI
+        // 44848127852). A scheme int splits into its two bytes.
+        val algs = java.util.Vector<SignatureAndHashAlgorithm>()
+        GoHelloTls.SIGNATURE_ALGORITHMS.forEach { scheme ->
+            algs.add(
+                SignatureAndHashAlgorithm(
+                    SignatureScheme.getHashAlgorithm(scheme),
+                    SignatureScheme.getSignatureAlgorithm(scheme),
+                ),
+            )
+        }
         return algs
     }
 
     override fun getSupportedSignatureAlgorithmsCert(): java.util.Vector<*>? {
-        val algs = java.util.Vector<Int>()
-        GoHelloTls.SIGNATURE_ALGORITHMS_CERT.forEach { algs.add(it) }
+        val algs = java.util.Vector<SignatureAndHashAlgorithm>()
+        GoHelloTls.SIGNATURE_ALGORITHMS_CERT.forEach { scheme ->
+            algs.add(
+                SignatureAndHashAlgorithm(
+                    SignatureScheme.getHashAlgorithm(scheme),
+                    SignatureScheme.getSignatureAlgorithm(scheme),
+                ),
+            )
+        }
         return algs
     }
 
