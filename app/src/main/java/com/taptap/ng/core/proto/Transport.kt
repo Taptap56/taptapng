@@ -303,6 +303,12 @@ object Transport {
         // v1.0.11: "Payload saja" — like the SSH payload chain:
         // payload, then straight to TLS, no CONNECT.
         val usePayloadOnly = useProxy && item.proxyMode == "payload_only"
+        // v1.0.11: the TCP target (proxy, or the server when no
+        // proxy) lives at open() scope — the TCP stage AND the
+        // proxy stage below both log it. (CI 44901027233: the
+        // proxy stage could not see the TCP try block's locals.)
+        val dialHost = proxyTarget?.first ?: item.address
+        val dialPort = proxyTarget?.second ?: item.port
         val wd = threadWatchdog.get()
         // v1.0.3 (XVEON parity): "Connecting to Xray outbound
         // front.wetv.vip:443..." — no protocol name in this line
@@ -366,9 +372,8 @@ object Transport {
             // v1.0.10 (XVEON proxy): the TCP target is the proxy —
             // its host resolves operator-first, exactly like the
             // server resolve in v1.0.4 (the same announce that opens
-            // the operator window).
-            val dialHost = proxyTarget?.first ?: item.address
-            val dialPort = proxyTarget?.second ?: item.port
+            // the operator window). dialHost/dialPort are defined at
+            // open() scope (above), not here.
             if (useProxy) {
                 DialLog.log("PROXY", "Proxy $dialHost:$dialPort -> ${item.address}:${item.port}")
             }
