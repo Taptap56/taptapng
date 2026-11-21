@@ -56,6 +56,13 @@ class LogActivity : AppCompatActivity() {
                 return true
             }
             R.id.action_clear -> {
+                // v1.0.1: the screen shows the DialLog lines FIRST
+                // (fix E, v1.0.6) and `logcat -c` never touches
+                // them — without this call the button could never
+                // clear the PROBE/DIAL/PRIME lines (the bulk of the
+                // screen). While the VPN runs, new lines keep
+                // arriving (normal); the old ones are gone.
+                DialLog.clear()
                 lifecycleScope.launch(Dispatchers.IO) {
                     runCatching { Runtime.getRuntime().exec(arrayOf("logcat", "-c")) }
                     loadLog()

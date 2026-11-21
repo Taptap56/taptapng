@@ -345,6 +345,7 @@ class ServerEditorActivity : AppCompatActivity() {
             chip(R.id.chip_slowdns).isChecked = item.dnsttEnabled
             chip(R.id.chip_onering).isChecked = item.oneringEnabled
             chip(R.id.chip_pemicu).isChecked = item.pemicuEnabled
+            chip(R.id.chip_gohello).isChecked = item.goHelloEnabled
             chip(R.id.chip_ssh_pemicu).isChecked = item.pemicuEnabled
         }
     }
@@ -671,6 +672,7 @@ class ServerEditorActivity : AppCompatActivity() {
             dnsttResolver = text(R.id.input_dnstt_resolver),
             oneringEnabled = chip(R.id.chip_onering).isChecked,
             oneringBug = text(R.id.input_onering_bug),
+            goHelloEnabled = chip(R.id.chip_gohello).isChecked,
             pemicuEnabled = chip(R.id.chip_pemicu).isChecked,
             pemicuDomain = text(R.id.input_pemicu_domain),
             pemicuPort = text(R.id.input_pemicu_port).toIntOrNull(),

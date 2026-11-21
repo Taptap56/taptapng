@@ -17,6 +17,23 @@ import org.junit.jupiter.api.Test
 class DialLogTest {
 
     @Test
+    fun `clear empties the dial log`() {
+        // v1.0.1: the Log screen's clear button calls DialLog.clear()
+        // — without it the PROBE/DIAL/PRIME lines (shown first since
+        // v1.0.6) could never be cleared by the button.
+        DialLog.clear()
+        try {
+            DialLog.log("PRIME", "front.wetv.vip ok")
+            DialLog.log("DIAL", "iflix ok")
+            assertEquals(2, DialLog.lines().size)
+            DialLog.clear()
+            assertEquals(0, DialLog.lines().size)
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
     fun `lines are stored and returned in order`() {
         DialLog.clear()
         try {

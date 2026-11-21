@@ -141,6 +141,50 @@ internal class OrderedExtensions : Hashtable<Int, ByteArray>() {
 }
 
 /**
+ * Shared Bouncy Castle certificate validation (Onering + Go Hello,
+ * v1.0.1): trust-all when insecure, otherwise the platform default
+ * TrustManager (no hostname verification — a raw TLS client has
+ * none, same as the SSLSocket path). OneringTlsTest covers this
+ * behavior (platform validation + untrusted rejection).
+ */
+internal fun bcTlsAuthentication(
+    insecure: Boolean,
+    trustManager: X509TrustManager?,
+): TlsAuthentication {
+    return object : TlsAuthentication {
+        override fun notifyServerCertificate(serverCertificate: TlsServerCertificate) {
+            if (insecure) return
+            val chain = serverCertificate.certificate.certificateList
+            if (chain.isEmpty()) throw IOException("Sertifikat server kosong")
+            val cf = CertificateFactory.getInstance("X.509")
+            val x509 = chain.map { tlsCert ->
+                cf.generateCertificate(
+                    ByteArrayInputStream(
+                        (tlsCert as org.bouncycastle.tls.crypto.TlsCertificate).encoded,
+                    ),
+                ) as X509Certificate
+            }.toTypedArray()
+            val authType = when (x509[0].publicKey.algorithm) {
+                "EC" -> "ECDSA"
+                "RSA" -> "RSA"
+                else -> x509[0].publicKey.algorithm
+            }
+            (trustManager ?: platformTrustManager()).checkServerTrusted(x509, authType)
+        }
+
+        override fun getClientCredentials(
+            certificateRequest: CertificateRequest,
+        ): TlsCredentials? = null
+    }
+}
+
+private fun platformTrustManager(): X509TrustManager {
+    val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+    tmf.init(null as KeyStore?)
+    return tmf.trustManagers.filterIsInstance<X509TrustManager>().first()
+}
+
+/**
  * Bouncy Castle TLS client for an Onering entry: SNI = real domain,
  * ALPN = item.alpn, and the 0xff00 bug extension first. Certificate
  * validation mirrors TlsUtil: trust-all when insecure, otherwise the
@@ -155,12 +199,6 @@ internal class OneringTlsClient(
     private val insecure: Boolean,
     private val trustManager: X509TrustManager? = null,
 ) : DefaultTlsClient(crypto) {
-
-    private fun defaultTrustManager(): X509TrustManager {
-        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-        tmf.init(null as KeyStore?)
-        return tmf.trustManagers.filterIsInstance<X509TrustManager>().first()
-    }
 
     /**
      * TLS 1.3 ONLY — bukan preferensi, tapi syarat agar 0xff00 jadi
@@ -215,33 +253,8 @@ internal class OneringTlsClient(
         return ordered
     }
 
-    override fun getAuthentication(): TlsAuthentication {
-        return object : TlsAuthentication {
-            override fun notifyServerCertificate(serverCertificate: TlsServerCertificate) {
-                if (insecure) return
-                val chain = serverCertificate.certificate.certificateList
-                if (chain.isEmpty()) throw IOException("Sertifikat server kosong")
-                val cf = CertificateFactory.getInstance("X.509")
-                val x509 = chain.map { tlsCert ->
-                    cf.generateCertificate(
-                        ByteArrayInputStream(
-                            (tlsCert as org.bouncycastle.tls.crypto.TlsCertificate).encoded,
-                        ),
-                    ) as X509Certificate
-                }.toTypedArray()
-                val authType = when (x509[0].publicKey.algorithm) {
-                    "EC" -> "ECDSA"
-                    "RSA" -> "RSA"
-                    else -> x509[0].publicKey.algorithm
-                }
-                (trustManager ?: defaultTrustManager()).checkServerTrusted(x509, authType)
-            }
-
-            override fun getClientCredentials(
-                certificateRequest: CertificateRequest,
-            ): TlsCredentials? = null
-        }
-    }
+    override fun getAuthentication(): TlsAuthentication =
+        bcTlsAuthentication(insecure, trustManager)
 }
 
 /**

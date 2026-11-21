@@ -1,6 +1,7 @@
 package com.taptap.ng.core
 
 import com.taptap.ng.AppConfig
+import com.taptap.ng.core.proto.GoHelloTls
 import com.taptap.ng.data.ProfileItem
 import java.io.IOException
 import java.net.Inet4Address
@@ -65,8 +66,16 @@ object PemicuManager {
      *  Pemicu fields while the VPN runs takes effect within 5 s. */
     private const val IDLE_SLEEP_MS = 5_000L
 
-    /** One prime host + its interval (seconds). */
-    data class PemicuTarget(val host: String, val port: Int, val intervalSec: Int) {
+    /** One prime host + its interval (seconds). `goHello` (v1.0.1):
+     *  the entry's Hello Go chip — when true the prime dial sends
+     *  a Go-shaped Hello ([defaultGoHelloHandshake]) instead of
+     *  the JVM SSLSocket Hello. */
+    data class PemicuTarget(
+        val host: String,
+        val port: Int,
+        val intervalSec: Int,
+        val goHello: Boolean = false,
+    ) {
         fun key(): String = "${host.lowercase()}:$port"
     }
 
@@ -117,9 +126,10 @@ object PemicuManager {
     /**
      * The prime target of one profile, or null when the profile
      * must not be primed (chip off, or the prime domain blank).
-     * Reads ONLY the pemicu_* fields — the entry's address/port
-     * are never read for priming (see the test that proves it with
-     * a bogus entry address).
+     * Reads ONLY the pemicu_* fields (plus the entry's Hello Go
+     * chip, v1.0.1 — it only selects the Hello shape, never the
+     * target) — the entry's address/port are never read for priming
+     * (see the test that proves it with a bogus entry address).
      */
     fun targetFromProfile(item: ProfileItem): PemicuTarget? {
         if (!item.pemicuEnabled) return null
@@ -129,6 +139,7 @@ object PemicuManager {
             host = host,
             port = clampPort(item.pemicuPort),
             intervalSec = clampInterval(item.pemicuInterval),
+            goHello = item.goHelloEnabled,
         )
     }
 
@@ -209,9 +220,11 @@ object PemicuManager {
      * (not inlined) because a real SSLSocket handshake cannot run
      * on loopback in the dev VM or CI (see TlsEngineTest), so tests
      * inject a fake that records the call and returns a protocol.
-     * Production always passes [defaultTlsHandshake]. [resolve] is
-     * the same kind of seam for the address list (default:
-     * [DnsResolver.resolveAll], IPv4 first then IPv6).
+     * Production passes [defaultTlsHandshake], or
+     * [defaultGoHelloHandshake] when the target's Hello Go chip
+     * is on (v1.0.1 — the default below selects by target.goHello).
+     * [resolve] is the same kind of seam for the address list
+     * (default: [DnsResolver.resolveAll], IPv4 first then IPv6).
      */
     fun primeDial(
         target: PemicuTarget,
@@ -219,7 +232,10 @@ object PemicuManager {
         resolve: (String, Int) -> List<InetAddress> = { host, port ->
             DnsResolver.resolveAll(host, port)
         },
-        tlsHandshake: (Socket, String, Int) -> String = ::defaultTlsHandshake,
+        tlsHandshake: (Socket, String, Int) -> String = { socket, host, port ->
+            if (target.goHello) defaultGoHelloHandshake(socket, host, port)
+            else defaultTlsHandshake(socket, host, port)
+        },
     ): PrimeResult {
         val started = System.currentTimeMillis()
         val addresses = try {
@@ -303,6 +319,31 @@ object PemicuManager {
             return sslSocket.session.protocol ?: "TLS?"
         } finally {
             runCatching { sslSocket.close() }
+        }
+    }
+
+    /** Production TLS handshake via the Go-shaped Hello (v1.0.1,
+     *  chip Hello Go): same role as [defaultTlsHandshake] — wrap
+     *  the connected socket, handshake with a hard timeout,
+     *  return the negotiated protocol. No ALPN (a prime is a bare
+     *  handshake, like pemicu.apk), certificates validated like
+     *  the JVM path (insecure = false). The synthetic [ProfileItem]
+     *  carries only the host — its SNI becomes the host, exactly
+     *  like the JVM path's createSocket(host). The BC streams are
+     *  closed here (a prime only needs the handshake); [primeDial]
+     *  also closes the plain socket in its finally. */
+    fun defaultGoHelloHandshake(socket: Socket, host: String, port: Int): String {
+        socket.soTimeout = TLS_TIMEOUT_MS
+        val hs = GoHelloTls.wrap(
+            socket.getInputStream(),
+            socket.getOutputStream(),
+            ProfileItem(address = host),
+        )
+        try {
+            return hs.protocol
+        } finally {
+            runCatching { hs.input.close() }
+            runCatching { hs.output.close() }
         }
     }
 

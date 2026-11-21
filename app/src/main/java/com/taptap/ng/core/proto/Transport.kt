@@ -31,6 +31,21 @@ object Transport {
     const val HANDSHAKE_TIMEOUT_MS = 10_000
 
     /**
+     * Which TLS implementation the connect/probe dial uses for this
+     * entry (v1.0.1). GO_HELLO wins over ONERING when both chips
+     * are on — the chip promises a Go-shaped Hello, and 0xff00
+     * would break it. JVM = v1.0.0 SSLSocket behavior. (SlowDNS
+     * entries never reach this — their TLS is TlsEngine.wrap.)
+     */
+    internal enum class TlsKind { GO_HELLO, ONERING, JVM }
+
+    internal fun tlsKind(item: ProfileItem): TlsKind = when {
+        GoHelloTls.isGoHello(item) -> TlsKind.GO_HELLO
+        OneringTls.isOnering(item) -> TlsKind.ONERING
+        else -> TlsKind.JVM
+    }
+
+    /**
      * Proxy socket buffers (v1.0.19). Phone evidence (v1.0.18 log,
      * Speedtest 16:01): the relay spent 93-95% of its time WAITING
      * for data (tls+net=15170ms of 16,0 s, 0,50 MB/s per connection)
@@ -271,20 +286,33 @@ object Transport {
                 // (sudah di-arm watchdog): protokol BC membaca dari
                 // stream-nya, jadi menutup plain tetap membangunkan
                 // read yang macet.
+                // v1.0.1 (Hello Go): chip Hello Go ON menang atas
+                // Onering bila keduanya ON — chip menjanjikan Hello
+                // bentuk Go, dan 0xff00 akan merusaknya. GoHelloTls
+                // naik BC yang sama (bukan uTLS-Chrome: sudah
+                // terbukti gagal di TB v1.0.73/77).
                 noteStage("TLS")
                 try {
-                    if (OneringTls.isOnering(item)) {
-                        val (tlsIn, tlsOut) = OneringTls.wrap(input, output, item)
-                        input = tlsIn
-                        output = tlsOut
-                    } else {
-                        socket = TlsUtil.wrap(plain, item, tlsProtocols)
-                        // Re-arm the watchdog on the TLS socket: closing the
-                        // plain socket would not unblock the TLS read.
-                        wd?.arm(socket)
-                        input = socket.getInputStream()
-                        output = socket.getOutputStream()
-                        DialLog.log("TLS", "${item.address} ok")
+                    when (tlsKind(item)) {
+                        TlsKind.GO_HELLO -> {
+                            val hs = GoHelloTls.wrap(input, output, item)
+                            input = hs.input
+                            output = hs.output
+                        }
+                        TlsKind.ONERING -> {
+                            val (tlsIn, tlsOut) = OneringTls.wrap(input, output, item)
+                            input = tlsIn
+                            output = tlsOut
+                        }
+                        TlsKind.JVM -> {
+                            socket = TlsUtil.wrap(plain, item, tlsProtocols)
+                            // Re-arm the watchdog on the TLS socket: closing the
+                            // plain socket would not unblock the TLS read.
+                            wd?.arm(socket)
+                            input = socket.getInputStream()
+                            output = socket.getOutputStream()
+                            DialLog.log("TLS", "${item.address} ok")
+                        }
                     }
                 } catch (e: SSLException) {
                     throw SSLException("TLS gagal: ${e.message}")

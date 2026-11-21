@@ -1,6 +1,8 @@
 package com.taptap.ng.core
 
+import com.taptap.ng.core.proto.GoHelloTls
 import com.taptap.ng.data.ProfileItem
+import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -137,6 +139,19 @@ class PemicuManagerTest {
         )
         assertEquals(8443, target2!!.port)
         assertEquals(60, target2.intervalSec)
+    }
+
+    @Test
+    fun `targetFromProfile carries the Hello Go chip`() {
+        // v1.0.1: the flag only selects the Hello shape — the
+        // target (host/port/interval) is unchanged.
+        val on = PemicuManager.targetFromProfile(itemWithPemicu().copy(goHelloEnabled = true))
+        assertNotNull(on)
+        assertTrue(on!!.goHello)
+        assertEquals("chat.sociomile.com", on.host)
+        val off = PemicuManager.targetFromProfile(itemWithPemicu())
+        assertNotNull(off)
+        assertFalse(off!!.goHello)
     }
 
     @Test
@@ -317,6 +332,103 @@ class PemicuManagerTest {
         } finally {
             server.close()
         }
+    }
+
+    // --- Hello Go (v1.0.1): prime dial Hello shape ---
+
+    /** Parse the first TLS record's ClientHello: cipher suites +
+     *  extension types (wire order) + SNI host, if present. */
+    private fun parseHello(captured: ByteArray): Triple<List<Int>, List<Int>, String?> {
+        assertTrue(captured.size > 50, "terlalu sedikit byte terekam: ${captured.size}")
+        assertEquals(0x16, captured[0].toInt() and 0xFF, "record pertama harus handshake")
+        assertEquals(0x01, captured[5].toInt() and 0xFF, "handshake pertama harus ClientHello")
+        var pos = 9 + 2 + 32 // record + handshake header + legacy_version + random
+        val sessionLen = captured[pos].toInt() and 0xFF
+        pos += 1 + sessionLen
+        val suitesLen = ((captured[pos].toInt() and 0xFF) shl 8) or (captured[pos + 1].toInt() and 0xFF)
+        pos += 2
+        val suites = (0 until suitesLen / 2).map {
+            ((captured[pos + it * 2].toInt() and 0xFF) shl 8) or
+                (captured[pos + it * 2 + 1].toInt() and 0xFF)
+        }
+        pos += suitesLen
+        val compLen = captured[pos].toInt() and 0xFF
+        pos += 1 + compLen
+        val extLen = ((captured[pos].toInt() and 0xFF) shl 8) or (captured[pos + 1].toInt() and 0xFF)
+        pos += 2
+        val extEnd = pos + extLen
+        val types = mutableListOf<Int>()
+        var sni: String? = null
+        while (pos < extEnd) {
+            val type = ((captured[pos].toInt() and 0xFF) shl 8) or (captured[pos + 1].toInt() and 0xFF)
+            val len = ((captured[pos + 2].toInt() and 0xFF) shl 8) or (captured[pos + 3].toInt() and 0xFF)
+            types += type
+            if (type == 0x0000) {
+                val hostLen = ((captured[pos + 7].toInt() and 0xFF) shl 8) or
+                    (captured[pos + 8].toInt() and 0xFF)
+                sni = captured.copyOfRange(pos + 9, pos + 9 + hostLen).toString(Charsets.US_ASCII)
+            }
+            pos += 4 + len
+        }
+        return Triple(suites, types, sni)
+    }
+
+    /** Run primeDial (DEFAULT handshake — no fake) against a local
+     *  TCP server that captures the first TLS record, then closes.
+     *  The handshake cannot complete against a capture-only server,
+     *  so the result is Failed either way; the assertion is on the
+     *  captured ClientHello bytes. */
+    private fun captureFirstRecord(host: String, goHello: Boolean): ByteArray {
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val captured = ByteArrayOutputStream()
+        val acceptThread = Thread({
+            runCatching {
+                val s = server.accept()
+                s.soTimeout = 5_000
+                val inp = java.io.DataInputStream(s.getInputStream())
+                val header = ByteArray(5)
+                inp.readFully(header)
+                val len = ((header[3].toInt() and 0xFF) shl 8) or (header[4].toInt() and 0xFF)
+                val body = ByteArray(len)
+                inp.readFully(body)
+                captured.write(header)
+                captured.write(body)
+                s.close()
+            }
+        }, "pemicu-test-capture").apply { isDaemon = true; start() }
+        try {
+            val resolve: (String, Int) -> List<InetAddress> = { _, _ ->
+                listOf(InetAddress.getByName("127.0.0.1"))
+            }
+            val target = PemicuManager.PemicuTarget(host, server.localPort, 15, goHello = goHello)
+            PemicuManager.primeDial(target, protect = null, resolve = resolve)
+            acceptThread.join(10_000)
+            return captured.toByteArray()
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun `primeDial sends a Go shaped Hello when the chip is on`() {
+        val (suites, types, sni) = parseHello(captureFirstRecord("front.wetv.vip", goHello = true))
+        assertEquals(GoHelloTls.CIPHER_SUITES.toList(), suites, "cipher suites harus urutan Go")
+        assertTrue(types.contains(0x002b), "harus ada supported_versions")
+        assertTrue(types.contains(0x0033), "harus ada key_share")
+        assertTrue(types.contains(0x000a), "harus ada supported_groups")
+        assertTrue(types.contains(0x000d), "harus ada signature_algorithms")
+        assertTrue(types.contains(0x0032), "harus ada signature_algorithms_cert")
+        assertFalse(types.contains(0x0016), "Go tidak mengirim encrypt_then_mac")
+        assertEquals("front.wetv.vip", sni)
+    }
+
+    @Test
+    fun `primeDial sends a JVM Hello when the chip is off`() {
+        val (suites, _, sni) = parseHello(captureFirstRecord("front.wetv.vip", goHello = false))
+        // The JVM (Conscrypt) Hello is a different shape from Go's:
+        // the cipher list must NOT be Go's list (v1.0.0 behavior).
+        assertTrue(suites != GoHelloTls.CIPHER_SUITES.toList(), "JVM Hello harus beda dari Go")
+        assertEquals("front.wetv.vip", sni)
     }
 
     @Test

@@ -44,6 +44,9 @@ class ProfileItemDefaultsTest {
         assertEquals("default", item.sshSniVersion)
         assertEquals("", item.streamSecurity)
         assertFalse(item.tls)
+        // v1.0.1: Hello Go chip defaults OFF — old entries keep the
+        // v1.0.0 JVM SSLSocket Hello until the chip is turned on.
+        assertFalse(item.goHelloEnabled)
     }
 
     @Test
@@ -83,11 +86,17 @@ class ProfileItemDefaultsTest {
         assertEquals("default", loaded.sshSniVersion)
         assertEquals("", loaded.streamSecurity)
         assertFalse(loaded.tls)
+        assertFalse(loaded.goHelloEnabled)
         // Gson round trip keeps the new values once saved.
         val gson = Gson()
         val saved = gson.fromJson(gson.toJson(loaded), ProfileItem::class.java)
         assertEquals("none", saved.headerType)
         assertEquals("default", saved.sshSniVersion)
+        assertFalse(saved.goHelloEnabled)
+        // ...and a turned-on chip survives the round trip.
+        loaded.goHelloEnabled = true
+        val savedOn = gson.fromJson(gson.toJson(loaded), ProfileItem::class.java)
+        org.junit.jupiter.api.Assertions.assertTrue(savedOn.goHelloEnabled)
     }
 
     @Test
