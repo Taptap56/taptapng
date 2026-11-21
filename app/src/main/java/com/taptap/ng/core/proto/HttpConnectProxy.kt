@@ -45,7 +45,7 @@ object HttpConnectProxy {
         output.write(buildConnectRequest(host, port).toByteArray(Charsets.UTF_8))
         output.flush()
         val header = readHttpHeader(input)
-        val statusLine = header.split("\r\n").firstOrNull().orEmpty()
+        val statusLine = String(header, Charsets.UTF_8).split("\r\n").firstOrNull().orEmpty()
         DialLog.log("PROXY", "Proxy response: $statusLine")
         val code = SshPayload.statusCode(statusLine)
         if (code != "200") {
