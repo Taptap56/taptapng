@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Napas badan kue TB/TC (v1.0.7): ckbreath 6 dtk (3 dtk di v1.0.33, pacing 2x), amplitudo ASLI CSS scale(1.012,.99), cuma ~1%, halus (v1.0.32 sempat membesarkan jadi 1.05/.96, kebesaran vs web). Easing ease-in-out dibakar ke keyframe. <objectAnimator> (bukan <animator>): AVD hanya mengikat ObjectAnimator ke target grup. Pivot badan sudah (12,21) di ic_cookie_logo.xml. -->
+<!-- Napas badan kue TB/TC (v1.0.9): ckbreath 4 dtk (3 dtk di v1.0.33, 6 dtk di v1.0.7, pacing tengah-tengah), amplitudo ASLI CSS scale(1.012,.99), cuma ~1%, halus (v1.0.32 sempat membesarkan jadi 1.05/.96, kebesaran vs web). Easing ease-in-out dibakar ke keyframe. <objectAnimator> (bukan <animator>): AVD hanya mengikat ObjectAnimator ke target grup. Pivot badan sudah (12,21) di ic_cookie_logo.xml. -->
 <objectAnimator xmlns:android="http://schemas.android.com/apk/res/android"
-    android:duration="6000"
+    android:duration="4000"
     android:repeatCount="infinite"
     android:startOffset="0"
     android:interpolator="@android:interpolator/linear">

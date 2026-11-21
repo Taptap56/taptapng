@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Chip 1 logo kue TB/TC (v1.0.7): ckrun + ckhop CSS (12 dtk, pacing 2x dari v1.0.33 — gerakan SAMA, hanya lebih lambat) digabung, port VERBATIM dari style.css TB/TC. Komposisi matriks penuh per sampel dengan poros CSS (transform-origin 50% 100% bottom-center; c1 run 50% 55%): O_run=(12.026,11.406) O_hop=(12.026,14.621); easing CSS dibakar ke keyframe rapat. Nilai ABSOLUT di sekitar transform dasar grup (translate 12,10.8 rot -6 scale 1.25). <objectAnimator> (bukan <animator>): AVD hanya mengikat ObjectAnimator ke target grup. -->
+<!-- Chip 1 logo kue TB/TC (v1.0.9): ckrun + ckhop CSS (8 dtk, pacing tengah-tengah antara v1.0.6 6 dtk dan v1.0.7 12 dtk — gerakan SAMA, hanya disesuaikan) digabung, port VERBATIM dari style.css TB/TC. Komposisi matriks penuh per sampel dengan poros CSS (transform-origin 50% 100% bottom-center; c1 run 50% 55%): O_run=(12.026,11.406) O_hop=(12.026,14.621); easing CSS dibakar ke keyframe rapat. Nilai ABSOLUT di sekitar transform dasar grup (translate 12,10.8 rot -6 scale 1.25). <objectAnimator> (bukan <animator>): AVD hanya mengikat ObjectAnimator ke target grup. -->
 <objectAnimator xmlns:android="http://schemas.android.com/apk/res/android"
-    android:duration="12000"
+    android:duration="8000"
     android:repeatCount="infinite"
-    android:startOffset="500"
+    android:startOffset="333"
     android:interpolator="@android:interpolator/linear">
     <propertyValuesHolder android:propertyName="translateX" android:valueType="floatType">
         <keyframe android:fraction="0" android:value="12" />
