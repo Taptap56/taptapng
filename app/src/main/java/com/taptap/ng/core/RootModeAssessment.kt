@@ -20,15 +20,16 @@ package com.taptap.ng.core
  *   nyangkut tetap ada bila HP mati mendadak sebelum cleanup —
  *   itu batasan yang didokumentasikan, bukan dijamin hilang.
  * - SELinux/Android 12+: TETAP BATASAN (lihat README v1.0.15).
- */
+ *
  * Root mode (v2rayNG: "Root mode" / mode root) = tunnel via iptables
  * sebagai pengganti VpnService: traffic dialihkan dengan aturan
  * iptables (REDIRECT/TPROXY + mark) ke proxy lokal, tanpa perlu izin
  * VPN dari user dan tanpa TUN interface.
  *
  * VERDIK: TIDAK FEASIBLE di v1.0.5 — alasannya persis di bawah.
- * Setting [SettingsStore.enableRootMode] tetap tersimpan tapi tidak
- * jalan (service selalu memakai VpnService).
+ * Setting [SettingsStore.enableRootMode] tetap tersimpan; di
+ * v1.0.5 tidak jalan (service selalu memakai VpnService) — di
+ * v1.0.15 jalan sebagai Root mode (lihat catatan di atas).
  */
 object RootModeAssessment {
 
