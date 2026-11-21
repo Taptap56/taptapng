@@ -115,9 +115,17 @@ class TransportProxyTest {
         return out
     }
 
-    /** True when [head] is a TLS record header (ClientHello: 0x16 0x03 0x01). */
+    /** True when [head] is a TLS handshake record header. Only the
+     * content type (0x16) and the major version (0x03) are
+     * asserted — the minor version (0x01 vs 0x03) is the TLS
+     * stack's choice (SunJSSE sends 0x0303 on some runtimes),
+     * not something this dial controls. */
     private fun isClientHello(head: ByteArray): Boolean =
-        head.size >= 3 && head[0] == 0x16.toByte() && head[1] == 0x03.toByte() && head[2] == 0x01.toByte()
+        head.size >= 2 && head[0] == 0x16.toByte() && head[1] == 0x03.toByte()
+
+    /** Hex dump for a failure message (ground truth on the wire). */
+    private fun hex(head: ByteArray): String =
+        head.joinToString(" ") { "%02x".format(it) }
 
     @Test
     fun `proxy dial sends payload then CONNECT 200 then plain tcp stream`() {
@@ -426,6 +434,7 @@ class TransportProxyTest {
         TunnelState.up = false
         Transport.protectSocket = null
         var sawClientHello = false
+        var headHex = ""
         val proxy = FakeProxy { input, output, blocks ->
             blocks += readHttpBlock(input) // proxy payload (default template)
             output.write("HTTP/1.1 101 Switching Protocols\r\nContent-Length: 0\r\n\r\n".toByteArray(Charsets.UTF_8))
@@ -434,6 +443,7 @@ class TransportProxyTest {
             // a CONNECT request (the server closes after reading it,
             // so the client dies with "TLS gagal" — that is expected).
             val head = readExactBytes(input, 5)
+            headHex = hex(head)
             sawClientHello = isClientHello(head)
         }
         proxy.start()
@@ -453,7 +463,7 @@ class TransportProxyTest {
         assertEquals(1, proxy.blocks.size, "blok: ${proxy.blocks}")
         assertTrue(proxy.blocks[0].contains("GET / HTTP/1.1"), "payload: ${proxy.blocks[0]}")
         assertTrue(proxy.blocks[0].contains("Upgrade: websocket"), "payload: ${proxy.blocks[0]}")
-        assertTrue(sawClientHello, "server harus menerima ClientHello TLS, bukan CONNECT")
+        assertTrue(sawClientHello, "server harus menerima ClientHello TLS, bukan CONNECT — byte: $headHex")
     }
 
     @Test
@@ -461,10 +471,12 @@ class TransportProxyTest {
         TunnelState.up = false
         Transport.protectSocket = null
         var sawClientHello = false
+        var headHex = ""
         val proxy = FakeProxy { input, output, blocks ->
             // First bytes on the wire must be the ClientHello — no
             // payload block, no CONNECT.
             val head = readExactBytes(input, 5)
+            headHex = hex(head)
             sawClientHello = isClientHello(head)
         }
         proxy.start()
@@ -482,7 +494,7 @@ class TransportProxyTest {
         }
         assertNull(proxy.error, "proxy error: ${proxy.error}")
         assertEquals(0, proxy.blocks.size, "blok: ${proxy.blocks}")
-        assertTrue(sawClientHello, "server harus menerima ClientHello TLS sebagai byte pertama")
+        assertTrue(sawClientHello, "server harus menerima ClientHello TLS sebagai byte pertama — byte: $headHex")
     }
 
     @Test
@@ -490,6 +502,7 @@ class TransportProxyTest {
         TunnelState.up = false
         Transport.protectSocket = null
         var sawClientHello = false
+        var headHex = ""
         val proxy = FakeProxy { input, output, blocks ->
             val get = readHttpBlock(input)
             assertTrue(get.contains("GET / HTTP/1.1"), "GET: $get")
@@ -509,7 +522,9 @@ class TransportProxyTest {
             blocks += get
             blocks += patch
             blocks += junk
-            sawClientHello = isClientHello(readExactBytes(input, 5))
+            val head = readExactBytes(input, 5)
+            headHex = hex(head)
+            sawClientHello = isClientHello(head)
         }
         proxy.start()
         try {
@@ -526,7 +541,7 @@ class TransportProxyTest {
         }
         assertNull(proxy.error, "proxy error: ${proxy.error}")
         assertEquals(3, proxy.blocks.size, "blok: ${proxy.blocks}")
-        assertTrue(sawClientHello, "sesudah payload harus langsung TLS ClientHello")
+        assertTrue(sawClientHello, "sesudah payload harus langsung TLS ClientHello — byte: $headHex")
     }
 
     @Test
