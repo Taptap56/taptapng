@@ -3,9 +3,9 @@ package com.taptap.ng
 import com.taptap.ng.data.ConfigType
 import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.service.TaptapVpnService
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Test
 
 /**
  * The "Initializing Xray Core (...)" line (v1.0.3, XVEON parity).
