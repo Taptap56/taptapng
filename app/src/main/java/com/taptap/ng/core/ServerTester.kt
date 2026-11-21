@@ -281,13 +281,19 @@ object ServerTester {
      *
      * [clientFactory] is injectable so tests can run against a
      * fake proxy instead of a real server.
+     *
+     * v1.0.5 (kelompok F, Observatory): [method] is "GET" (default)
+     * or "HEAD" — the observatory least-load probe follows
+     * observatoryLeastLoadMethod. Any other value falls back to GET.
      */
     fun testRealPingThroughProxy(
         item: ProfileItem,
         delayTestUrl: String,
         timeoutMs: Int = 10_000,
         clientFactory: (ProfileItem) -> ProxyClient = ProxyClientFactory::create,
+        method: String = "GET",
     ): TestResult {
+        val verb = if (method.trim().equals("HEAD", ignoreCase = true)) "HEAD" else "GET"
         val target = parseDelayUrl(delayTestUrl.ifBlank { DEFAULT_REAL_PING_URL })
             ?: return TestResult(-1, CANNOT_RUN_STAGE)
         val (host, port, path) = target
@@ -304,7 +310,7 @@ object ServerTester {
                 val stream = client.dial(host, port)
                 try {
                     val req =
-                        "GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n"
+                        "$verb $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n"
                     stream.output.write(req.toByteArray(Charsets.UTF_8))
                     stream.output.flush()
                     // Bound the response read: the lazy header

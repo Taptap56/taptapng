@@ -20,14 +20,18 @@ import androidx.appcompat.app.AppCompatDelegate
  * default (see [TaptapVpnService]-side behaviour: remote DNS falls
  * back to 8.8.8.8 there when the stored value is not an IP literal).
  *
- * Fragment / Observatory / Hev TUN values are STORED only —
- * TaptapNG M2 has no xray-core to apply them to. The UI labels them
- * "belum didukung di M2" and must never claim they work. Mux is the
- * exception since v1.0.5 (kelompok D): mux_enabled +
- * mux_concurrency are applied in-app for VMess/VLESS (TCP) — the
- * Settings UI still badges them notSupportedM2 (owned by
- * SettingsActivity, not updated here), only the XUDP pair stays
- * stored-only.
+ * Fragment / Hev TUN values are STORED only — TaptapNG M2 has no
+ * xray-core to apply them to. The UI labels them "belum didukung di
+ * M2" and must never claim they work. Mux is the exception since
+ * v1.0.5 (kelompok D): mux_enabled + mux_concurrency are applied
+ * in-app for VMess/VLESS (TCP) — the Settings UI still badges them
+ * notSupportedM2 (owned by SettingsActivity, not updated here), only
+ * the XUDP pair stays stored-only. Observatory values ARE applied in
+ * v1.0.5 (kelompok F): the in-app prober (ObservatoryProber /
+ * ObservatoryRunner in core) probes with
+ * ServerTester.testRealPingThroughProxy — the SettingsActivity label
+ * for the section still says "belum didukung di M2" and must be
+ * updated there.
  */
 class SettingsStore(context: Context) {
 
@@ -186,7 +190,7 @@ class SettingsStore(context: Context) {
             ?: DEFAULT_FRAGMENT_MAX_SPLIT
         set(v) = prefs.edit().putString(KEY_FRAGMENT_MAX_SPLIT, v).apply()
 
-    // Observatory (stored only — no xray-core in M2)
+    // Observatory (v1.0.5, kelompok F: applied by the in-app prober — see Observatory)
     var observatoryLeastPing: String
         get() = prefs.getString(KEY_OBSERVATORY_LEAST_PING, DEFAULT_OBSERVATORY_LEAST_PING)
             ?: DEFAULT_OBSERVATORY_LEAST_PING
