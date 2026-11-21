@@ -57,8 +57,8 @@ object Observatory {
         val delayTestUrl: String,
     ) {
         companion object {
-            const val DEFAULT_PING_INTERVAL_MS = 3L * 60_000
-            const val DEFAULT_LOAD_INTERVAL_MS = 5L * 60_000
+            const val DEFAULT_PING_INTERVAL_MS = 15L * 60_000
+            const val DEFAULT_LOAD_INTERVAL_MS = 30L * 60_000
             const val DEFAULT_TIMEOUT_MS = 30_000
             const val DEFAULT_SAMPLING = 2
 
@@ -206,6 +206,12 @@ class ObservatoryRunner(
     private val itemsProvider: () -> List<ProfileItem>,
     private val prober: ObservatoryProber = ObservatoryProber(config),
     private val onBestChanged: (ProfileItem, Observatory.ProbeResult) -> Unit = { _, _ -> },
+    /**
+     * v1.0.16 (battery): false = ronde ditunda (mis. layar mati).
+     * Probe menembus proxy dan membangunkan radio; hasilnya hanya
+     * saran, jadi tidak ada gunanya jalan saat HP tidak dipakai.
+     */
+    private val isActive: () -> Boolean = { true },
 ) {
     private val running = AtomicBoolean(false)
     private var worker: Thread? = null
@@ -213,33 +219,62 @@ class ObservatoryRunner(
     @Volatile private var lastLoadMs = 0L
     @Volatile private var lastBestGuid: String? = null
 
+    private companion object {
+        const val MIN_SLEEP_MS = 5_000L
+        const val MAX_SLEEP_MS = 30L * 60_000
+        const val INACTIVE_RETRY_MS = 60_000L
+    }
+
     fun start() {
         if (!running.compareAndSet(false, true)) return
         lastPingMs = System.currentTimeMillis()
         lastLoadMs = lastPingMs
         worker = thread(name = "observatory", isDaemon = true) {
+            // v1.0.16 (battery): tidur sampai ronde berikutnya JATUH
+            // TEMPO. Sebelumnya thread bangun tiap 1 detik dan memanggil
+            // itemsProvider() — membaca + mem-parse file profil dari disk
+            // 86.400×/hari — padahal ronde hanya tiap beberapa menit.
             while (running.get()) {
+                val now = System.currentTimeMillis()
+                val untilDue = minOf(
+                    lastPingMs + config.leastPingIntervalMs,
+                    lastLoadMs + config.leastLoadIntervalMs,
+                ) - now
                 try {
-                    Thread.sleep(1000)
+                    Thread.sleep(untilDue.coerceIn(MIN_SLEEP_MS, MAX_SLEEP_MS))
                 } catch (_: InterruptedException) {
                     break
                 }
                 if (!running.get()) break
-                val now = System.currentTimeMillis()
+                val t = System.currentTimeMillis()
+                val pingDue = t - lastPingMs >= config.leastPingIntervalMs
+                val loadDue = t - lastLoadMs >= config.leastLoadIntervalMs
+                if (!pingDue && !loadDue) continue
+                if (!isActive()) {
+                    // Layar mati: tunda, cek lagi nanti — tanpa baca profil.
+                    if (pingDue) lastPingMs = t - config.leastPingIntervalMs + INACTIVE_RETRY_MS
+                    if (loadDue) lastLoadMs = t - config.leastLoadIntervalMs + INACTIVE_RETRY_MS
+                    continue
+                }
                 val items = try {
                     itemsProvider()
                 } catch (_: Exception) {
                     emptyList()
                 }
-                if (items.isEmpty()) continue
+                if (items.size < 2) {
+                    // Satu entry (atau kosong): tidak ada yang dibandingkan.
+                    lastPingMs = t
+                    lastLoadMs = t
+                    continue
+                }
                 try {
-                    if (now - lastPingMs >= config.leastPingIntervalMs) {
-                        lastPingMs = now
+                    if (pingDue) {
+                        lastPingMs = t
                         prober.probeOnce(items, ObservatoryProber.Mode.PING)
                         reportBest(items)
                     }
-                    if (now - lastLoadMs >= config.leastLoadIntervalMs) {
-                        lastLoadMs = now
+                    if (loadDue) {
+                        lastLoadMs = t
                         prober.probeOnce(items, ObservatoryProber.Mode.LOAD)
                         reportBest(items)
                     }

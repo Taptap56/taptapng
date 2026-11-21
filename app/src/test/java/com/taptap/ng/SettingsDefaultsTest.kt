@@ -82,10 +82,10 @@ class SettingsDefaultsTest {
 
     @Test
     fun `observatory defaults match v2rayNG`() {
-        assertEquals("3m", SettingsStore.DEFAULT_OBSERVATORY_LEAST_PING)
-        assertEquals("5m", SettingsStore.DEFAULT_OBSERVATORY_LEAST_LOAD)
+        assertEquals("15m", SettingsStore.DEFAULT_OBSERVATORY_LEAST_PING)
+        assertEquals("30m", SettingsStore.DEFAULT_OBSERVATORY_LEAST_LOAD)
         assertEquals("HEAD", SettingsStore.DEFAULT_OBSERVATORY_LEAST_LOAD_METHOD)
-        assertEquals("2", SettingsStore.DEFAULT_OBSERVATORY_LEAST_LOAD_SAMPLING)
+        assertEquals("1", SettingsStore.DEFAULT_OBSERVATORY_LEAST_LOAD_SAMPLING)
         assertEquals("30s", SettingsStore.DEFAULT_OBSERVATORY_LEAST_LOAD_TIMEOUT)
     }
 

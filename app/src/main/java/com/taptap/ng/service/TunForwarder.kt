@@ -286,7 +286,15 @@ class TunForwarder(
          * arrives, so this adds NO upload latency — the timeout
          * only bounds how fast a closed session is noticed (≤ 1 s).
          */
-        const val WRITER_POLL_MS = 1000L
+        const val WRITER_POLL_MS = 30_000L
+
+        /**
+         * v1.0.16 (battery): sentinel yang membangunkan writer sesi
+         * saat sesi ditutup. Dengan ini writer idle cukup bangun
+         * 1×/30 dtk (bukan 1×/dtk per sesi) tanpa menunda deteksi
+         * penutupan — close/sendFin memasukkan sentinel ke antrean.
+         */
+        private val WRITER_WAKE = ByteArray(0)
 
         /**
          * Relay read buffer (v1.0.15): one read() from the proxy
@@ -826,11 +834,12 @@ class TunForwarder(
                 } catch (_: InterruptedException) {
                     return
                 } ?: continue
+                if (first === WRITER_WAKE) continue
                 val batch = ArrayList<ByteArray>(MAX_WRITER_DRAIN)
                 batch.add(first)
                 while (batch.size < MAX_WRITER_DRAIN) {
                     val next = session.outQueue.poll() ?: break
-                    batch.add(next)
+                    if (next !== WRITER_WAKE) batch.add(next)
                 }
                 // v1.0.16: the write+flush below is timed (see
                 // after the flush).
@@ -1159,6 +1168,7 @@ class TunForwarder(
     /** Send FIN|ACK and tear the session down (single-shot). */
     private fun sendFin(session: TcpSession) {
         if (!session.closed.compareAndSet(false, true)) return
+        session.outQueue.offer(WRITER_WAKE)
         logSpeedSummary(session)
         val key = session.key
         val pkt = buildTcpPacket(
@@ -1175,6 +1185,7 @@ class TunForwarder(
 
     private fun closeSession(session: TcpSession) {
         if (!session.closed.compareAndSet(false, true)) return
+        session.outQueue.offer(WRITER_WAKE)
         logSpeedSummary(session)
         session.state = State.CLOSED
         sessions.remove(session.key)

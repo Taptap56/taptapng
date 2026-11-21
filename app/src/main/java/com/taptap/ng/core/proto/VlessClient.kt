@@ -57,6 +57,19 @@ class VlessClient(
             null
         }
 
+    /**
+     * v1.0.16: mux ON = dial lewat pool mux, DENGAN fallback otomatis.
+     * Server tanpa dukungan mux.cool (mis. sing-box, atau CDN yang
+     * memutus WS) membuat probe via mux gagal. Bila dial PROBE via mux
+     * gagal tetapi jalur biasa berhasil, mux dimatikan untuk sisa sesi
+     * VPN ini (relay tidak bisa diverifikasi per-dial karena header
+     * respons baru keluar setelah data mengalir) — tanpa fallback,
+     * semua koneksi diam-diam rusak. Mux dimatikan hanya bila jalur
+     * biasa terbukti jalan, jadi gangguan jaringan sesaat tidak
+     * mematikan mux.
+     */
+    @Volatile private var muxDisabled = false
+
     override fun dial(
         targetHost: String,
         targetPort: Int,
@@ -67,10 +80,38 @@ class VlessClient(
         require(encryption == "none") {
             "VLESS encryption tidak didukung: $encryption (hanya none)"
         }
-        // v1.0.5 (kelompok D): mux ON = dial lewat pool koneksi
-        // mux; mux OFF = jalur lama di bawah ini, tanpa perubahan.
         val pool = muxPool
-        if (pool != null) return dialMux(pool, targetHost, targetPort, probeBody, stats)
+        if (pool == null || muxDisabled) return dialDirect(targetHost, targetPort, probeBody, stats)
+        try {
+            return dialMux(pool, targetHost, targetPort, probeBody, stats)
+        } catch (e: Exception) {
+            if (probeBody == null) throw e
+            val direct = try {
+                dialDirect(targetHost, targetPort, probeBody, stats)
+            } catch (_: Exception) {
+                throw e
+            }
+            muxDisabled = true
+            DialLog.log(
+                "Mux",
+                "probe via mux gagal (${e.javaClass.simpleName}) tapi koneksi biasa jalan — " +
+                    "mux dimatikan untuk sesi ini (VLESS server tanpa dukungan mux.cool?)",
+            )
+            return direct
+        }
+    }
+
+    /** Jalur lama: satu koneksi fisik per stream (tanpa mux). */
+    private fun dialDirect(
+        targetHost: String,
+        targetPort: Int,
+        probeBody: ByteArray?,
+        stats: SpeedStats?,
+    ): ProxyStream {
+        val encryption = item.method.ifBlank { "none" }.lowercase()
+        require(encryption == "none") {
+            "VLESS encryption tidak didukung: $encryption (hanya none)"
+        }
         // M3: socket ladder or DNSTT ladder (see VmessClient).
         val transport = SlowDnsTransport.open(item, slowDns, stats)
         try {
@@ -163,7 +204,7 @@ class VlessClient(
             "VLESS encryption tidak didukung: $encryption (hanya none)"
         }
         val pool = muxPool
-        if (pool != null) {
+        if (pool != null && !muxDisabled) {
             val (_, session) = pool.openUdpSession(targetHost, targetPort, stats)
             return TrackedProxyUdpSession(MuxUdpSession(session), openUdpSessions)
         }

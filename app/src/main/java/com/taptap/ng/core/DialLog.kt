@@ -136,8 +136,19 @@ object DialLog {
         }
     }
 
+    /**
+     * v1.0.16 (battery/CPU): SimpleDateFormat dibuat SEKALI per thread.
+     * Sebelumnya satu objek baru per baris log — tiap koneksi / query
+     * DNS menulis beberapa baris, jadi ini alokasi + parse pola yang
+     * terus berulang selama VPN hidup.
+     */
+    private val stampFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat =
+            SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    }
+
     private fun add(text: String) {
-        val stamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+        val stamp = stampFormat.get()!!.format(Date())
         val line = "[$stamp] $text"
         synchronized(lock) {
             if (lines.size >= MAX_LINES) lines.removeFirst()

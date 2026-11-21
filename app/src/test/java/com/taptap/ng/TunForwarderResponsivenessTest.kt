@@ -13,7 +13,9 @@ import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -316,6 +318,10 @@ override fun dial(
         // v1.0.25: writer poll 100 ms -> 1000 ms (battery). The
         // writer must still notice a closed session within ~1 s —
         // it must not keep waking on a dead session forever.
+        // v1.0.16: poll 1000 ms -> 30 s + sentinel WRITER_WAKE —
+        // the 5 s bound below now proves the SENTINEL wakes the
+        // writer, not the poll: without it the writer would sit in
+        // poll(30 s) and this test would time out.
         val proxy = OkProxy()
         val h = Harness(proxy)
         try {
@@ -345,6 +351,87 @@ override fun dial(
                 Thread.getAllStackTraces().keys.none { it.name == "tun-writer-443" && it.isAlive }
             }
             assertTrue(gone, "writer thread still alive after the session closed")
+        } finally {
+            h.stop()
+        }
+    }
+
+    /** Proxy stream yang menghitung flush() — sentinel WRITER_WAKE
+     * adalah ByteArray(0): bila tidak difilter, ia tetap memicu
+     * satu write+flush kosong sesudah data. */
+    private class CountingStream : ProxyStream {
+        val written = ByteArrayOutputStream()
+        val flushes = AtomicInteger(0)
+        @Suppress("unused")
+        private val pipeOut = PipedOutputStream()
+        override val input: InputStream = PipedInputStream(pipeOut)
+        override val output: OutputStream = object : OutputStream() {
+            override fun write(b: Int) {
+                synchronized(written) { written.write(b) }
+            }
+
+            override fun write(b: ByteArray, off: Int, len: Int) {
+                synchronized(written) { written.write(b, off, len) }
+            }
+
+            override fun flush() {
+                flushes.incrementAndGet()
+            }
+        }
+
+        override fun close() {
+            runCatching { input.close() }
+        }
+    }
+
+    private class CountingProxy : ProxyClient {
+        val last = CountingStream()
+
+        override fun dial(
+            targetHost: String,
+            targetPort: Int,
+            probeBody: ByteArray?,
+            stats: SpeedStats?,
+        ): ProxyStream = last
+
+        override fun close() = Unit
+    }
+
+    @Test
+    fun `sentinel tidak pernah tertulis ke stream proxy`() {
+        // v1.0.16: WRITER_POLL_MS 30 s + sentinel WRITER_WAKE
+        // (ByteArray(0)) yang ditawarkan saat sesi ditutup. Sentinel
+        // harus difilter dari batch writer — stream proxy hanya
+        // boleh menerima data aplikasi, tanpa byte/flush tambahan.
+        // Gagal pada kode yang tidak memfilter sentinel (flush
+        // kedua dari batch kosong).
+        val proxy = CountingProxy()
+        val h = Harness(proxy)
+        try {
+            h.fwd.start()
+            h.feed(syn())
+            assertTrue(waitFor(what = "Connected") { h.statuses.contains("Connected") })
+            val isn = synAckIsn(h)
+            val serverSeq = (isn + 1) and 0xFFFFFFFFL
+            h.feed(ackPkt(seq = 1001L, ack = serverSeq))
+            Thread.sleep(150)
+            h.feed(dataPkt(seq = 1001L, ack = serverSeq, payload = "hello".toByteArray()))
+            assertTrue(waitFor(what = "hello flushed to proxy") { proxy.last.flushes.get() >= 1 })
+            assertEquals(1, proxy.last.flushes.get(), "satu batch data = satu flush")
+            // App FIN: sendFin menawarkan WRITER_WAKE ke antrean.
+            h.feed(
+                TcpPacket.buildTcp(
+                    clientIp, serverIp, 12345, 443,
+                    1006L, serverSeq,
+                    TcpPacket.FLAG_FIN or TcpPacket.FLAG_ACK, ByteArray(0),
+                ),
+            )
+            assertTrue(waitFor(what = "session removed") { h.fwd.sessionCount() == 0 })
+            assertTrue(waitFor(what = "writer thread gone", timeoutMs = 5_000) {
+                Thread.getAllStackTraces().keys.none { it.name == "tun-writer-443" && it.isAlive }
+            })
+            assertArrayEquals("hello".toByteArray(), proxy.last.written.toByteArray())
+            assertEquals(1, proxy.last.flushes.get(), "sentinel tidak boleh memicu flush tambahan")
         } finally {
             h.stop()
         }

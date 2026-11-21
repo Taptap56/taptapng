@@ -782,6 +782,12 @@ class TaptapVpnService : VpnService() {
                     ProfileStore(ProfileStore.defaultFile(filesDir))
                         .apply { load() }.profiles.toList()
                 },
+                isActive = {
+                    runCatching {
+                        (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
+                            .isInteractive
+                    }.getOrDefault(true)
+                },
                 onBestChanged = { best, result ->
                     DialLog.log(
                         "OBSERVATORY",

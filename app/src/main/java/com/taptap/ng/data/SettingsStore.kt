@@ -377,10 +377,10 @@ class SettingsStore(context: Context) {
         const val DEFAULT_FRAGMENT_LENGTH = "50-100"
         const val DEFAULT_FRAGMENT_INTERVAL = "10-20"
         const val DEFAULT_FRAGMENT_MAX_SPLIT = "10"
-        const val DEFAULT_OBSERVATORY_LEAST_PING = "3m"
-        const val DEFAULT_OBSERVATORY_LEAST_LOAD = "5m"
+        const val DEFAULT_OBSERVATORY_LEAST_PING = "15m"
+        const val DEFAULT_OBSERVATORY_LEAST_LOAD = "30m"
         const val DEFAULT_OBSERVATORY_LEAST_LOAD_METHOD = "HEAD"
-        const val DEFAULT_OBSERVATORY_LEAST_LOAD_SAMPLING = "2"
+        const val DEFAULT_OBSERVATORY_LEAST_LOAD_SAMPLING = "1"
         const val DEFAULT_OBSERVATORY_LEAST_LOAD_TIMEOUT = "30s"
         const val DEFAULT_IS_BOOTED = false
         const val DEFAULT_DELAY_TEST_URL = ""
