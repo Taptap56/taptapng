@@ -59,6 +59,36 @@ object DnsResolver {
     @Volatile
     var dnsServer: String = "8.8.8.8"
 
+    /**
+     * Pemetaan host statis (v1.0.5, kelompok C — setting dnsHosts,
+     * "domain:ip" per baris). Dicek PALING DULU di [resolve] dan
+     * [resolveAll] — menang atas hook operator, UDP langsung, dan
+     * sistem. Dipasang service dari Settings tiap tunnel naik;
+     * dikosongkan lagi di teardown. Map key = domain lowercase
+     * (lihat [DnsSettings.lookupStaticHost] — cocok persis lalu
+     * subdomain).
+     */
+    @Volatile
+    var staticHosts: Map<String, InetAddress> = emptyMap()
+
+    /**
+     * Metode resolve outbound (v1.0.5, kelompok C — setting
+     * outboundResolveMethod; lihat [OutboundResolveMethod]).
+     * Default [OutboundResolveMethod.OPERATOR_FIRST] = perilaku
+     * v1.0.4, tidak berubah. Dipasang service dari Settings tiap
+     * tunnel naik.
+     */
+    @Volatile
+    var resolveMethod: OutboundResolveMethod = OutboundResolveMethod.OPERATOR_FIRST
+
+    /**
+     * Hook resolver sistem untuk tes (v1.0.5): (host, timeoutMs) ->
+     * alamat. Null = [systemResolveAll] asli. Pola yang sama dengan
+     * [operatorResolve] — produksi tidak pernah memasangnya.
+     */
+    @Volatile
+    var systemResolveHook: ((String, Int) -> List<InetAddress>)? = null
+
     /** Port server DNS (53). Diubah tes untuk menunjuk server DNS palsu lokal. */
     @Volatile
     var dnsPort: Int = 53
@@ -185,6 +215,8 @@ object DnsResolver {
             // Literal: getByName tidak pernah lookup DNS untuk literal.
             return InetAddress.getByName(clean)
         }
+        // v1.0.5: pemetaan statis (dnsHosts) menang atas semua jalur.
+        DnsSettings.lookupStaticHost(staticHosts, clean)?.let { return it }
         // Timeout di sini langsung dilempar — jangan buang waktu coba
         // AAAA bila servernya saja tidak menjawab.
         val aAnswers = queryOnce(clean, TYPE_A, timeoutMs)
@@ -266,37 +298,85 @@ object DnsResolver {
         }
     }
 
-    /** The uncached half of [resolveAll]: direct A + AAAA queries,
-     *  then the system resolver as fallback. Returns non-empty, or
-     *  throws IOException when both paths fail. */
+    /** The uncached half of [resolveAll]: static hosts first, then
+     *  the chain chosen by [resolveMethod] (see
+     *  [OutboundResolveMethod]). Returns non-empty, or throws
+     *  IOException when every path fails. */
     private fun resolveAllUncached(
         host: String,
         clean: String,
         port: Int,
         timeoutMs: Int,
     ): List<InetAddress> {
-        // v1.0.4: jalur pertama = resolver operator (lihat
-        // operatorResolve). Kosong bila hook null/gagal — lanjut ke
-        // UDP langsung (A + AAAA), lalu ke resolver sistem.
-        val viaOperator = operatorResolveAll(clean, timeoutMs)
-        if (viaOperator.isNotEmpty()) return viaOperator
-        try {
+        // v1.0.5: pemetaan statis (dnsHosts) menang atas semua jalur,
+        // di semua metode — tidak ada lookup untuk host yang dipetakan.
+        DnsSettings.lookupStaticHost(staticHosts, clean)?.let { return listOf(it) }
+        return when (resolveMethod) {
+            // "0": tanpa pre-resolve aplikasi — resolver sistem saja.
+            OutboundResolveMethod.SYSTEM_ONLY -> {
+                val all = systemResolveAllOrHook(clean, port, timeoutMs)
+                if (all.isEmpty()) throw IOException("DNS gagal untuk $host")
+                all
+            }
+            // "2": UDP langsung (dnsServer) lalu sistem — hook
+            // operator dilewati; hasil resolve menggantikan domain.
+            OutboundResolveMethod.DIRECT_ONLY -> {
+                directResolveAll(clean, timeoutMs)?.let { return it }
+                val all = systemResolveAllOrHook(clean, port, timeoutMs)
+                if (all.isEmpty()) throw IOException("DNS gagal untuk $host")
+                all
+            }
+            // "1" (default): perilaku v1.0.4 — operator dulu, lalu
+            // UDP langsung (A + AAAA), lalu resolver sistem.
+            OutboundResolveMethod.OPERATOR_FIRST -> {
+                val viaOperator = operatorResolveAll(clean, timeoutMs)
+                if (viaOperator.isNotEmpty()) return viaOperator
+                directResolveAll(clean, timeoutMs)?.let { return it }
+                val all = systemResolveAllOrHook(clean, port, timeoutMs)
+                if (all.isEmpty()) throw IOException("DNS gagal untuk $host")
+                all
+            }
+        }
+    }
+
+    /**
+     * Query A + AAAA lewat UDP langsung ([dnsServer]). Mengembalikan
+     * daftar (IPv4 dulu, dedup) bila server menjawab dengan record,
+     * atau null bila server tidak menjawab / menjawab tanpa record —
+     * pemanggil lanjut ke fallback sistem.
+     */
+    private fun directResolveAll(host: String, timeoutMs: Int): List<InetAddress>? {
+        return try {
             // A dulu; bila servernya saja tidak menjawab (timeout),
-            // jangan buang waktu coba AAAA — langsung fallback sistem
-            // (pola yang sama dengan resolve()).
-            val a = queryOnce(clean, TYPE_A, timeoutMs)
-            val aaaa = runCatching { queryOnce(clean, TYPE_AAAA, timeoutMs) }
+            // jangan buang waktu coba AAAA — langsung fallback sistem.
+            val a = queryOnce(host, TYPE_A, timeoutMs)
+            val aaaa = runCatching { queryOnce(host, TYPE_AAAA, timeoutMs) }
                 .getOrElse { emptyList() }
             val out = (a + aaaa).distinctBy { it.hostAddress }
-            if (out.isNotEmpty()) return out
+            if (out.isNotEmpty()) out else null
             // Server menjawab tapi tanpa record A/AAAA → fallback sistem.
         } catch (_: IOException) {
-            // Jalur langsung gagal → fallback sistem di bawah.
+            // Jalur langsung gagal → fallback sistem di pemanggil.
+            null
         }
-        val all = runCatching { systemResolveAll(clean, port, timeoutMs) }
+    }
+
+    /** Resolver sistem lewat hook tes ([systemResolveHook]) atau [systemResolveAll] asli. */
+    private fun systemResolveAllOrHook(
+        host: String,
+        port: Int,
+        timeoutMs: Int,
+    ): List<InetAddress> {
+        val hook = systemResolveHook
+        if (hook != null) {
+            return try {
+                hook(host, timeoutMs)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        return runCatching { systemResolveAll(host, port, timeoutMs) }
             .getOrElse { emptyList() }
-        if (all.isEmpty()) throw IOException("DNS gagal untuk $host")
-        return all
     }
 
     /** Hapus cache resolve + offset rotasi (dipakai tes). */
@@ -443,6 +523,117 @@ object DnsResolver {
             pos += rdLen
         }
         return a + aaaa
+    }
+
+    /**
+     * Satu pertanyaan DNS dari pesan wire: ID + nama (dotted,
+     * lowercase) + QTYPE. Null bila pesan terlalu pendek, QDCOUNT
+     * bukan 1, atau namanya tidak bisa dibaca. Murni — dipakai
+     * relay untuk memutuskan rute query tanpa meneruskannya dulu.
+     */
+    data class DnsQuery(val id: Int, val name: String, val qtype: Int)
+
+    /** Parse pertanyaan pertama dari pesan query DNS (lihat [DnsQuery]). */
+    fun parseQuery(msg: ByteArray): DnsQuery? {
+        if (msg.size < 12) return null
+        if (u16(msg, 4) != 1) return null // QDCOUNT harus 1
+        val (labels, afterName) = readNameLabels(msg, 12) ?: return null
+        if (afterName + 4 > msg.size) return null
+        val qtype = u16(msg, afterName)
+        val name = labels.joinToString(".").lowercase()
+        if (name.isEmpty()) return null
+        return DnsQuery(u16(msg, 0), name, qtype)
+    }
+
+    /**
+     * Bangun jawaban DNS untuk [query]: echo pertanyaan asli +
+     * jawaban A/AAAA dari [answers] (nama jawaban = pointer
+     * kompresi 0xC00C ke nama pertanyaan). Hanya jawaban yang
+     * keluarganya cocok dengan QTYPE yang dimasukkan (A→IPv4,
+     * AAAA→IPv6); bila tidak ada yang cocok, null — pemanggil
+     * meneruskan query ke upstream, bukan menjawab kosong.
+     * TTL jawaban = [ttlSeconds]. Null juga bila query tidak bisa
+     * diparse. Murni — dipakai relay untuk jawaban lokal (dnsHosts,
+     * FakeDNS, local, DoH).
+     */
+    fun buildResponse(
+        query: ByteArray,
+        answers: List<InetAddress>,
+        ttlSeconds: Int = 60,
+    ): ByteArray? {
+        val parsed = parseQuery(query) ?: return null
+        val matching = answers.filter {
+            val isV4 = it is Inet4Address
+            (parsed.qtype == TYPE_A && isV4) || (parsed.qtype == TYPE_AAAA && !isV4)
+        }
+        if (matching.isEmpty()) return null
+        // Panjang pertanyaan = nama + QTYPE/QCLASS (4 byte).
+        val (_, afterName) = readNameLabels(query, 12) ?: return null
+        val questionEnd = afterName + 4
+        if (questionEnd > query.size) return null
+        val out = mutableListOf<Byte>()
+        fun u16(v: Int) {
+            out += ((v ushr 8) and 0xFF).toByte()
+            out += (v and 0xFF).toByte()
+        }
+        fun u32(v: Long) {
+            out += ((v ushr 24) and 0xFF).toByte()
+            out += ((v ushr 16) and 0xFF).toByte()
+            out += ((v ushr 8) and 0xFF).toByte()
+            out += (v and 0xFF).toByte()
+        }
+        u16(parsed.id)
+        u16(0x8180) // QR=1, RD=1, RA=1, RCODE=0
+        u16(1) // QDCOUNT
+        u16(matching.size) // ANCOUNT
+        u16(0) // NSCOUNT
+        u16(0) // ARCOUNT
+        out += query.copyOfRange(12, questionEnd).toList()
+        for (addr in matching) {
+            val rdata = addr.address
+            out += 0xC0.toByte()
+            out += 0x0C.toByte() // pointer ke nama pertanyaan (offset 12)
+            u16(if (rdata.size == 4) TYPE_A else TYPE_AAAA)
+            u16(CLASS_IN)
+            u32(ttlSeconds.toLong())
+            u16(rdata.size)
+            out += rdata.toList()
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * Baca satu nama DNS di [pos] (label berurutan / pointer
+     * kompresi 0xC0, maks. 10 pointer). Mengembalikan (label,
+     * posisi-setelah-nama) atau null bila pesan terpotong.
+     */
+    private fun readNameLabels(msg: ByteArray, start: Int): Pair<List<String>, Int>? {
+        val labels = mutableListOf<String>()
+        var pos = start
+        var pointers = 0
+        var afterPointer: Int? = null
+        while (true) {
+            if (pos >= msg.size) return null
+            val len = msg[pos].toInt() and 0xFF
+            when {
+                len == 0 -> return labels to (afterPointer ?: (pos + 1))
+                len and 0xC0 == 0xC0 -> {
+                    if (pos + 1 >= msg.size) return null
+                    if (afterPointer == null) afterPointer = pos + 2
+                    pointers++
+                    if (pointers > 10) return null
+                    val offset = ((len and 0x3F) shl 8) or (msg[pos + 1].toInt() and 0xFF)
+                    if (offset >= msg.size) return null
+                    pos = offset
+                }
+                len and 0xC0 != 0 -> return null
+                else -> {
+                    if (pos + 1 + len > msg.size) return null
+                    labels += String(msg, pos + 1, len, Charsets.US_ASCII)
+                    pos += 1 + len
+                }
+            }
+        }
     }
 
     /**

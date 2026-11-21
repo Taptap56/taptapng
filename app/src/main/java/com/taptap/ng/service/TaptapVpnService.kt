@@ -11,7 +11,12 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.taptap.ng.R
 import com.taptap.ng.core.DialLog
+import com.taptap.ng.core.DnsRelayPolicy
 import com.taptap.ng.core.DnsResolver
+import com.taptap.ng.core.DnsSettings
+import com.taptap.ng.core.DohClient
+import com.taptap.ng.core.FakeDns
+import com.taptap.ng.core.OutboundResolveMethod
 import com.taptap.ng.core.PemicuManager
 import com.taptap.ng.core.ServerTester
 import com.taptap.ng.core.TunnelState
@@ -181,9 +186,10 @@ class TaptapVpnService : VpnService() {
          * the XVEON APK (see README-v1.0.3.md): 1.1.1.1 (Primary)
          * and 1.0.0.1 (Secondary) are XVEON's profile DEFAULTS, and
          * its TUN establish sets both via addDnsServer (falling back
-         * to 1.1.1.1 when the set is empty). The tunnel DNS is now
-         * these two fixed values — Settings "Remote DNS" no longer
-         * affects the tunnel (it stays in Settings, unused for now).
+         * to 1.1.1.1 when the set is empty). v1.0.5: the primary is
+         * now Settings vpnDns ([DnsSettings.effectiveTunnelDns]) —
+         * these two constants stay the DEFAULTS (1.1.1.1/1.0.0.1),
+         * and the secondary is still always 1.0.0.1.
          * The proxy-host RESOLVER is a different thing and stays
          * 8.8.8.8 (DnsResolver): XVEON resolves the proxy host with
          * the system resolver, never via 1.1.1.1, so there is no
@@ -394,10 +400,54 @@ class TaptapVpnService : VpnService() {
 
     /** Build the TUN + forwarder. Runs under [tunnelLock] (see runStart). */
     private fun establishTunnel(client: ProxyClient, item: ProfileItem) {
-        // v1.0.3 (XVEON parity): the tunnel DNS is the fixed pair
-        // PRIMARY_DNS + SECONDARY_DNS (see companion) — Settings
-        // "Remote DNS" no longer affects the tunnel.
+        // v1.0.5 (DNS C): DNS tunnel kini dari Settings
+        // ([DnsSettings]) — vpnDns jadi DNS utama (default 1.1.1.1
+        // bila kosong/bukan IP), remoteDns (DoH) + domesticDns +
+        // dnsHosts + local/fake DNS + metode resolve outbound
+        // diteruskan ke resolver + relay. Sebelum v1.0.5 (v1.0.3)
+        // tunnel DNS paten PRIMARY_DNS + SECONDARY_DNS dan Remote
+        // DNS tidak dipakai tunnel sama sekali. Nilai default TIDAK
+        // berubah, jadi log "DNS: Primary DNS set to 1.1.1.1" tetap
+        // sama bila user tidak mengubah vpnDns (paritas log XVEON).
         val settings = SettingsStore(this)
+        val dnsSettings = DnsSettings(
+            vpnDns = settings.vpnDns,
+            remoteDns = settings.remoteDns,
+            domesticDns = settings.domesticDns,
+            dnsHosts = settings.dnsHosts,
+            localDnsEnabled = settings.localDnsEnabled,
+            fakeDnsEnabled = settings.fakeDnsEnabled,
+            outboundResolveMethod = settings.outboundResolveMethod,
+        )
+        val primaryDns = dnsSettings.effectiveTunnelDns()
+        val dohUrl = dnsSettings.remoteDohUrl()
+        // Resolver host proxy (dial / delay test / prime): metode
+        // dari Settings + pemetaan statis. Default metode "1" =
+        // operator-first seperti v1.0.4.
+        DnsResolver.resolveMethod = dnsSettings.resolveMethod()
+        DnsResolver.staticHosts = dnsSettings.staticHosts()
+        // FakeDNS hidup hanya bila local + fake sama-sama ON (kunci
+        // UI yang sama); bila fake tersimpan ON tapi local OFF,
+        // catat sekali supaya tidak diam-diam mati.
+        val fakeDns = if (dnsSettings.fakeDnsActive) FakeDns() else null
+        if (settings.fakeDnsEnabled && !settings.localDnsEnabled) {
+            DialLog.log("DNS", "FakeDNS OFF — butuh local DNS ON")
+        }
+        val dnsPolicy = DnsRelayPolicy(
+            staticHosts = DnsResolver.staticHosts,
+            domesticDnsServer = dnsSettings.effectiveDomesticDns(),
+            remoteDohUrl = dohUrl,
+            localDnsEnabled = settings.localDnsEnabled,
+            fakeDns = fakeDns,
+            // Resolver lokal = hook operator (jaringan fisik) yang
+            // dipasang installProtectHooks — lihat
+            // TunForwarder.localResolve.
+            localResolve = { host, _ ->
+                DnsResolver.operatorResolve?.invoke(host, DnsResolver.DEFAULT_TIMEOUT_MS)
+                    ?: emptyList()
+            },
+            dohClient = dohUrl?.let { DohClient(it) },
+        )
         // MTU comes from Settings; out-of-range values fall back
         // to the default instead of breaking establish(). v1.0.21:
         // the default is 9000 (was v2rayNG's 1500) — the writer's
@@ -437,7 +487,7 @@ class TaptapVpnService : VpnService() {
                 if (settings.ipv6Enabled) addRoute("::", 0)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
             }
-            .addDnsServer(PRIMARY_DNS)
+            .addDnsServer(primaryDns)
             .addDnsServer(SECONDARY_DNS)
             .setMtu(mtu)
         // v1.0.9: exclude our own package from the VPN — v2rayNG's
@@ -474,7 +524,7 @@ class TaptapVpnService : VpnService() {
         // display name, not a hardcoded 1. The TUN address stays
         // TaptapNG's own (from the interface-address setting,
         // default 10.10.14.1); only the format is XVEON's.
-        DialLog.log("DNS", "DNS: Primary DNS set to $PRIMARY_DNS")
+        DialLog.log("DNS", "DNS: Primary DNS set to $primaryDns")
         DialLog.log("DNS", "DNS: Secondary DNS set to $SECONDARY_DNS")
         DialLog.log(
             "VPN",
@@ -528,8 +578,11 @@ class TaptapVpnService : VpnService() {
                 proxy = client,
                 // v1.0.3 (XVEON parity): in-tunnel DNS queries
                 // (UDP/53 intercepted from apps) are forwarded to
-                // the tunnel's PRIMARY DNS (1.1.1.1) — the same
-                // server Android was told to use via addDnsServer.
+                // the tunnel's PRIMARY DNS — the same server Android
+                // was told to use via addDnsServer. v1.0.5: primernya
+                // kini dari Settings vpnDns (default 1.1.1.1), dan
+                // kebijakan relay (dnsHosts / domestik / DoH /
+                // local / FakeDNS) diteruskan lewat dnsPolicy.
                 // (v1.0.2 used Settings Remote DNS here; that value
                 // no longer drives the tunnel.) v1.0.4: on a primary
                 // timeout the forwarder retries the SECONDARY DNS
@@ -537,8 +590,9 @@ class TaptapVpnService : VpnService() {
                 // addDnsServer and never used by the forwarder. The
                 // proxy-host resolver (DnsResolver, 8.8.8.8) is a
                 // different path and is unchanged.
-                dnsServer = PRIMARY_DNS,
+                dnsServer = primaryDns,
                 dnsFallbackServer = SECONDARY_DNS,
+                dnsPolicy = dnsPolicy,
                 protectUdp = { socket -> protect(socket) },
                 onStatus = { msg -> connection.reportDialStatus(msg) },
                 tunMtu = mtu,
@@ -667,6 +721,11 @@ class TaptapVpnService : VpnService() {
         ServerTester.protectSocket = null
         DnsResolver.protectUdp = null
         DnsResolver.operatorResolve = null
+        // v1.0.5 (DNS C): reset state DNS per-tunnel — pemetaan
+        // statis + metode resolve tidak boleh bocor ke start
+        // berikutnya (default = tanpa pemetaan + operator-first).
+        DnsResolver.staticHosts = emptyMap()
+        DnsResolver.resolveMethod = OutboundResolveMethod.OPERATOR_FIRST
     }
 
     private fun stopTunnel() {

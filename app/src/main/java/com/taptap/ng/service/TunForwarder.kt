@@ -1,6 +1,11 @@
 package com.taptap.ng.service
 
 import com.taptap.ng.core.DialLog
+import com.taptap.ng.core.DnsExchange
+import com.taptap.ng.core.DnsRelayPolicy
+import com.taptap.ng.core.DnsResolver
+import com.taptap.ng.core.DnsRoute
+import com.taptap.ng.core.FakeDns
 import com.taptap.ng.core.TunnelState
 import com.taptap.ng.core.proto.DialWatchdog
 import com.taptap.ng.core.proto.ProxyClient
@@ -70,6 +75,13 @@ class TunForwarder(
     private val dnsFallbackServer: String = "1.0.0.1",
     /** Upstream DNS port (53). Tests point it at local servers. */
     private val dnsPort: Int = 53,
+    /**
+     * Kebijakan relay DNS (v1.0.5, kelompok C): dnsHosts, split
+     * domestik/remote, DoH, local DNS, FakeDNS + transport yang
+     * bisa di-inject tes. Default = perilaku relay v1.0.4 (UDP
+     * primer → fallback). Bukan logika paket TCP — hanya DNS.
+     */
+    private val dnsPolicy: DnsRelayPolicy = DnsRelayPolicy.DEFAULT,
 ) {
 
     private enum class State { DIALING, SYN_SENT, ESTABLISHED, CLOSED }
@@ -643,8 +655,18 @@ class TunForwarder(
         val speed = SpeedStats()
         try {
             watchdog.start()
+            // v1.0.5 (DNS C, FakeDNS): tujuan IP fake dipetakan balik
+            // ke hostname aslinya SEBELUM dial — server proxy yang
+            // me-resolve hostname itu (ProxyClient tidak pernah
+            // resolve lokal). Bukan IP fake yang dikirim: IP fake
+            // tidak ada artinya di luar TUN ini. Satu baris ini saja
+            // yang menyentuh jalur TCP; state machine / relay paket
+            // tidak berubah.
+            val dialHost = dnsPolicy.fakeDns?.lookupHost(key.dstIp)?.also {
+                DialLog.log("DNS", "fake $dst -> $it")
+            } ?: TcpPacket.ipToString(key.dstIp)
             stream = proxy.dial(
-                TcpPacket.ipToString(key.dstIp),
+                dialHost,
                 key.dstPort,
                 stats = speed,
             )
@@ -913,105 +935,23 @@ class TunForwarder(
         }
         dnsExecutor.execute {
             try {
-                val sock = DatagramSocket()
-                try {
-                    // Bila protect GAGAL, query JANGAN dikirim: tanpa
-                    // protect query masuk lagi ke TUN, forwarder
-                    // melihatnya sebagai query baru, dan begitu
-                    // seterusnya — loop thread tak berujung. Sebelumnya
-                    // return value protectUdp diabaikan. Drop diam-diam;
-                    // aplikasi akan retry sendiri. v1.0.9: pengecualian
-                    // bila aplikasi di-disallow dari VPN
-                    // (TunnelState.appBypass) — query bypass di level
-                    // routing dan tidak bisa masuk TUN (pola v2rayNG;
-                    // di HP ini protect() mengembalikan false begitu
-                    // TUN naik, dan drop di sini mematikan DNS semua
-                    // aplikasi).
-                    val protected = protectUdp(sock)
-                    if (!protected && !TunnelState.appBypass) {
-                        dnsFailures.incrementAndGet()
-                        DialLog.log(
-                            "DNS",
-                            "GAGAL: protect() gagal tanpa disallow — query #$dnsNo dibuang",
-                        )
-                        return@execute
-                    }
-                    if (!protected && detail) {
-                        DialLog.log(
-                            "PROTECT",
-                            "protect() gagal — relay DNS lanjut via disallow aplikasi",
-                        )
-                    }
-                    sock.soTimeout = dnsTimeoutMs
-                    // v1.0.4: coba server primer dulu, lalu fallback
-                    // saat timeout/gagal kirim — sebelumnya 1.0.0.1
-                    // hanya dipasang di addDnsServer dan tidak pernah
-                    // dipakai forwarder, jadi query dibuang begitu
-                    // 1.1.1.1 timeout.
-                    val servers = listOf(dnsServer, dnsFallbackServer).distinct()
-                    var respBytes: ByteArray? = null
-                    for ((index, serverName) in servers.withIndex()) {
-                        val last = index == servers.lastIndex
-                        try {
-                            val server = InetAddress.getByName(serverName)
-                            sock.send(DatagramPacket(query, query.size, server, dnsPort))
-                            val buf = ByteArray(8192)
-                            val resp = DatagramPacket(buf, buf.size)
-                            sock.receive(resp)
-                            respBytes = resp.data.copyOf(resp.length)
-                            break
-                        } catch (e: java.net.SocketTimeoutException) {
-                            if (last) {
-                                dnsFailures.incrementAndGet()
-                                DialLog.failure(
-                                    "DNS",
-                                    java.io.IOException("timeout $serverName untuk query #$dnsNo"),
-                                )
-                                return@execute
-                            }
-                            if (detail) {
-                                DialLog.log(
-                                    "DNS",
-                                    "timeout $serverName untuk query #$dnsNo — coba ${servers[index + 1]}",
-                                )
-                            }
-                        } catch (e: java.io.IOException) {
-                            // Gagal kirim / nama tak dikenal: server
-                            // ini tidak bisa dipakai, coba berikutnya.
-                            if (last) {
-                                dnsFailures.incrementAndGet()
-                                DialLog.failure(
-                                    "DNS",
-                                    java.io.IOException(
-                                        "gagal $serverName untuk query #$dnsNo: ${e.message}",
-                                    ),
-                                )
-                                return@execute
-                            }
-                            if (detail) {
-                                DialLog.log(
-                                    "DNS",
-                                    "gagal $serverName untuk query #$dnsNo (${e.message}) — coba ${servers[index + 1]}",
-                                )
-                            }
-                        }
-                    }
-                    val bytes = respBytes ?: return@execute
-                    val pkt = TcpPacket.buildUdp(dstIp, srcIp, 53, srcPort, bytes)
-                    writePacket(pkt)
-                    if (detail) {
-                        // v1.0.4: dnsLogged hanya naik sekali per
-                        // query (di baris query di atas) — sebelumnya
-                        // naik dua kali, jadi batas "5 query pertama"
-                        // sebenarnya ~2–3 query.
-                        DialLog.log(
-                            "DNS",
-                            "jawab ${TcpPacket.ipToString(dstIp)} ${bytes.size}B ke " +
-                                "${TcpPacket.ipToString(srcIp)}:$srcPort (#$dnsNo)",
-                        )
-                    }
-                } finally {
-                    sock.close()
+                // v1.0.5 (DNS C): jawab lewat kebijakan relay
+                // (statis / FakeDNS / lokal / domestik / DoH / UDP).
+                // null = query dibuang (kegagalan sudah dihitung +
+                // dilog di bawah); bukan jawaban kosong.
+                val respBytes = answerDnsQuery(query, dnsNo, detail) ?: return@execute
+                val pkt = TcpPacket.buildUdp(dstIp, srcIp, 53, srcPort, respBytes)
+                writePacket(pkt)
+                if (detail) {
+                    // v1.0.4: dnsLogged hanya naik sekali per
+                    // query (di baris query di atas) — sebelumnya
+                    // naik dua kali, jadi batas "5 query pertama"
+                    // sebenarnya ~2–3 query.
+                    DialLog.log(
+                        "DNS",
+                        "jawab ${TcpPacket.ipToString(dstIp)} ${respBytes.size}B ke " +
+                            "${TcpPacket.ipToString(srcIp)}:$srcPort (#$dnsNo)",
+                    )
                 }
             } catch (e: Exception) {
                 dnsFailures.incrementAndGet()
@@ -1019,6 +959,228 @@ class TunForwarder(
             }
         }
     }
+
+    /**
+     * Jawab satu query DNS menurut [dnsPolicy] (v1.0.5, kelompok C).
+     * Mengembalikan byte jawaban, atau null bila query dibuang
+     * (kegagalan sudah dihitung + dilog pemanggil ini). Urutan rute
+     * ada di [DnsRelayPolicy.route]; yang tidak bisa diparse (EDNS /
+     * qtype aneh) atau yang jawaban lokalnya gagal diteruskan mentah
+     * ke upstream UDP seperti v1.0.4.
+     */
+    private fun answerDnsQuery(query: ByteArray, dnsNo: Long, detail: Boolean): ByteArray? {
+        val udpServers = listOf(dnsServer, dnsFallbackServer)
+        val parsed = DnsResolver.parseQuery(query)
+        if (parsed != null) {
+            when (val route = dnsPolicy.route(parsed.name, parsed.qtype)) {
+                is DnsRoute.Static -> {
+                    // Keluarga tidak cocok (mis. AAAA untuk IPv4
+                    // statis) -> buildResponse null -> upstream.
+                    DnsResolver.buildResponse(query, listOf(route.address))
+                        ?.let { return it }
+                }
+                DnsRoute.Fake -> {
+                    val fake = dnsPolicy.fakeDns
+                    if (fake != null) {
+                        val ip = runCatching { fake.allocate(parsed.name) }.getOrNull()
+                        if (ip != null) {
+                            DnsResolver.buildResponse(
+                                query, listOf(ip), FakeDns.DEFAULT_TTL_SECONDS,
+                            )?.let { return it }
+                        } else if (detail) {
+                            DialLog.log(
+                                "DNS",
+                                "pool FakeDNS habis untuk query #$dnsNo — coba $dnsServer",
+                            )
+                        }
+                    }
+                }
+                DnsRoute.Local -> {
+                    DnsResolver.buildResponse(query, localResolve(parsed.name, parsed.qtype))
+                        ?.let { return it }
+                    if (detail) {
+                        DialLog.log(
+                            "DNS",
+                            "lokal kosong untuk query #$dnsNo — coba $dnsServer",
+                        )
+                    }
+                }
+                DnsRoute.Domestic -> {
+                    return forwardUdp(
+                        query,
+                        listOf(dnsPolicy.domesticDnsServer, dnsServer),
+                        dnsNo,
+                        detail,
+                    )
+                }
+                DnsRoute.RemoteDoh -> {
+                    val doh = dnsPolicy.dohClient
+                    if (doh != null) {
+                        val addrs = runCatching {
+                            doh.query(parsed.name, parsed.qtype)
+                        }.getOrNull()
+                        DnsResolver.buildResponse(query, addrs ?: emptyList())
+                            ?.let { return it }
+                        if (detail) {
+                            DialLog.log(
+                                "DNS",
+                                "DoH gagal/kosong untuk query #$dnsNo — coba $dnsServer",
+                            )
+                        }
+                    }
+                }
+                DnsRoute.RemoteUdp -> Unit // lanjut ke UDP di bawah
+            }
+        }
+        return forwardUdp(query, udpServers, dnsNo, detail)
+    }
+
+    /**
+     * Resolve lokal (v1.0.5): [dnsPolicy.localResolve] bila
+     * di-inject (tes), bila tidak hook operator [DnsResolver.operatorResolve]
+     * (Network.getAllByName di jaringan fisik — lihat
+     * [DnsResolver.networkResolveAll]). Kosong bila tidak ada yang
+     * bisa dipakai — pemanggil fallback ke UDP upstream, bukan ke
+     * resolver sistem mentah (yang akan masuk TUN dan berputar di
+     * relay ini).
+     */
+    private fun localResolve(host: String, qtype: Int): List<InetAddress> {
+        dnsPolicy.localResolve?.let {
+            return runCatching { it(host, qtype) }.getOrElse { emptyList() }
+        }
+        val hook = DnsResolver.operatorResolve ?: return emptyList()
+        return runCatching { hook(host, DnsResolver.DEFAULT_TIMEOUT_MS) }
+            .getOrElse { emptyList() }
+    }
+
+    /**
+     * Teruskan query mentah ke server UDP, satu per satu (v1.0.4):
+     * primer dulu, lalu berikutnya saat timeout/gagal kirim. Baris
+     * log dipertahankan verbatim (tes TunForwarderDnsTest mengunci
+     * "timeout ... — coba ..." dan "timeout ... untuk query #N").
+     * Mengembalikan byte jawaban, atau null bila semua server gagal
+     * (sudah dihitung sebagai failure + dilog).
+     */
+    private fun forwardUdp(
+        query: ByteArray,
+        servers: List<String>,
+        dnsNo: Long,
+        detail: Boolean,
+    ): ByteArray? {
+        val distinct = servers.distinct()
+        var bypassLogged = false
+        for ((index, serverName) in distinct.withIndex()) {
+            val last = index == distinct.lastIndex
+            try {
+                return udpExchange(query, serverName, dnsTimeoutMs) {
+                    if (!bypassLogged) {
+                        bypassLogged = true
+                        if (detail) {
+                            DialLog.log(
+                                "PROTECT",
+                                "protect() gagal — relay DNS lanjut via disallow aplikasi",
+                            )
+                        }
+                    }
+                }
+            } catch (e: ProtectRefusedException) {
+                // Bila protect GAGAL, query JANGAN dikirim: tanpa
+                // protect query masuk lagi ke TUN, forwarder
+                // melihatnya sebagai query baru, dan begitu
+                // seterusnya — loop thread tak berujung. Sebelumnya
+                // return value protectUdp diabaikan. Drop diam-diam;
+                // aplikasi akan retry sendiri. v1.0.9: pengecualian
+                // bila aplikasi di-disallow dari VPN
+                // (TunnelState.appBypass) — query bypass di level
+                // routing dan tidak bisa masuk TUN (pola v2rayNG;
+                // di HP ini protect() mengembalikan false begitu
+                // TUN naik, dan drop di sini mematikan DNS semua
+                // aplikasi).
+                dnsFailures.incrementAndGet()
+                DialLog.log(
+                    "DNS",
+                    "GAGAL: protect() gagal tanpa disallow — query #$dnsNo dibuang",
+                )
+                return null
+            } catch (e: java.net.SocketTimeoutException) {
+                if (last) {
+                    dnsFailures.incrementAndGet()
+                    DialLog.failure(
+                        "DNS",
+                        java.io.IOException("timeout $serverName untuk query #$dnsNo"),
+                    )
+                    return null
+                }
+                if (detail) {
+                    DialLog.log(
+                        "DNS",
+                        "timeout $serverName untuk query #$dnsNo — coba ${distinct[index + 1]}",
+                    )
+                }
+            } catch (e: java.io.IOException) {
+                // Gagal kirim / nama tak dikenal: server
+                // ini tidak bisa dipakai, coba berikutnya.
+                if (last) {
+                    dnsFailures.incrementAndGet()
+                    DialLog.failure(
+                        "DNS",
+                        java.io.IOException(
+                            "gagal $serverName untuk query #$dnsNo: ${e.message}",
+                        ),
+                    )
+                    return null
+                }
+                if (detail) {
+                    DialLog.log(
+                        "DNS",
+                        "gagal $serverName untuk query #$dnsNo (${e.message}) — coba ${distinct[index + 1]}",
+                    )
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Satu pertukaran UDP ke satu server upstream. Bila
+     * [DnsRelayPolicy.dnsExchange] di-inject (tes), pakai itu —
+     * tanpa socket. Bila tidak, socket UDP ter-protect asli
+     * (perilaku v1.0.4): protect yang ditolak tanpa disallow
+     * melempar [ProtectRefusedException] (pemanggil membuang query);
+     * protect yang ditolak DENGAN disallow lanjut — query bypass di
+     * level routing (laporan sekali per query via [onProtectBypass]).
+     */
+    private fun udpExchange(
+        query: ByteArray,
+        server: String,
+        timeoutMs: Int,
+        onProtectBypass: () -> Unit,
+    ): ByteArray {
+        dnsPolicy.dnsExchange?.let {
+            return it.exchange(query, server, dnsPort, timeoutMs)
+        }
+        val sock = DatagramSocket()
+        try {
+            val protected = protectUdp(sock)
+            if (!protected && !TunnelState.appBypass) {
+                throw ProtectRefusedException()
+            }
+            if (!protected) onProtectBypass()
+            sock.soTimeout = timeoutMs
+            sock.send(DatagramPacket(query, query.size, InetAddress.getByName(server), dnsPort))
+            val buf = ByteArray(8192)
+            val resp = DatagramPacket(buf, buf.size)
+            sock.receive(resp)
+            return resp.data.copyOf(resp.length)
+        } finally {
+            sock.close()
+        }
+    }
+
+    /** Protect ditolak dan aplikasi tidak di-disallow (lihat [udpExchange]). */
+    private class ProtectRefusedException : java.io.IOException(
+        "protect() gagal — query DNS tidak bisa bypass VPN",
+    )
 
     private fun writePacket(pkt: ByteArray, len: Int = pkt.size) {
         // v1.0.18: no more synchronized(writeLock) + blocking
