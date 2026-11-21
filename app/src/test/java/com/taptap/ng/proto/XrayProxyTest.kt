@@ -299,6 +299,78 @@ class XrayProxyTest {
         assertEquals(null, peer.error, "server error: ${peer.error}")
     }
 
+    // v1.0.11 (selaras 18:57): template gaya SSH yang user gambarkan —
+    // GET bug [split] PATCH [host] — [split] DI ANTARA dua request.
+    // Rantai memperlakukannya sebagai satu blok: GET dikirim, respons
+    // dibaca, PATCH dikirim sesudah 101/2xx, dan respons PATCH-lah
+    // yang jadi status blok (bukan respons GET).
+
+    /** GET (Host: bug) [split] PATCH (Host: [host], WS upgrade). */
+    private val splitBetweenTemplate =
+        "GET / HTTP/1.1\r\nHost: bug.example\r\n\r\n" +
+            "[split]PATCH /vmess HTTP/1.1\r\nHost: h.example\r\nUpgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n\r\n"
+
+    @Test
+    fun `payload-only split between requests reads second response`() {
+        val peer = PipePeer { input, output ->
+            val get = readBlock(input)
+            assertTrue(get.contains("Host: bug.example"), "GET: $get")
+            assertEquals(0, input.available(), "PATCH terkirim sebelum respons GET")
+            writeResponse(output, "HTTP/1.1 200 OK")
+            val patch = readBlock(input)
+            assertTrue(patch.contains("PATCH /vmess HTTP/1.1"), "PATCH: $patch")
+            assertTrue(patch.contains("Host: h.example"), "PATCH: $patch")
+            assertTrue(patch.contains("Upgrade: websocket"), "PATCH: $patch")
+            output.write(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+                    .toByteArray(Charsets.UTF_8),
+            )
+            output.flush()
+        }
+        peer.start()
+        try {
+            val result = PayloadOnlyProxy.sendPayload(peer.input, peer.output, splitBetweenTemplate)
+            // Satu blok → satu status: jawaban PATCH (101), bukan
+            // jawaban GET (200) — validasi memakai yang terakhir.
+            assertEquals(listOf("HTTP/1.1 101 Switching Protocols"), result.statuses)
+            assertEquals("HTTP/1.1 101 Switching Protocols", result.lastStatus)
+            assertTrue(result.wasWsUpgrade)
+        } finally {
+            peer.join()
+        }
+        assertEquals(null, peer.error, "server error: ${peer.error}")
+    }
+
+    @Test
+    fun `payload-only split between requests does not send second on 301`() {
+        val peer = PipePeer { input, output ->
+            val get = readBlock(input)
+            assertTrue(get.contains("Host: bug.example"), "GET: $get")
+            writeResponse(output, "HTTP/1.1 301 Moved Permanently")
+            Thread.sleep(300)
+            assertEquals(0, input.available(), "PATCH terkirim setelah 301")
+        }
+        peer.start()
+        try {
+            val e = assertThrows(IOException::class.java) {
+                PayloadOnlyProxy.sendPayload(peer.input, peer.output, splitBetweenTemplate)
+            }
+            assertTrue(e.message!!.contains("upgrade websocket ditolak"), "pesan: ${e.message}")
+        } finally {
+            peer.join()
+        }
+        assertEquals(null, peer.error, "server error: ${peer.error}")
+    }
+
+    @Test
+    fun `isHttpRequest accepts requests and rejects junk`() {
+        assertTrue(PayloadOnlyProxy.isHttpRequest("PATCH /vmess HTTP/1.1\r\nHost: h\r\n\r\n"))
+        assertTrue(PayloadOnlyProxy.isHttpRequest("GET / HTTP/1.1\r\nHost: h\r\n\r\n"))
+        assertFalse(PayloadOnlyProxy.isHttpRequest("HTTP/ 69\r\n\r\n"))
+        assertFalse(PayloadOnlyProxy.isHttpRequest("PATCH /vmess HTTP/1.1\r\nHost: h\r\n"))
+    }
+
     @Test
     fun `payload-only drains body and leaves trailing bytes unread`() {
         val template = "GET /vmess HTTP/1.1\r\nHost: h.example\r\nUpgrade: websocket\r\n\r\n"

@@ -26,7 +26,11 @@ import java.io.OutputStream
  *   is read, and the remaining segments are written only after a
  *   101/2xx response. Sending them before the 101 made the proxy
  *   wait for a valid HTTP request and never answer (TB lesson,
- *   v1.0.14).
+ *   v1.0.14). When the LAST written segment is itself a complete
+ *   HTTP request (the user's SSH-style template: GET bug [split]
+ *   PATCH [host]), ONE more response is read for it, and THAT is
+ *   the block's status — trailing junk ("HTTP/ 69") is not a
+ *   request, so no response is read for it (SSH behaviour).
  * - A block that answers 101/2xx with blocks still queued ends
  *   the chain early (the connection is upgraded; the rest would
  *   pollute the TLS stream).
@@ -75,7 +79,6 @@ object PayloadOnlyProxy {
             val status = sendRequest(output, input, req)
             if (status.isNotEmpty()) {
                 statuses += status
-                DialLog.log("PROXY", "Payload saja: payload respons: ${status.take(80)}")
                 val code = SshPayload.statusCode(status)
                 if (i < requests.size - 1 && (code == "101" || code.startsWith("2"))) break
             }
@@ -128,6 +131,10 @@ object PayloadOnlyProxy {
      * [SshPayload.sendRequest]). Returns the response status line;
      * "" when the block had no HTTP request (it starts with
      * [split] — its segments are sent as data, no response read).
+     * When the last written segment is itself a complete HTTP
+     * request (GET bug [split] PATCH [host]), one more response
+     * is read for it and THAT is the returned status — the block's
+     * status is the answer to its last request, not its first.
      */
     internal fun sendRequest(
         output: OutputStream,
@@ -147,7 +154,7 @@ object PayloadOnlyProxy {
         }
         output.write(segs[0].toByteArray(Charsets.UTF_8))
         output.flush()
-        val status = readHttpResponse(input)
+        var status = readHttpResponse(input)
         val code = SshPayload.statusCode(status)
         if (segs.size > 1 && (code == "101" || code.startsWith("2"))) {
             for (s in segs.drop(1)) {
@@ -156,8 +163,30 @@ object PayloadOnlyProxy {
             }
             output.flush()
             DialLog.log("PROXY", "Payload saja: mengirim ${segs.size - 1} segmen [split] pasca-101")
+            // The last segment is a request of its own (not junk):
+            // read its answer too, or it stays in the stream and
+            // the TLS handshake after this chain reads it as a
+            // ServerHello. Its status replaces the first one.
+            if (isHttpRequest(segs.last())) {
+                status = readHttpResponse(input)
+            }
         }
         return status
+    }
+
+    /**
+     * True when [segment] is a complete HTTP request (a method
+     * line + headers + blank line) — as opposed to trailing junk
+     * like "HTTP/ 69", which no server answers. Used to decide
+     * whether a response must be read after a [split] segment.
+     */
+    internal fun isHttpRequest(segment: String): Boolean {
+        if (!segment.endsWith("\r\n\r\n")) return false
+        val method = segment.substringBefore("\r\n").substringBefore(" ")
+        return method in setOf(
+            "GET", "POST", "PATCH", "PUT", "DELETE",
+            "HEAD", "OPTIONS", "CONNECT", "TRACE",
+        )
     }
 
     /**
@@ -166,7 +195,9 @@ object PayloadOnlyProxy {
      * read — and the TLS handshake after the chain — starts clean.
      * Throws when the answer is not HTTP, when the stream ends, or
      * when the header is too long. Reads byte-by-byte on the raw
-     * stream: nothing past the response is ever swallowed.
+     * stream: nothing past the response is ever swallowed. Every
+     * response read is logged (the chain reads one per request,
+     * so the phone log shows each answer in order).
      */
     internal fun readHttpResponse(input: InputStream): String {
         val first = readLine(input)
@@ -174,6 +205,7 @@ object PayloadOnlyProxy {
         if (!first.startsWith("HTTP/")) {
             throw IOException("Payload saja: respons payload bukan HTTP: ${first.take(60)}")
         }
+        DialLog.log("PROXY", "Payload saja: payload respons: ${first.take(80)}")
         var contentLength = -1
         var chunked = false
         for (i in 0 until MAX_HEADER_LINES) {
