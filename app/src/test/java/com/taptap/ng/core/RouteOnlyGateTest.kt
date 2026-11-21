@@ -46,7 +46,11 @@ class RouteOnlyGateTest {
         )
     }
 
-    /** Proxy that always succeeds: input blocks forever, output discarded. */
+    /** Proxy that always succeeds: input blocks forever (a CONNECTED
+     * pipe whose sink never writes — an unconnected PipedInputStream
+     * throws on read at once, which kills the relay thread and
+     * closes the session before the test's ACK/data arrive),
+     * output is discarded. */
     private class OkProxy : ProxyClient {
         override fun dial(
             targetHost: String,
@@ -54,12 +58,14 @@ class RouteOnlyGateTest {
             probeBody: ByteArray?,
             stats: SpeedStats?,
         ): ProxyStream {
-            val input = PipedInputStream()
+            val sink = PipedOutputStream()
+            val input = PipedInputStream(sink)
             return object : ProxyStream {
                 override val input: InputStream = input
                 override val output: OutputStream = ByteArrayOutputStream()
                 override fun close() {
                     runCatching { input.close() }
+                    runCatching { sink.close() }
                 }
             }
         }
@@ -124,8 +130,10 @@ class RouteOnlyGateTest {
             val flags = firstTcpFlags(drained.toByteArray())
             assertTrue(flags and TcpPacket.FLAG_RST != 0, "expected RST, got flags=$flags")
             assertTrue(
-                DialLog.lines().any { it.contains("ROUTE-ONLY") },
-                "expected a ROUTE-ONLY log line",
+                // DialLog.log does NOT render the stage/tag (v1.0.3
+                // XVEON parity) — assert on the message text.
+                DialLog.lines().any { it.contains("tujuan tidak dikenal") },
+                "expected a route-only refusal log line",
             )
         } finally {
             fwd.stop()
