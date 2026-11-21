@@ -6,11 +6,34 @@ import com.taptap.ng.data.ProfileItem
  * Human-readable label for the entry being dialled: remark plus
  * address, so two entries that share a remark ("Zoom onering" on
  * both leaseweb4 and support.zoom.us) are never confused in the
- * status bar. A blank remark falls back to the bare address.
+ * "Connecting:" text or a failure message. A blank remark falls
+ * back to the bare address.
  */
 fun dialLabel(item: ProfileItem): String {
     val remarks = item.displayName()
     return if (remarks == item.address) item.address else "$remarks (${item.address})"
+}
+
+/**
+ * Short label for the "Connected:" status bar (v1.0.7): the remark
+ * only, without the " (address)" suffix [dialLabel] appends. The
+ * full label stays in [VpnConnection.runningEntry] — the
+ * "Connecting:" text, failure messages and DialLog keep the
+ * address, so two entries sharing a remark are still told apart
+ * there. Only the Connected status drops it (user order
+ * 2026-11-21: "Connected: iflix cloudfront", not "... (front.wetv.vip)").
+ *
+ * [dialLabel] appends the address as the FINAL parenthesised group,
+ * so only the last group is stripped — a remark like "Taptap WS
+ * (CDN) TLS" keeps its own parentheses, and a bare address (no
+ * remark) is returned unchanged.
+ */
+fun connectedLabel(label: String): String {
+    return if (label.endsWith(")") && label.contains(" (")) {
+        label.substringBeforeLast(" (")
+    } else {
+        label
+    }
 }
 
 /**
@@ -79,7 +102,9 @@ class VpnConnection {
     fun reportConnected(label: String) {
         state = State.RUNNING
         runningEntry = label
-        status = "Connected: $label"
+        // v1.0.7: the status bar shows the remark only, without the
+        // " (address)" suffix — "Connected: iflix cloudfront".
+        status = "Connected: ${connectedLabel(label)}"
     }
 
     /**
@@ -115,7 +140,8 @@ class VpnConnection {
         val entry = runningEntry
         if (msg == "Connected") {
             state = State.RUNNING
-            if (entry != null) status = "Connected: $entry"
+            // v1.0.7: remark only, like reportConnected.
+            if (entry != null) status = "Connected: ${connectedLabel(entry)}"
         } else if (state != State.RUNNING) {
             status = if (entry != null) "$msg: $entry" else msg
         }

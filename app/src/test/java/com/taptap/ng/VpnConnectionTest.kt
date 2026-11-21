@@ -3,6 +3,7 @@ package com.taptap.ng
 import com.taptap.ng.data.ConfigType
 import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.service.VpnConnection
+import com.taptap.ng.service.connectedLabel
 import com.taptap.ng.service.dialLabel
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -69,7 +70,8 @@ class VpnConnectionTest {
         assertTrue(conn.status.contains("Zoom onering"), conn.status)
         conn.reportDialStatus("Connected")
         assertEquals(VpnConnection.State.RUNNING, conn.state)
-        assertEquals("Connected: $entryA", conn.status)
+        // v1.0.7: the Connected status shows the remark only.
+        assertEquals("Connected: Zoom onering", conn.status)
     }
 
     @Test
@@ -82,13 +84,34 @@ class VpnConnectionTest {
         val conn = VpnConnection()
         conn.requestStart(entryA)
         conn.reportConnected(entryA)
-        assertEquals("Connected: $entryA", conn.status)
+        // v1.0.7: the Connected status shows the remark only.
+        assertEquals("Connected: Zoom onering", conn.status)
         conn.reportDialStatus("Konek gagal (WS gagal: Read timed out)")
-        assertEquals("Connected: $entryA", conn.status)
+        assertEquals("Connected: Zoom onering", conn.status)
         assertEquals(VpnConnection.State.RUNNING, conn.state)
         // A later success keeps it.
         conn.reportDialStatus("Connected")
-        assertEquals("Connected: $entryA", conn.status)
+        assertEquals("Connected: Zoom onering", conn.status)
+    }
+
+    @Test
+    fun `connected label drops the address suffix but keeps the remark`() {
+        // v1.0.7 (user order 2026-11-21): "Connected: iflix
+        // cloudfront", not "... (front.wetv.vip)".
+        assertEquals(
+            "iflix cloudfront",
+            connectedLabel("iflix cloudfront (front.wetv.vip)"),
+        )
+        // Only the LAST parenthesised group is the address — a
+        // remark's own parentheses survive.
+        assertEquals(
+            "Taptap WS (CDN) TLS",
+            connectedLabel("Taptap WS (CDN) TLS (104.17.3.81)"),
+        )
+        // No remark: the bare address is shown unchanged.
+        assertEquals("104.17.3.81", connectedLabel("104.17.3.81"))
+        // No suffix at all: unchanged.
+        assertEquals("Zoom onering", connectedLabel("Zoom onering"))
     }
 
     @Test

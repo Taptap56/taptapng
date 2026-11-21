@@ -13,6 +13,7 @@ import com.taptap.ng.core.proto.ProxyClientFactory
 import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.data.ProfileStore
 import com.taptap.ng.data.SettingsStore
+import com.taptap.ng.service.TaptapVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -57,6 +58,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _statusText = MutableStateFlow("")
     val statusText: StateFlow<String> = _statusText.asStateFlow()
+
+    /**
+     * Status-bar text state machine (v1.0.7). The ViewModel mirrors
+     * it into [_statusText]; see [StatusBarText].
+     */
+    private val statusBar = StatusBarText()
 
     /**
      * One-shot "Cek IP" result (v1.0.5, group A): the public IP
@@ -247,64 +254,79 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun testAll(realPing: Boolean = false) {
         val items = store.profiles.toList()
         if (items.isEmpty()) return
-        _statusText.value = "Testing…"
+        // v1.0.7: the status bar shows "ping..." while the test runs,
+        // then the connection status is restored (the row delay
+        // labels already carry the results).
+        statusBar.beginPing()
+        _statusText.value = statusBar.text
         viewModelScope.launch(Dispatchers.IO) {
-            if (realPing) {
-                // v1.0.13, fix B: real ping = full round-trip
-                // through the proxy (HTTP GET to delayTestUrl).
-                // Run with the user's realPingConcurrency
-                // (default 16, clamp 1..32). v1.0.30: SSH entries
-                // ride the proxy now (SshProxyClient), so they take
-                // the same real-ping path — no TCP-only branch
-                // anymore. A proxy dial that FAILS is a real failure
-                // — its stage is shown, never hidden behind a TCP
-                // number (the TCP fallback applies only when the
-                // real ping cannot run at all).
-                val concurrency =
-                    settings.realPingConcurrency.toIntOrNull()?.coerceIn(1, 32) ?: 16
-                val semaphore = Semaphore(concurrency)
-                val results = java.util.concurrent.ConcurrentHashMap<String, Long>()
-                val stages = java.util.concurrent.ConcurrentHashMap<String, String>()
-                val kinds = java.util.concurrent.ConcurrentHashMap<String, String>()
-                val jobs = items.map { item ->
-                    async {
-                        semaphore.withPermit {
-                            val r = ServerTester.testRealPingThroughProxy(
-                                item, settings.delayTestUrl,
-                                // v1.0.5 (kelompok D): tes delay memakai
-                                // jalur yang sama dengan relay — mux ON
-                                // berarti delay diukur lewat mux.
-                                clientFactory = {
-                                    ProxyClientFactory.create(
-                                        it, MuxConfig.fromSettings(settings),
-                                    )
-                                },
-                            )
-                            if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
-                                val t = ServerTester.testTcpDetailed(item.address, item.port)
-                                results[item.guid] = t.ms
-                                kinds[item.guid] = DELAY_KIND_TCP
-                                if (t.failureStage != null) stages[item.guid] = t.failureStage
-                            } else {
-                                results[item.guid] = r.ms
-                                kinds[item.guid] = DELAY_KIND_REAL
-                                if (r.failureStage != null) stages[item.guid] = r.failureStage
-                            }
+            try {
+                runTestAll(items, realPing)
+            } finally {
+                statusBar.endPing(TaptapVpnService.statusMessage)
+                _statusText.value = statusBar.text
+            }
+        }
+    }
+
+    /** The delay-test work of [testAll] (extracted so the
+     *  try/finally around it stays readable). Runs on
+     *  Dispatchers.IO. */
+    private suspend fun runTestAll(items: List<ProfileItem>, realPing: Boolean) {
+        if (realPing) {
+            // v1.0.13, fix B: real ping = full round-trip
+            // through the proxy (HTTP GET to delayTestUrl).
+            // Run with the user's realPingConcurrency
+            // (default 16, clamp 1..32). v1.0.30: SSH entries
+            // ride the proxy now (SshProxyClient), so they take
+            // the same real-ping path — no TCP-only branch
+            // anymore. A proxy dial that FAILS is a real failure
+            // — its stage is shown, never hidden behind a TCP
+            // number (the TCP fallback applies only when the
+            // real ping cannot run at all).
+            val concurrency =
+                settings.realPingConcurrency.toIntOrNull()?.coerceIn(1, 32) ?: 16
+            val semaphore = Semaphore(concurrency)
+            val results = java.util.concurrent.ConcurrentHashMap<String, Long>()
+            val stages = java.util.concurrent.ConcurrentHashMap<String, String>()
+            val kinds = java.util.concurrent.ConcurrentHashMap<String, String>()
+            val jobs = items.map { item ->
+                async {
+                    semaphore.withPermit {
+                        val r = ServerTester.testRealPingThroughProxy(
+                            item, settings.delayTestUrl,
+                            // v1.0.5 (kelompok D): tes delay memakai
+                            // jalur yang sama dengan relay — mux ON
+                            // berarti delay diukur lewat mux.
+                            clientFactory = {
+                                ProxyClientFactory.create(
+                                    it, MuxConfig.fromSettings(settings),
+                                )
+                            },
+                        )
+                        if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
+                            val t = ServerTester.testTcpDetailed(item.address, item.port)
+                            results[item.guid] = t.ms
+                            kinds[item.guid] = DELAY_KIND_TCP
+                            if (t.failureStage != null) stages[item.guid] = t.failureStage
+                        } else {
+                            results[item.guid] = r.ms
+                            kinds[item.guid] = DELAY_KIND_REAL
+                            if (r.failureStage != null) stages[item.guid] = r.failureStage
                         }
                     }
                 }
-                jobs.awaitAll()
-                val okGuids = results.filterValues { it >= 0 }.keys
-                _delays.value = _delays.value + results
-                _delayStages.value = (_delayStages.value + stages) - okGuids
-                _delayKinds.value = _delayKinds.value + kinds
-            } else {
-                for (item in items) {
-                    val r = ServerTester.testTcpDetailed(item.address, item.port)
-                    applyDelayResult(item, r.ms, r.failureStage, DELAY_KIND_TCP)
-                }
             }
-            _statusText.value = "Tested ${items.size} server(s)"
+            jobs.awaitAll()
+            val okGuids = results.filterValues { it >= 0 }.keys
+            _delays.value = _delays.value + results
+            _delayStages.value = (_delayStages.value + stages) - okGuids
+            _delayKinds.value = _delayKinds.value + kinds
+        } else {
+            for (item in items) {
+                val r = ServerTester.testTcpDetailed(item.address, item.port)
+                applyDelayResult(item, r.ms, r.failureStage, DELAY_KIND_TCP)
+            }
         }
     }
 
@@ -328,40 +350,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * delay-test failure looked like the VPN itself had failed
      * (taptapng-6.txt 04:18), and the 2 s service poll then fought
      * it — the bar flickered between the two.
+     * v1.0.7: while the test runs the bar shows "ping..." (the
+     * failure stage still goes only to the row label), then the
+     * connection status is restored.
      */
     fun testCurrent() {
         val item = selectedItem() ?: run {
             _statusText.value = "No server selected"
             return
         }
+        statusBar.beginPing()
+        _statusText.value = statusBar.text
         viewModelScope.launch(Dispatchers.IO) {
-            // v1.0.13, fix B + v1.0.30: the selected server is tested
-            // with the real ping (full round-trip through the proxy);
-            // SSH entries take the same path now (SshProxyClient) —
-            // the old SSH exec round-trip would fail on a payload
-            // entry (it dialled direct, without the payload chain).
-            // The TCP connect is only a fallback when the real ping
-            // cannot run at all.
-            // v1.0.5 (kelompok D): tes delay memakai jalur yang sama
-            // dengan relay — mux ON berarti delay diukur lewat mux.
-            val r = ServerTester.testRealPingThroughProxy(
-                item, settings.delayTestUrl,
-                clientFactory = {
-                    ProxyClientFactory.create(it, MuxConfig.fromSettings(settings))
-                },
-            )
-            if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
-                val t = ServerTester.testTcpDetailed(item.address, item.port)
-                applyDelayResult(item, t.ms, t.failureStage, DELAY_KIND_TCP)
-            } else {
-                applyDelayResult(item, r.ms, r.failureStage, DELAY_KIND_REAL)
+            try {
+                runTestCurrent(item)
+            } finally {
+                statusBar.endPing(TaptapVpnService.statusMessage)
+                _statusText.value = statusBar.text
             }
+        }
+    }
+
+    /** The delay-test work of [testCurrent]. Runs on Dispatchers.IO. */
+    private suspend fun runTestCurrent(item: ProfileItem) {
+        // v1.0.13, fix B + v1.0.30: the selected server is tested
+        // with the real ping (full round-trip through the proxy);
+        // SSH entries take the same path now (SshProxyClient) —
+        // the old SSH exec round-trip would fail on a payload
+        // entry (it dialled direct, without the payload chain).
+        // The TCP connect is only a fallback when the real ping
+        // cannot run at all.
+        // v1.0.5 (kelompok D): tes delay memakai jalur yang sama
+        // dengan relay — mux ON berarti delay diukur lewat mux.
+        val r = ServerTester.testRealPingThroughProxy(
+            item, settings.delayTestUrl,
+            clientFactory = {
+                ProxyClientFactory.create(it, MuxConfig.fromSettings(settings))
+            },
+        )
+        if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
+            val t = ServerTester.testTcpDetailed(item.address, item.port)
+            applyDelayResult(item, t.ms, t.failureStage, DELAY_KIND_TCP)
+        } else {
+            applyDelayResult(item, r.ms, r.failureStage, DELAY_KIND_REAL)
         }
     }
 
     fun setRunning(running: Boolean, status: String = "") {
         _isRunning.value = running
-        _statusText.value = status
+        // v1.0.7: while a delay test runs, the bar shows "ping..." —
+        // a service status sync (2 s poll / resume) must not
+        // overwrite it mid-test; it is restored when the test ends.
+        statusBar.syncServiceStatus(status)
+        _statusText.value = statusBar.text
     }
 
     /**
@@ -397,6 +438,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshVisible()
     }
 }
+
+/**
+ * Status-bar text state (v1.0.7). Pure — the ViewModel mirrors it
+ * into [MainViewModel.statusText]. Rules:
+ * - while a delay test runs, the bar shows "ping..." and a service
+ *   status sync (the 2 s poll) must not overwrite it mid-test;
+ * - when the last running test ends, the connection status is
+ *   restored verbatim (the row delay labels still carry the test
+ *   results, as before).
+ * A counter, not a flag, so two overlapping tests cannot restore
+ * the status while one is still running. Unit-testable without an
+ * Application (there is no Robolectric in this module).
+ */
+class StatusBarText {
+    private var pingCount = 0
+
+    /** True while at least one delay test is running. */
+    val isTesting: Boolean get() = pingCount > 0
+
+    /** Current status-bar text. */
+    var text: String = ""
+        private set
+
+    /** A delay test started: show "ping..." until it ends. */
+    fun beginPing() {
+        pingCount++
+        text = PING_STATUS_TEXT
+    }
+
+    /**
+     * A delay test ended: restore the connection status — but only
+     * when no other test is still running.
+     */
+    fun endPing(serviceStatus: String) {
+        if (pingCount > 0) pingCount--
+        if (pingCount == 0) text = serviceStatus
+    }
+
+    /** Service status sync (2 s poll / resume): ignored mid-test. */
+    fun syncServiceStatus(status: String) {
+        if (pingCount == 0) text = status
+    }
+}
+
+/** Status-bar text shown while a delay test runs (v1.0.7). */
+const val PING_STATUS_TEXT = "ping..."
 
 /**
  * Whether tapping [newGuid] must restart the running VPN with the

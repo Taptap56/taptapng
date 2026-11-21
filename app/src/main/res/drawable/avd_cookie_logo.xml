@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Logo kue TB/TC bergerak (v1.0.28): badan bernapas 3 dtk,
-     6 chip berlari + melompat 6 dtk dengan stagger seperti di
-     WebUI TB/TC. Dijalankan MainActivity saat drawer dibuka,
+<!-- Logo kue TB/TC bergerak (v1.0.7): badan bernapas 6 dtk,
+     6 chip berlari + melompat 12 dtk dengan stagger seperti di
+     WebUI TB/TC (pacing 2x dari v1.0.33 — gerakan SAMA, hanya lebih
+     lambat; total ~10-12 dtk). Dijalankan MainActivity saat drawer dibuka,
      dihentikan saat drawer ditutup (persis CSS TB/TC yang hanya
      menganimasikan saat drawer terbuka). -->
 <animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
