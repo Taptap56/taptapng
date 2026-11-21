@@ -491,7 +491,15 @@ class TaptapVpnService : VpnService() {
                 tunIn = tunIn,
                 tunOut = tunOut,
                 proxy = client,
-                dnsServer = dns,
+                // v1.0.3 (XVEON parity): in-tunnel DNS queries
+                // (UDP/53 intercepted from apps) are forwarded to
+                // the tunnel's PRIMARY DNS (1.1.1.1) — the same
+                // server Android was told to use via addDnsServer.
+                // (v1.0.2 used Settings Remote DNS here; that value
+                // no longer drives the tunnel.) The proxy-host
+                // resolver (DnsResolver, 8.8.8.8) is a different
+                // path and is unchanged.
+                dnsServer = PRIMARY_DNS,
                 protectUdp = { socket -> protect(socket) },
                 onStatus = { msg -> connection.reportDialStatus(msg) },
                 tunMtu = mtu,
