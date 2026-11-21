@@ -43,12 +43,23 @@ import javax.crypto.AEADBadTagException
  * - Response body key/IV = SHA256(request body key/IV)[:16].
  *
  * Transport: TCP or WS, optionally under TLS (TCP → TLS → WS).
- * Only TCP command (0x01) is supported; no Mux, no UDP.
+ * Only TCP command (0x01) is supported; no UDP. Mux (v1.0.5,
+ * kelompok D): bila [muxConfig] nyala, beberapa dial berbagi satu
+ * koneksi fisik lewat [MuxConnection] (command Mux 0x03, target
+ * v1.mux.cool:666 — lihat [Mux]); mux mati = jalur di bawah ini
+ * tidak berubah sama sekali.
  */
 class VmessClient(
     private val item: ProfileItem,
     /** Test seam: a pool with a fake DNS transport (default: a real pool). */
     slowDnsPool: SlowDnsSessionPool? = null,
+    /** Mux config (default OFF — perilaku lama). Lihat [MuxConfig]. */
+    private val muxConfig: MuxConfig = MuxConfig.DISABLED,
+    /**
+     * Test seam: transport ladder untuk jalur mux (pipa in-memory
+     * di tes; null = [SlowDnsTransport.open] yang asli).
+     */
+    private val muxLadderOpener: ((ProfileItem, SpeedStats?) -> LadderStream)? = null,
 ) : ProxyClient {
 
     // v1.0.6: every stream this client opened, so close() can close
@@ -62,12 +73,27 @@ class VmessClient(
     // entry is not a SlowDNS entry.
     private val slowDns = slowDnsPool ?: SlowDnsSessionPool(item)
 
+    // v1.0.5 (kelompok D): pool koneksi mux — satu koneksi fisik
+    // untuk semua dial selama mux nyala. Null = mux mati (atau
+    // entry SlowDNS — mux di atas ladder DNSTT tidak didukung,
+    // fail-safe OFF).
+    private val muxPool: MuxConnectionPool? =
+        if (muxConfig.enabled && !item.dnsttEnabled) {
+            MuxConnectionPool(muxConfig.concurrency, ::openMuxConnection)
+        } else {
+            null
+        }
+
     override fun dial(
         targetHost: String,
         targetPort: Int,
         probeBody: ByteArray?,
         stats: SpeedStats?,
     ): ProxyStream {
+        // v1.0.5 (kelompok D): mux ON = dial lewat pool koneksi
+        // mux; mux OFF = jalur lama di bawah ini, tanpa perubahan.
+        val pool = muxPool
+        if (pool != null) return dialMux(pool, targetHost, targetPort, probeBody, stats)
         // M3: the ladder is a socket (TCP → TLS → WS) for a plain
         // entry, or a DNSTT smux stream (→ TLS → WS) for a SlowDNS
         // entry. Everything below is identical for both.
@@ -183,8 +209,126 @@ class VmessClient(
         }
     }
 
+    /**
+     * v1.0.5 (kelompok D): dial lewat mux. Satu session logis di
+     * atas koneksi fisik yang sudah ada (atau baru bila pool penuh).
+     * Probe: tulis probe body sebagai data frame pertama, lalu
+     * tunggu response header dibaca thread pembaca mux (gagal
+     * cepat bila UUID salah — hook lazy yang sama seperti jalur
+     * lama, hanya saja yang membaca adalah thread mux). Relay:
+     * kembali seketika; header dibaca lazy di thread pembaca
+     * sesudah data pertama mengalir (v1.0.12).
+     */
+    private fun dialMux(
+        pool: MuxConnectionPool,
+        targetHost: String,
+        targetPort: Int,
+        probeBody: ByteArray?,
+        stats: SpeedStats?,
+    ): ProxyStream {
+        val (conn, session) = pool.openSession(targetHost, targetPort, stats)
+        var headerFailed = false
+        try {
+            if (probeBody != null) {
+                session.output.write(probeBody)
+                session.output.flush()
+                DialLog.log("VMess", "probe body ${probeBody.size}B")
+                // Fail fast: header harus sudah dibaca thread mux.
+                // Hook lazy-nya sudah mencatat "Verifying ..." /
+                // "Xray VMess handshake & transport ready!" — jangan
+                // log ulang di sini.
+                val headerError = conn.awaitHeader(Transport.HANDSHAKE_TIMEOUT_MS.toLong())
+                if (headerError != null) {
+                    headerFailed = true
+                    throw headerError
+                }
+                return TrackedProxyStream(
+                    StreamProxyStream(session.input, session.output) { session.close() },
+                    openStreams,
+                )
+            }
+            // Relay: bukti body pertama seperti jalur lama — tapi
+            // lewat wrapper di output session, bukan di transport.
+            val loggedOut = FirstWriteLoggingOutputStream(session.output) { n ->
+                DialLog.log("VMess", "body ${n}B untuk $targetHost:$targetPort")
+            }
+            return TrackedProxyStream(
+                StreamProxyStream(session.input, loggedOut) { session.close() },
+                openStreams,
+            )
+        } catch (e: Exception) {
+            runCatching { session.close() }
+            // Koneksi yang header-nya gagal tidak akan pulih —
+            // buang supaya dial berikutnya membuat yang baru.
+            if (headerFailed) runCatching { conn.close() }
+            val failure = Transport.preferWatchdogFailure(e)
+            DialLog.failure("VMess", failure)
+            throw failure
+        }
+    }
+
+    /**
+     * v1.0.5 (kelompok D): buka satu koneksi fisik mux — ladder
+     * transport + header VMess command Mux (target v1.mux.cool:666)
+     * + [MuxConnection] di atas body stream. Response header dibaca
+     * LAZY oleh thread pembaca mux (hook yang sama seperti dial
+     * relay lama): server xray-core baru mem-flush header sesudah
+     * data target pertama mengalir (transferResponse), jadi baca
+     * eager di sini akan deadlock seperti v1.0.11.
+     */
+    private fun openMuxConnection(stats: SpeedStats?): MuxConnection {
+        val opener = muxLadderOpener
+            ?: { it: ProfileItem, s: SpeedStats? -> SlowDnsTransport.open(it, slowDns, s) }
+        val transport = opener(item, stats)
+        try {
+            val session = VmessCrypto.newSession(item, Mux.TARGET_HOST, Mux.TARGET_PORT, VmessCrypto.CMD_MUX)
+            transport.output.write(session.requestBytes)
+            transport.output.flush()
+            val bodyOut = VmessBodyOutputStream(transport.output, session, stats = stats)
+            val bodyIn = VmessBodyInputStream(transport.input, session, stats = stats)
+            val headerResult = MuxHeaderResult()
+            val lazyIn = LazyHeaderInputStream(bodyIn) {
+                try {
+                    Transport.noteStage("VMess")
+                    DialLog.log("VMess", "Verifying Xray VMess authentication & protocol stream...")
+                    VmessCrypto.readResponseHeader(transport.input, session)
+                    transport.clearHandshakeTimeout()
+                    DialLog.log("VMess", "Xray VMess handshake & transport ready!")
+                    headerResult.complete(null)
+                } catch (e: java.net.SocketTimeoutException) {
+                    val failure = Transport.preferWatchdogFailure(
+                        java.net.SocketTimeoutException("VMess gagal: ${e.message}"),
+                    )
+                    DialLog.failure("VMess", failure)
+                    headerResult.complete(failure)
+                    throw failure
+                } catch (e: Exception) {
+                    val failure = Transport.preferWatchdogFailure(e)
+                    DialLog.failure("VMess", failure)
+                    headerResult.complete(failure)
+                    throw failure
+                }
+            }
+            DialLog.log("Mux", "mux connection dibuka (max ${muxConfig.concurrency} stream)")
+            return MuxConnection(
+                lazyIn, bodyOut,
+                onClose = { transport.close() },
+                maxConcurrency = muxConfig.concurrency,
+                headerResult = headerResult,
+            )
+        } catch (e: Exception) {
+            transport.close()
+            val failure = Transport.preferWatchdogFailure(e)
+            DialLog.failure("VMess", failure)
+            throw failure
+        }
+    }
+
     override fun close() {
         openStreams.toList().forEach { runCatching { it.close() } }
+        // v1.0.5 (kelompok D): tutup semua koneksi mux (dan
+        // session-sessionnya) supaya thread pembaca berhenti.
+        runCatching { muxPool?.close() }
         // M3: tear the DNSTT session down too (stops the KCP/DNS
         // loops; a leaked session would keep polling the resolver).
         runCatching { slowDns.close() }
@@ -221,6 +365,13 @@ object VmessCrypto {
 
     const val VERSION: Byte = 0x01
     const val CMD_TCP: Byte = 0x01
+    /**
+     * v1.0.5 (kelompok D): command Mux (xray-core
+     * common/protocol RequestCommandMux = 0x03). Header mux memakai
+     * target v1.mux.cool:666 ([Mux.TARGET_HOST]/[Mux.TARGET_PORT]);
+     * tiap session logis membawa targetnya sendiri di frame New.
+     */
+    const val CMD_MUX: Byte = 0x03
     /**
      * Max plaintext per body chunk (v1.0.15: 16 KiB, was 8 KiB).
      * The xray-core server's ChunkStreamReader reads whatever
@@ -277,6 +428,8 @@ object VmessCrypto {
         security: VmessSecurity,
         targetHost: String,
         targetPort: Int,
+        /** v1.0.5 (kelompok D): command — [CMD_TCP] default, [CMD_MUX] untuk mux. */
+        command: Byte = CMD_TCP,
     ): ByteArray {
         require(bodyKey.size == 16 && bodyIV.size == 16) { "Body key/IV VMess harus 16 byte" }
         val option = if (security == VmessSecurity.NONE) 0 else OPTION_AEAD
@@ -291,7 +444,7 @@ object VmessCrypto {
         add(option.toByte())
         add((((paddingLen shl 4) or security.nibble) and 0xFF).toByte())
         add(0) // reserved
-        add(CMD_TCP)
+        add(command)
         addAll(AddrCodec.encodeVmessTarget(targetHost, targetPort))
         if (paddingLen > 0) addAll(Crypto.randomBytes(paddingLen))
         val bytes = out.toByteArray()
@@ -333,13 +486,19 @@ object VmessCrypto {
         return ParsedLogicalHeader(bodyIV, bodyKey, responseV, option, security, command, target)
     }
 
-    fun newSession(item: ProfileItem, targetHost: String, targetPort: Int): VmessSession {
+    fun newSession(
+        item: ProfileItem,
+        targetHost: String,
+        targetPort: Int,
+        /** v1.0.5 (kelompok D): command — [CMD_TCP] default, [CMD_MUX] untuk mux. */
+        command: Byte = CMD_TCP,
+    ): VmessSession {
         val security = resolveSecurity(item.security.ifBlank { "auto" })
         val key = cmdKey(item.uuid)
         val bodyKey = Crypto.randomBytes(16)
         val bodyIV = Crypto.randomBytes(16)
         val responseV = Crypto.randomBytes(1)[0]
-        val logical = buildLogicalHeader(bodyKey, bodyIV, responseV, security, targetHost, targetPort)
+        val logical = buildLogicalHeader(bodyKey, bodyIV, responseV, security, targetHost, targetPort, command)
         val authId = createAuthId(key)
         val nonce = Crypto.randomBytes(8)
         val lenKey = Crypto.kdf16(

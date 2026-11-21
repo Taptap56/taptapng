@@ -20,9 +20,14 @@ import androidx.appcompat.app.AppCompatDelegate
  * default (see [TaptapVpnService]-side behaviour: remote DNS falls
  * back to 8.8.8.8 there when the stored value is not an IP literal).
  *
- * Mux / Fragment / Observatory / Hev TUN values are STORED only —
+ * Fragment / Observatory / Hev TUN values are STORED only —
  * TaptapNG M2 has no xray-core to apply them to. The UI labels them
- * "belum didukung di M2" and must never claim they work.
+ * "belum didukung di M2" and must never claim they work. Mux is the
+ * exception since v1.0.5 (kelompok D): mux_enabled +
+ * mux_concurrency are applied in-app for VMess/VLESS (TCP) — the
+ * Settings UI still badges them notSupportedM2 (owned by
+ * SettingsActivity, not updated here), only the XUDP pair stays
+ * stored-only.
  */
 class SettingsStore(context: Context) {
 
@@ -140,7 +145,11 @@ class SettingsStore(context: Context) {
             ?: DEFAULT_OUTBOUND_RESOLVE_METHOD
         set(v) = prefs.edit().putString(KEY_OUTBOUND_RESOLVE_METHOD, v).apply()
 
-    // Mux (stored only — no xray-core in M2)
+    // Mux (v1.0.5, kelompok D): mux_enabled + mux_concurrency
+    // DITERAPKAN in-app untuk VMess/VLESS (TCP) lewat MuxConnection
+    // — lihat MuxConfig. mux_xudp_concurrency / mux_xudp_quic
+    // tetap STORED ONLY: M2 tidak punya jalur UDP, jadi XUDP belum
+    // bisa jalan (MuxConfig.xudpSupported = false).
     var muxEnabled: Boolean
         get() = prefs.getBoolean(KEY_MUX_ENABLED, DEFAULT_MUX_ENABLED)
         set(v) = prefs.edit().putBoolean(KEY_MUX_ENABLED, v).apply()

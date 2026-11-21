@@ -16,6 +16,7 @@ import com.taptap.ng.core.PemicuManager
 import com.taptap.ng.core.ServerTester
 import com.taptap.ng.core.TunnelState
 import com.taptap.ng.core.proto.DialWatchdog
+import com.taptap.ng.core.proto.MuxConfig
 import com.taptap.ng.core.proto.ProbeBody
 import com.taptap.ng.core.proto.ProxyClient
 import com.taptap.ng.core.proto.ProxyClientFactory
@@ -141,14 +142,14 @@ class TaptapVpnService : VpnService() {
          * selected first (which is how the Onering entry got dialled
          * in v1.0.5 despite the guard).
          */
-        fun prepareStart(item: ProfileItem): PreparedStart {
+        fun prepareStart(item: ProfileItem, muxConfig: MuxConfig = MuxConfig.DISABLED): PreparedStart {
             try {
                 requireStartable(item)
             } catch (e: IllegalStateException) {
                 return PreparedStart.Rejected(e.message ?: "Entry tidak bisa dipakai")
             }
             return try {
-                PreparedStart.Ready(ProxyClientFactory.create(item), dialLabel(item))
+                PreparedStart.Ready(ProxyClientFactory.create(item, muxConfig), dialLabel(item))
             } catch (e: Exception) {
                 PreparedStart.Rejected(e.message ?: "Profil tidak valid: $e")
             }
@@ -280,7 +281,12 @@ class TaptapVpnService : VpnService() {
         // Guard + client creation run on the main thread, so a
         // rejected entry fails immediately with a clear status —
         // no worker, no foreground notification, no TUN.
-        when (val prepared = prepareStart(item)) {
+        // v1.0.5 (kelompok D): mux dibaca dari Settings di sini
+        // (satu-satunya tempat service menyentuh Settings untuk
+        // mux) dan diteruskan ke prepareStart — default OFF, jadi
+        // start tanpa mux tidak berubah.
+        val muxConfig = MuxConfig.fromSettings(SettingsStore(this))
+        when (val prepared = prepareStart(item, muxConfig)) {
             is PreparedStart.Rejected -> {
                 connection.reportFailure("${prepared.message}: ${dialLabel(item)}")
                 return
