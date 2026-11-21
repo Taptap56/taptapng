@@ -12,6 +12,8 @@ import androidx.core.app.NotificationCompat
 import com.taptap.ng.R
 import com.taptap.ng.core.DialLog
 import com.taptap.ng.core.DnsResolver
+import com.taptap.ng.core.Observatory
+import com.taptap.ng.core.ObservatoryRunner
 import com.taptap.ng.core.PemicuManager
 import com.taptap.ng.core.ServerTester
 import com.taptap.ng.core.TunnelState
@@ -240,6 +242,12 @@ class TaptapVpnService : VpnService() {
 
     private var tunFd: ParcelFileDescriptor? = null
     private var forwarder: TunForwarder? = null
+    /**
+     * Observatory runner (v1.0.5, kelompok F): probing berkala saat
+     * tunnel hidup; dihentikan di teardownTunnel. Hasilnya hanya
+     * saran — tidak pernah mencabut tunnel (lihat Observatory).
+     */
+    private var observatoryRunner: ObservatoryRunner? = null
     private var probeWatchdog: DialWatchdog? = null
     /**
      * The client of the current start (M3): teardown closes it so a
@@ -271,6 +279,24 @@ class TaptapVpnService : VpnService() {
     private fun startTunnel() {
         val store = ProfileStore(ProfileStore.defaultFile(filesDir))
         store.load()
+        // v1.0.5 (kelompok F, Observatory): bila ronde probe
+        // sebelumnya menemukan entry terbaik yang berbeda dari
+        // pilihan saat ini, SARANKAN saja di log — tunnel tetap
+        // memakai pilihan user; tidak ada auto-switch.
+        Observatory.bestGuidForNextStart(store.profiles)?.let { bestGuid ->
+            val selected = store.find(store.selectedGuid ?: "")
+                ?: store.profiles.firstOrNull()
+            if (selected != null && bestGuid != selected.guid) {
+                val best = store.find(bestGuid)
+                if (best != null) {
+                    DialLog.log(
+                        "OBSERVATORY",
+                        "saran entry terbaik: '${best.displayName()}' " +
+                            "— ketuk entry itu untuk pindah (tunnel tidak dipindah otomatis)",
+                    )
+                }
+            }
+        }
         val item: ProfileItem = store.find(store.selectedGuid ?: "")
             ?: store.profiles.firstOrNull()
             ?: run {
@@ -522,9 +548,40 @@ class TaptapVpnService : VpnService() {
                 protectUdp = { socket -> protect(socket) },
                 onStatus = { msg -> connection.reportDialStatus(msg) },
                 tunMtu = mtu,
+                // v1.0.5 (kelompok F): sniffing + route-only dari Settings.
+                sniffingEnabled = settings.sniffingEnabled,
+                routeOnlyEnabled = settings.routeOnlyEnabled,
             )
             forwarder = fwd
             fwd.start()
+            // v1.0.5 (kelompok F, Observatory): probing berkala
+            // selama tunnel hidup — ronde ping tiap interval
+            // least-ping, ronde load tiap interval least-load
+            // (metode/sampling/timeout dari Settings). Hasil hanya
+            // saran; tunnel tidak pernah dicabut (lihat Observatory).
+            val obsConfig = Observatory.Config.fromSettings(
+                leastPing = settings.observatoryLeastPing,
+                leastLoad = settings.observatoryLeastLoad,
+                method = settings.observatoryLeastLoadMethod,
+                sampling = settings.observatoryLeastLoadSampling,
+                timeout = settings.observatoryLeastLoadTimeout,
+                delayTestUrl = settings.delayTestUrl,
+            )
+            observatoryRunner = ObservatoryRunner(
+                config = obsConfig,
+                itemsProvider = {
+                    ProfileStore(ProfileStore.defaultFile(filesDir))
+                        .apply { load() }.profiles.toList()
+                },
+                onBestChanged = { best, result ->
+                    DialLog.log(
+                        "OBSERVATORY",
+                        "entry terbaik saat ini: '${best.displayName()}' " +
+                            "(${result.ms}ms, ${result.method}) — saran untuk " +
+                            "koneksi berikutnya, tunnel tidak dicabut",
+                    )
+                },
+            ).also { it.start() }
         } catch (e: Exception) {
             runCatching { fd.close() }
             tunFd = null
@@ -614,6 +671,10 @@ class TaptapVpnService : VpnService() {
         // v1.0.24 (M5): hentikan loop prime dulu — tidak ada lagi
         // prime dial yang boleh mulai saat TUN dibongkar.
         PemicuManager.stop()
+        // v1.0.5 (kelompok F): hentikan probing Observatory — probe
+        // butuh tunnel yang hidup.
+        runCatching { observatoryRunner?.stop() }
+        observatoryRunner = null
         probeWatchdog?.cancel()
         probeWatchdog = null
         synchronized(tunnelLock) {

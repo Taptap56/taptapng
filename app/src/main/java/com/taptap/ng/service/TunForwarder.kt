@@ -1,6 +1,9 @@
 package com.taptap.ng.service
 
 import com.taptap.ng.core.DialLog
+import com.taptap.ng.core.DnsResolver
+import com.taptap.ng.core.RouteOnlyGate
+import com.taptap.ng.core.Sniffer
 import com.taptap.ng.core.TunnelState
 import com.taptap.ng.core.proto.DialWatchdog
 import com.taptap.ng.core.proto.ProxyClient
@@ -70,6 +73,25 @@ class TunForwarder(
     private val dnsFallbackServer: String = "1.0.0.1",
     /** Upstream DNS port (53). Tests point it at local servers. */
     private val dnsPort: Int = 53,
+    /**
+     * Sniffing (v1.0.5, kelompok F): parse SNI / HTTP Host dari
+     * data pertama tiap sesi dan catat ke [knownHosts]. Default
+     * true (sama dengan default setting sniffingEnabled).
+     */
+    private val sniffingEnabled: Boolean = true,
+    /**
+     * Route-only (v1.0.5, kelompok F): bila true, dial TCP hanya
+     * untuk tujuan yang ada di [knownHosts] (lihat
+     * [RouteOnlyGate] untuk semantik lengkap); sisanya di-RST.
+     * Default false (perilaku v1.0.4).
+     */
+    private val routeOnlyEnabled: Boolean = false,
+    /**
+     * Tujuan yang dikenal: IP tujuan (int big-endian) → hostname
+     * (dari jawaban DNS in-tunnel atau sniffing). Diisi forwarder
+     * sendiri; tes boleh menyuntikkan isinya lewat parameter ini.
+     */
+    private val knownHosts: MutableMap<Int, String> = ConcurrentHashMap(),
 ) {
 
     private enum class State { DIALING, SYN_SENT, ESTABLISHED, CLOSED }
@@ -111,6 +133,10 @@ class TunForwarder(
         @Volatile var peerMss: Int = TcpPacket.TCP_MSS
         @Volatile var wsOffered: Boolean = false
         @Volatile var sackOffered: Boolean = false
+        /** v1.0.5 (kelompok F): sniffing — host sudah ketemu? */
+        @Volatile var sniffed: Boolean = false
+        /** v1.0.5: berapa chunk data sudah dicoba di-sniff (max 3). */
+        @Volatile var sniffAttempts: Int = 0
         /**
          * v1.0.16: per-session speed stats (created in dial(), one
          * object per connection, shared by the transport ladder,
@@ -279,6 +305,14 @@ class TunForwarder(
     /** Sessions currently tracked (tests). */
     fun sessionCount(): Int = sessions.size
 
+    /** Known destinations (tests): dst IP int → hostname. */
+    fun knownHostsSnapshot(): Map<Int, String> = knownHosts.toMap()
+
+    /** Record a known destination (tests / DNS relay / sniffing). */
+    fun recordKnownHost(dstIp: Int, host: String) {
+        if (host.isNotBlank()) knownHosts[dstIp] = host.lowercase()
+    }
+
     fun start() {
         if (!running.compareAndSet(false, true)) return
         DialLog.log("FORWARDER", "mulai — baca TUN")
@@ -420,6 +454,21 @@ class TunForwarder(
         }
         if (session == null) {
             if (tcp.flags and TcpPacket.FLAG_SYN != 0) {
+                // v1.0.5 (kelompok F, route-only): tujuan yang tidak
+                // dikenal tidak didial sama sekali — RST + log, lihat
+                // RouteOnlyGate. Terjadi SEBELUM sesi dibuat, jadi
+                // tidak ada dial proxy dan tidak ada sesi bocor.
+                if (RouteOnlyGate.decide(routeOnlyEnabled, dstIp, knownHosts) ==
+                    RouteOnlyGate.Decision.REFUSE
+                ) {
+                    DialLog.log(
+                        "ROUTE-ONLY",
+                        "tolak ${TcpPacket.ipToString(dstIp)}:${tcp.dstPort} " +
+                            "(tujuan tidak dikenal — tidak ada di DNS/sniffing)",
+                    )
+                    sendRst(srcIp, dstIp, tcp)
+                    return
+                }
                 // v1.0.13, fix A4: cap TCP sessions at 96 (XVEON)
                 // — evict the oldest by last activity so a SYN
                 // flood cannot grow the map without bound.
@@ -479,6 +528,20 @@ class TunForwarder(
 
     private fun handleData(session: TcpSession, tcp: TcpPacket.TcpSegment) {
         val payload = tcp.payload
+        // v1.0.5 (kelompok F, sniffing): inspeksi chunk data
+        // pertama (max 3 percobaan — ClientHello bisa terpotong
+        // antar segmen) dan catat hostname ke knownHosts, untuk
+        // koneksi BERIKUTNYA ke IP yang sama (route-only) dan
+        // untuk diagnosis. Tidak pernah mengubah byte-nya.
+        if (payload.isNotEmpty() && sniffingEnabled && !session.sniffed &&
+            session.sniffAttempts < 3
+        ) {
+            session.sniffAttempts++
+            Sniffer.extract(payload)?.let { found ->
+                session.sniffed = true
+                recordKnownHost(session.key.dstIp, found.host)
+            }
+        }
         var ackNeeded = false
         if (payload.isNotEmpty()) {
             when {
@@ -997,6 +1060,24 @@ class TunForwarder(
                         }
                     }
                     val bytes = respBytes ?: return@execute
+                    // v1.0.5 (kelompok F): catat jawaban DNS ke
+                    // knownHosts — IP jawaban → hostname yang ditanya
+                    // — supaya route-only mengenali tujuan yang baru
+                    // saja di-resolve aplikasi. Hanya record A (IPv4);
+                    // AAAA dicatat juga di jawaban tapi forwarder
+                    // M2 tetap men-drop paket IPv6 (lihat Ipv6Support).
+                    runCatching {
+                        val qName = Sniffer.parseDnsQueryName(query)
+                        if (qName != null) {
+                            val qId = ((query[0].toInt() and 0xFF) shl 8) or
+                                (query[1].toInt() and 0xFF)
+                            for (addr in DnsResolver.parseAnswers(bytes, qId)) {
+                                Sniffer.ipv4ToInt(addr)?.let { ip ->
+                                    recordKnownHost(ip, qName)
+                                }
+                            }
+                        }
+                    }
                     val pkt = TcpPacket.buildUdp(dstIp, srcIp, 53, srcPort, bytes)
                     writePacket(pkt)
                     if (detail) {
