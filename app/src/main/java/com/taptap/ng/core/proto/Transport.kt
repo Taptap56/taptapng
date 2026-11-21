@@ -218,8 +218,11 @@ object Transport {
      * the server best-effort (cached, operator-first — the same
      * announce shape as the v1.0.4 main dial); a failed lookup
      * falls back to the hostname instead of killing the dial.
+     * [proxyHost] is the proxy host used this dial (after
+     * [rotate] expansion) — it fills the `[proxy_host]`
+     * placeholder (v1.0.11).
      */
-    internal fun payloadCtx(item: ProfileItem): XrayPayload.Ctx? {
+    internal fun payloadCtx(item: ProfileItem, proxyHost: String? = null): XrayPayload.Ctx? {
         if (!item.xrayUsePayload || !isProxyCapable(item)) return null
         val ip = runCatching {
             DnsResolver.resolveWithSystemFallback(item.address, item.port).hostAddress
@@ -232,6 +235,7 @@ object Transport {
             ip = ip,
             port = item.port,
             wsKey = XrayPayload.newWsKey(),
+            proxyHost = proxyHost ?: "",
         )
     }
 
@@ -293,7 +297,12 @@ object Transport {
         }
         // One payload template context per dial (null = chip off);
         // the WS handshake reuses it with the handshake's own key.
-        val payloadCtx = payloadCtx(item)
+        // v1.0.11: the proxy host (after [rotate]) fills the
+        // [proxy_host] placeholder in the template.
+        val payloadCtx = payloadCtx(item, proxyTarget?.first)
+        // v1.0.11: "Payload saja" — like the SSH payload chain:
+        // payload, then straight to TLS, no CONNECT.
+        val usePayloadOnly = useProxy && item.proxyMode == "payload_only"
         val wd = threadWatchdog.get()
         // v1.0.3 (XVEON parity): "Connecting to Xray outbound
         // front.wetv.vip:443..." — no protocol name in this line
@@ -401,19 +410,36 @@ object Transport {
         }
         try {
             if (useProxy) {
-                // v1.0.10 (XVEON proxy): payload first, then CONNECT,
-                // then TLS wraps the same socket. The payload is
-                // fire-and-forget (no response read — XVEON's
-                // "Sending proxy custom payload..." writes and moves
-                // on); CONNECT must answer 200 or the dial dies here
-                // with a tagged stage ("Proxy CONNECT ditolak: ...").
                 noteStage("Proxy")
-                if (payloadCtx != null) {
-                    DialLog.log("PROXY", "Sending proxy custom payload...")
-                    val expanded = XrayPayload.expand(XrayPayload.templateFor(item), payloadCtx)
-                    XrayPayload.writeSegments(output, expanded)
+                if (usePayloadOnly) {
+                    // v1.0.11 ("Payload saja", seperti SSH): payload
+                    // dulu, lalu LANGSUNG TLS — tanpa CONNECT. The
+                    // [split] timing mirrors SshPayload (first
+                    // segment, one response, the rest after 101/2xx).
+                    // Payload chip OFF: TCP ke bug:port lalu langsung
+                    // TLS (tanpa payload, tanpa CONNECT).
+                    DialLog.log(
+                        "PROXY",
+                        "Payload saja: $dialHost:$dialPort -> ${item.address}:${item.port} (tanpa CONNECT)",
+                    )
+                    if (payloadCtx != null) {
+                        val expanded = XrayPayload.expand(XrayPayload.templateFor(item), payloadCtx)
+                        PayloadOnlyProxy.sendPayload(input, output, expanded)
+                    }
+                } else {
+                    // v1.0.10 (XVEON proxy): payload first, then CONNECT,
+                    // then TLS wraps the same socket. The payload is
+                    // fire-and-forget (no response read — XVEON's
+                    // "Sending proxy custom payload..." writes and moves
+                    // on); CONNECT must answer 200 or the dial dies here
+                    // with a tagged stage ("Proxy CONNECT ditolak: ...").
+                    if (payloadCtx != null) {
+                        DialLog.log("PROXY", "Sending proxy custom payload...")
+                        val expanded = XrayPayload.expand(XrayPayload.templateFor(item), payloadCtx)
+                        XrayPayload.writeSegments(output, expanded)
+                    }
+                    HttpConnectProxy.doConnect(input, output, item.address, item.port)
                 }
-                HttpConnectProxy.doConnect(input, output, item.address, item.port)
             }
             if (item.tls) {
                 // Tahap TLS. SNI tetap domain asli (item.sni atau
@@ -503,7 +529,11 @@ object Transport {
                     // Sec-WebSocket-Key headers when the template
                     // asks for an upgrade but carries no key, so the
                     // Accept check below still works.
-                    val ws = if (payloadCtx != null) {
+                    // v1.0.11: NOT in "Payload saja" mode — there the
+                    // template is the SSH-style proxy payload (GET
+                    // bug + PATCH + [split]), not a WS handshake,
+                    // so the handshake after TLS is the standard one.
+                    val ws = if (payloadCtx != null && !usePayloadOnly) {
                         WsTransport.connect(
                             timedIn, output, wsHost(item), wsPath(item), stats,
                             wsKey = payloadCtx.wsKey,

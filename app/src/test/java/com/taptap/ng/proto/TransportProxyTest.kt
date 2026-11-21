@@ -79,6 +79,7 @@ class TransportProxyTest {
         proxyEnabled: Boolean = true,
         proxyHost: String = "::1",
         proxyPort: Int? = null,
+        proxyMode: String = "connect",
         xrayUsePayload: Boolean = true,
         xrayPayload: String = "GET / HTTP/1.1[crlf]Host: bug.example[crlf][crlf]",
         configType: ConfigType = ConfigType.VMESS,
@@ -95,10 +96,27 @@ class TransportProxyTest {
         proxyEnabled = proxyEnabled,
         proxyHost = proxyHost,
         proxyPort = proxyPort,
+        proxyMode = proxyMode,
         xrayUsePayload = xrayUsePayload,
         xrayPayload = xrayPayload,
         path = path,
     )
+
+    /** Read exactly [n] bytes or throw. */
+    private fun readExactBytes(input: InputStream, n: Int): ByteArray {
+        val out = ByteArray(n)
+        var filled = 0
+        while (filled < n) {
+            val r = input.read(out, filled, n - filled)
+            if (r == -1) throw IOException("EOF saat baca $n byte")
+            filled += r
+        }
+        return out
+    }
+
+    /** True when [head] is a TLS record header (ClientHello: 0x16 0x03 0x01). */
+    private fun isClientHello(head: ByteArray): Boolean =
+        head.size >= 3 && head[0] == 0x16.toByte() && head[1] == 0x03.toByte() && head[2] == 0x01.toByte()
 
     @Test
     fun `proxy dial sends payload then CONNECT 200 then plain tcp stream`() {
@@ -392,5 +410,180 @@ class TransportProxyTest {
         }
         assertNull(error, "server error: $error")
         assertEquals(2, accepted)
+    }
+
+    // ---- v1.0.11: mode "Payload saja" (tanpa CONNECT, seperti SSH) ----
+
+    /** SSH-style template for the payload-only tests (GET bug + PATCH + [split]). */
+    private val sshStyleTemplate =
+        "GET / HTTP/1.1[crlf]Host: [proxy_host][crlf][crlf]" +
+            "PATCH [path] HTTP/1.1[crlf]Host: [ws_host][crlf]Upgrade: websocket[crlf]" +
+            "Connection: Upgrade[crlf][crlf][split]HTTP/ 69[crlf][crlf]"
+
+    @Test
+    fun `payload-only dial sends payload then TLS ClientHello, no CONNECT`() {
+        TunnelState.up = false
+        Transport.protectSocket = null
+        var sawClientHello = false
+        val proxy = FakeProxy { input, output, blocks ->
+            blocks += readHttpBlock(input) // proxy payload (default template)
+            output.write("HTTP/1.1 101 Switching Protocols\r\nContent-Length: 0\r\n\r\n".toByteArray(Charsets.UTF_8))
+            output.flush()
+            // The next bytes must be the TLS ClientHello record, not
+            // a CONNECT request (the server closes after reading it,
+            // so the client dies with "TLS gagal" — that is expected).
+            val head = readExactBytes(input, 5)
+            sawClientHello = isClientHello(head)
+        }
+        proxy.start()
+        try {
+            val item = vmessItem(
+                network = "tcp", tls = true, proxyPort = proxy.port,
+                proxyMode = "payload_only", xrayPayload = "",
+            )
+            val e = assertThrows(IOException::class.java) { Transport.open(item) }
+            assertTrue(e.message!!.contains("TLS gagal"), "pesan: ${e.message}")
+        } finally {
+            proxy.join()
+            Transport.protectSocket = null
+            TunnelState.up = false
+        }
+        assertNull(proxy.error, "proxy error: ${proxy.error}")
+        assertEquals(1, proxy.blocks.size, "blok: ${proxy.blocks}")
+        assertTrue(proxy.blocks[0].contains("GET / HTTP/1.1"), "payload: ${proxy.blocks[0]}")
+        assertTrue(proxy.blocks[0].contains("Upgrade: websocket"), "payload: ${proxy.blocks[0]}")
+        assertTrue(sawClientHello, "server harus menerima ClientHello TLS, bukan CONNECT")
+    }
+
+    @Test
+    fun `payload-only with payload off goes straight to TLS`() {
+        TunnelState.up = false
+        Transport.protectSocket = null
+        var sawClientHello = false
+        val proxy = FakeProxy { input, output, blocks ->
+            // First bytes on the wire must be the ClientHello — no
+            // payload block, no CONNECT.
+            val head = readExactBytes(input, 5)
+            sawClientHello = isClientHello(head)
+        }
+        proxy.start()
+        try {
+            val item = vmessItem(
+                network = "tcp", tls = true, proxyPort = proxy.port,
+                proxyMode = "payload_only", xrayUsePayload = false, xrayPayload = "",
+            )
+            val e = assertThrows(IOException::class.java) { Transport.open(item) }
+            assertTrue(e.message!!.contains("TLS gagal"), "pesan: ${e.message}")
+        } finally {
+            proxy.join()
+            Transport.protectSocket = null
+            TunnelState.up = false
+        }
+        assertNull(proxy.error, "proxy error: ${proxy.error}")
+        assertEquals(0, proxy.blocks.size, "blok: ${proxy.blocks}")
+        assertTrue(sawClientHello, "server harus menerima ClientHello TLS sebagai byte pertama")
+    }
+
+    @Test
+    fun `payload-only split timing through Transport`() {
+        TunnelState.up = false
+        Transport.protectSocket = null
+        var sawClientHello = false
+        val proxy = FakeProxy { input, output, blocks ->
+            val get = readHttpBlock(input)
+            assertTrue(get.contains("GET / HTTP/1.1"), "GET: $get")
+            assertTrue(get.contains("Host: ::1"), "GET host harus proxy host: $get")
+            // The PATCH must not be sent before the GET response.
+            assertEquals(0, input.available(), "PATCH terkirim sebelum respons GET")
+            output.write("HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\n\r\n".toByteArray(Charsets.UTF_8))
+            output.flush()
+            val patch = readHttpBlock(input)
+            assertTrue(patch.contains("PATCH /vmess HTTP/1.1"), "PATCH: $patch")
+            assertTrue(patch.contains("Host: target.invalid"), "PATCH: $patch")
+            assertTrue(patch.contains("Upgrade: websocket"), "PATCH: $patch")
+            output.write("HTTP/1.1 101 Switching Protocols\r\nContent-Length: 0\r\n\r\n".toByteArray(Charsets.UTF_8))
+            output.flush()
+            val junk = readHttpBlock(input)
+            assertTrue(junk.contains("HTTP/ 69"), "junk: $junk")
+            blocks += get
+            blocks += patch
+            blocks += junk
+            sawClientHello = isClientHello(readExactBytes(input, 5))
+        }
+        proxy.start()
+        try {
+            val item = vmessItem(
+                network = "tcp", tls = true, proxyPort = proxy.port,
+                proxyMode = "payload_only", xrayPayload = sshStyleTemplate, path = "/vmess",
+            )
+            val e = assertThrows(IOException::class.java) { Transport.open(item) }
+            assertTrue(e.message!!.contains("TLS gagal"), "pesan: ${e.message}")
+        } finally {
+            proxy.join()
+            Transport.protectSocket = null
+            TunnelState.up = false
+        }
+        assertNull(proxy.error, "proxy error: ${proxy.error}")
+        assertEquals(3, proxy.blocks.size, "blok: ${proxy.blocks}")
+        assertTrue(sawClientHello, "sesudah payload harus langsung TLS ClientHello")
+    }
+
+    @Test
+    fun `payload-only ws handshake is standard, not the ssh-style template`() {
+        TunnelState.up = false
+        Transport.protectSocket = null
+        val proxy = FakeProxy { input, output, blocks ->
+            blocks += readHttpBlock(input) // GET (bug)
+            output.write("HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\n\r\n".toByteArray(Charsets.UTF_8))
+            output.flush()
+            blocks += readHttpBlock(input) // PATCH (WS upgrade)
+            output.write("HTTP/1.1 101 Switching Protocols\r\nContent-Length: 0\r\n\r\n".toByteArray(Charsets.UTF_8))
+            output.flush()
+            blocks += readHttpBlock(input) // [split] junk
+            // WS handshake after TLS (tls=false here): the STANDARD
+            // request — the SSH-style template is the proxy payload,
+            // not the handshake.
+            blocks += readHttpBlock(input)
+            val ws = blocks[3]
+            val key = ws.lines()
+                .first { it.startsWith("Sec-WebSocket-Key:", ignoreCase = true) }
+                .substringAfter(":").trim()
+            val accept = Base64Util.encode(
+                MessageDigest.getInstance("SHA-1").digest(
+                    (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.UTF_8),
+                ),
+            )
+            output.write(
+                ("HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray(Charsets.UTF_8),
+            )
+            output.flush()
+        }
+        proxy.start()
+        try {
+            val item = vmessItem(
+                network = "ws", tls = false, proxyPort = proxy.port,
+                proxyMode = "payload_only", xrayPayload = sshStyleTemplate, path = "/vmess",
+            )
+            val stream = Transport.open(item)
+            runCatching { stream.close() }
+        } finally {
+            proxy.join()
+            Transport.protectSocket = null
+            TunnelState.up = false
+        }
+        assertNull(proxy.error, "proxy error: ${proxy.error}")
+        assertEquals(4, proxy.blocks.size, "blok: ${proxy.blocks}")
+        val ws = proxy.blocks[3]
+        assertTrue(ws.contains("GET /vmess HTTP/1.1"), "ws: $ws")
+        assertTrue(ws.contains("Host: target.invalid"), "ws: $ws")
+        assertTrue(ws.contains("Upgrade: websocket"), "ws: $ws")
+        assertTrue(ws.contains("Sec-WebSocket-Key: "), "ws: $ws")
+        assertTrue(ws.contains("Sec-WebSocket-Version: 13"), "ws: $ws")
+        assertFalse(ws.contains("PATCH"), "ws harus standar, bukan template SSH: $ws")
+        assertFalse(ws.contains("HTTP/ 69"), "ws harus standar, bukan template SSH: $ws")
+        assertFalse(ws.contains("[split]"), "ws harus standar, bukan template SSH: $ws")
     }
 }

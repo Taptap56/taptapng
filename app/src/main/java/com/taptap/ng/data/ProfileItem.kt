@@ -95,11 +95,16 @@ data class ProfileItem(
     // ke proxy sebelum CONNECT dan dipakai lagi sebagai WS
     // handshake. Semua default mati/kosong — entry lama tanpa
     // field ini (Gson) jalan persis seperti v1.0.9.
+    // v1.0.11: proxyMode — "connect" (v1.0.10: payload → CONNECT
+    // → TLS) atau "payload_only" (seperti SSH: payload → langsung
+    // TLS, tanpa CONNECT). Entry lama tanpa field ini default
+    // "connect" — perilaku v1.0.10 tidak berubah.
     var xrayUsePayload: Boolean = false,
     var xrayPayload: String = "",
     var proxyEnabled: Boolean = false,
     var proxyHost: String = "",
     var proxyPort: Int? = null, // null/empty = 80
+    var proxyMode: String = "connect", // "connect" | "payload_only"
 ) {
     /** Display name for the server list row. */
     fun displayName(): String = remarks.ifBlank { address }

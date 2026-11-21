@@ -2,6 +2,7 @@ package com.taptap.ng.proto
 
 import com.taptap.ng.core.Base64Util
 import com.taptap.ng.core.proto.HttpConnectProxy
+import com.taptap.ng.core.proto.PayloadOnlyProxy
 import com.taptap.ng.core.proto.WsTransport
 import com.taptap.ng.core.proto.XrayPayload
 import com.taptap.ng.data.ConfigType
@@ -9,6 +10,10 @@ import com.taptap.ng.data.ProfileItem
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.PipedInputStream
+import java.io.PipedOutputStream
 import java.net.ServerSocket
 import java.security.MessageDigest
 import org.junit.jupiter.api.Assertions.assertArrayEquals
@@ -96,6 +101,234 @@ class XrayProxyTest {
         val out = XrayPayload.expand("[host_port]|[host]|[port]|[ip]|[protocol]|[ua]", ctx())
         assertTrue(out.startsWith("srv.example:443|srv.example|443|1.2.3.4|HTTP/1.1|Mozilla/5.0"))
         assertTrue(out.endsWith("\r\n\r\n"))
+    }
+
+    @Test
+    fun `proxy_host expands from ctx and empty without proxy`() {
+        val out = XrayPayload.expand(
+            "GET / HTTP/1.1[crlf]Host: [proxy_host][crlf][crlf]",
+            ctx().copy(proxyHost = "bug.example"),
+        )
+        assertEquals("GET / HTTP/1.1\r\nHost: bug.example\r\n\r\n", out)
+        // No proxy: the placeholder expands empty, [host] untouched.
+        val out2 = XrayPayload.expand("Host: [proxy_host] / [host]", ctx())
+        assertTrue(out2.startsWith("Host:  / srv.example"), "hasil: $out2")
+    }
+
+    @Test
+    fun `splitRequests merges split-leading block into previous`() {
+        assertEquals(
+            listOf(
+                "GET / HTTP/1.1\r\nHost: bug\r\n\r\n",
+                "PATCH /vmess HTTP/1.1\r\nHost: h\r\nUpgrade: websocket\r\n\r\n[split]HTTP/ 69\r\n\r\n",
+            ),
+            PayloadOnlyProxy.splitRequests(
+                "GET / HTTP/1.1\r\nHost: bug\r\n\r\n" +
+                    "PATCH /vmess HTTP/1.1\r\nHost: h\r\nUpgrade: websocket\r\n\r\n" +
+                    "[split]HTTP/ 69\r\n\r\n",
+            ),
+        )
+    }
+
+    // ---- PayloadOnlyProxy chain (v1.0.11, SSH timing) ----
+
+    /** Interactive peer over piped streams: the test thread is the
+     * client, [script] runs the server side on a thread. */
+    private class PipePeer(private val script: (InputStream, OutputStream) -> Unit) {
+        private val clientOut = PipedOutputStream()
+        private val serverIn = PipedInputStream(clientOut)
+        private val serverOut = PipedOutputStream()
+        private val clientIn = PipedInputStream(serverOut)
+        var error: Throwable? = null
+        private var thread: Thread? = null
+
+        val input: InputStream get() = clientIn
+        val output: OutputStream get() = clientOut
+
+        fun start() {
+            thread = Thread {
+                try {
+                    script(serverIn, serverOut)
+                } catch (e: Throwable) {
+                    error = e
+                }
+            }.also { it.isDaemon = true; it.start() }
+        }
+
+        fun join() = thread?.join(5_000)
+    }
+
+    /** Read one HTTP block (until the blank line) from a stream. */
+    private fun readBlock(input: InputStream): String {
+        val out = ByteArrayOutputStream()
+        val tail = ArrayDeque<Int>()
+        while (true) {
+            val b = input.read()
+            if (b == -1) throw IOException("EOF saat baca blok")
+            out.write(b)
+            tail.addLast(b)
+            if (tail.size > 4) tail.removeFirst()
+            if (tail.size == 4 && tail[0] == '\r'.code && tail[1] == '\n'.code &&
+                tail[2] == '\r'.code && tail[3] == '\n'.code
+            ) {
+                return out.toString(Charsets.UTF_8)
+            }
+        }
+    }
+
+    private fun writeResponse(output: OutputStream, status: String) {
+        output.write("$status\r\nContent-Length: 0\r\n\r\n".toByteArray(Charsets.UTF_8))
+        output.flush()
+    }
+
+    /** SSH-style template: GET (Host: bug) + PATCH (WS upgrade) + [split] junk. */
+    private val sshStyleTemplate =
+        "GET / HTTP/1.1\r\nHost: bug.example\r\n\r\n" +
+            "PATCH /vmess HTTP/1.1\r\nHost: h.example\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n" +
+            "[split]HTTP/ 69\r\n\r\n"
+
+    @Test
+    fun `payload-only chain sends first block waits for response then sends rest`() {
+        val peer = PipePeer { input, output ->
+            val get = readBlock(input)
+            assertTrue(get.contains("Host: bug.example"), "GET: $get")
+            // The client must NOT have sent the PATCH yet — it waits
+            // for the GET response (the SSH [split] timing rule).
+            assertEquals(0, input.available(), "PATCH terkirim sebelum respons")
+            writeResponse(output, "HTTP/1.1 301 Moved Permanently")
+            val patch = readBlock(input)
+            assertTrue(patch.contains("PATCH /vmess HTTP/1.1"), "PATCH: $patch")
+            assertTrue(patch.contains("Upgrade: websocket"), "PATCH: $patch")
+            output.write(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+                    .toByteArray(Charsets.UTF_8),
+            )
+            output.flush()
+            val junk = readBlock(input)
+            assertTrue(junk.contains("HTTP/ 69"), "junk: $junk")
+        }
+        peer.start()
+        try {
+            val result = PayloadOnlyProxy.sendPayload(peer.input, peer.output, sshStyleTemplate)
+            assertEquals(
+                listOf("HTTP/1.1 301 Moved Permanently", "HTTP/1.1 101 Switching Protocols"),
+                result.statuses,
+            )
+            assertEquals("HTTP/1.1 101 Switching Protocols", result.lastStatus)
+            assertTrue(result.wasWsUpgrade)
+        } finally {
+            peer.join()
+        }
+        assertEquals(null, peer.error, "server error: ${peer.error}")
+    }
+
+    @Test
+    fun `payload-only does not send rest on 302`() {
+        val template =
+            "GET /vmess HTTP/1.1\r\nHost: h.example\r\nUpgrade: websocket\r\n\r\n[split]JUNK\r\n\r\n"
+        val peer = PipePeer { input, output ->
+            val get = readBlock(input)
+            assertTrue(get.contains("GET /vmess HTTP/1.1"), "GET: $get")
+            assertFalse(get.contains("JUNK"), "junk terkirim sebelum respons: $get")
+            writeResponse(output, "HTTP/1.1 302 Found")
+            // The client must never send the rest after a 302.
+            Thread.sleep(300)
+            assertEquals(0, input.available(), "segmen [split] terkirim setelah 302")
+        }
+        peer.start()
+        try {
+            val e = assertThrows(IOException::class.java) {
+                PayloadOnlyProxy.sendPayload(peer.input, peer.output, template)
+            }
+            assertTrue(e.message!!.contains("upgrade websocket ditolak"), "pesan: ${e.message}")
+        } finally {
+            peer.join()
+        }
+        assertEquals(null, peer.error, "server error: ${peer.error}")
+    }
+
+    @Test
+    fun `payload-only plain template accepts 2xx and rejects 404`() {
+        val template = "GET / HTTP/1.1\r\nHost: h.example\r\n\r\n"
+        val okPeer = PipePeer { input, output ->
+            readBlock(input)
+            writeResponse(output, "HTTP/1.1 200 OK")
+        }
+        okPeer.start()
+        try {
+            val result = PayloadOnlyProxy.sendPayload(okPeer.input, okPeer.output, template)
+            assertEquals(listOf("HTTP/1.1 200 OK"), result.statuses)
+            assertFalse(result.wasWsUpgrade)
+        } finally {
+            okPeer.join()
+        }
+        assertEquals(null, okPeer.error, "server error: ${okPeer.error}")
+
+        val badPeer = PipePeer { input, output ->
+            readBlock(input)
+            writeResponse(output, "HTTP/1.1 404 Not Found")
+        }
+        badPeer.start()
+        try {
+            val e = assertThrows(IOException::class.java) {
+                PayloadOnlyProxy.sendPayload(badPeer.input, badPeer.output, template)
+            }
+            assertTrue(e.message!!.contains("proxy menolak payload"), "pesan: ${e.message}")
+        } finally {
+            badPeer.join()
+        }
+        assertEquals(null, badPeer.error, "server error: ${badPeer.error}")
+    }
+
+    @Test
+    fun `payload-only non-HTTP response fails`() {
+        val peer = PipePeer { input, output ->
+            readBlock(input)
+            output.write("SSH-2.0-OpenSSH_8.9\r\n".toByteArray(Charsets.UTF_8))
+            output.flush()
+        }
+        peer.start()
+        try {
+            val e = assertThrows(IOException::class.java) {
+                PayloadOnlyProxy.sendPayload(peer.input, peer.output, sshStyleTemplate)
+            }
+            assertTrue(e.message!!.contains("bukan HTTP"), "pesan: ${e.message}")
+        } finally {
+            peer.join()
+        }
+        assertEquals(null, peer.error, "server error: ${peer.error}")
+    }
+
+    @Test
+    fun `payload-only drains body and leaves trailing bytes unread`() {
+        val template = "GET /vmess HTTP/1.1\r\nHost: h.example\r\nUpgrade: websocket\r\n\r\n"
+        val peer = PipePeer { input, output ->
+            readBlock(input)
+            // 101 + a 5-byte body, then trailing bytes that belong to
+            // the NEXT stage (TLS) — the chain must not swallow them.
+            output.write(
+                "HTTP/1.1 101 Switching Protocols\r\nContent-Length: 5\r\n\r\nHELLOEXTRA"
+                    .toByteArray(Charsets.UTF_8),
+            )
+            output.flush()
+        }
+        peer.start()
+        try {
+            val result = PayloadOnlyProxy.sendPayload(peer.input, peer.output, template)
+            assertEquals("HTTP/1.1 101 Switching Protocols", result.lastStatus)
+            assertEquals(5, peer.input.available(), "sisa byte tidak 5")
+            val rest = ByteArray(5)
+            var got = 0
+            while (got < 5) {
+                val n = peer.input.read(rest, got, 5 - got)
+                if (n == -1) throw IOException("EOF saat baca sisa")
+                got += n
+            }
+            assertEquals("EXTRA", rest.toString(Charsets.UTF_8))
+        } finally {
+            peer.join()
+        }
+        assertEquals(null, peer.error, "server error: ${peer.error}")
     }
 
     @Test

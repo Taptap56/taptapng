@@ -19,13 +19,17 @@ import java.util.concurrent.atomic.AtomicInteger
  * [ws_key], [split], [rotate=a;b], [host], [ip], [port],
  * [proxy_auth], [ua], [auth], plus the TB set this app already
  * knows ([host_port], [protocol], [real_raw], [crlf], [cr], [lf]).
- * [split] is NOT expanded — it marks a segment boundary: the
- * template is written in segments, one flush per segment
- * (SshPayload does the same for its [split] timing).
+ * v1.0.11 adds [proxy_host] — the proxy host used this dial
+ * (after [rotate] expansion), so an SSH-style template can write
+ * `Host: [proxy_host]` for its first GET. [split] is NOT expanded
+ * — it marks a segment boundary: the template is written in
+ * segments, one flush per segment (SshPayload does the same for
+ * its [split] timing).
  *
  * This file is pure string work (no sockets) so every behaviour
  * below is JVM-testable. The dial itself lives in [Transport]
- * (proxy ladder) and [HttpConnectProxy] (CONNECT).
+ * (proxy ladder) and [HttpConnectProxy] (CONNECT) /
+ * [PayloadOnlyProxy] (v1.0.11: payload, then straight to TLS).
  */
 object XrayPayload {
 
@@ -63,6 +67,12 @@ object XrayPayload {
         val auth: String = "",
         /** User-Agent (same generic UA as the SSH payload). */
         val ua: String = SshPayload.DEFAULT_UA,
+        /**
+         * v1.0.11: the proxy host used this dial (after [rotate]
+         * expansion) — fills the [proxy_host] placeholder. "" when
+         * no proxy is used (the placeholder then expands empty).
+         */
+        val proxyHost: String = "",
     )
 
     // ---- [rotate=a;b] ----
@@ -122,6 +132,9 @@ object XrayPayload {
         }
         var out = expandRotate(template, pick)
         out = out.replace("[host_port]", hostPort)
+        // v1.0.11: [proxy_host] BEFORE [host] — same reason as
+        // [host_port] (a later [host] replace must not touch it).
+        out = out.replace("[proxy_host]", ctx.proxyHost)
         out = out.replace("[host]", ctx.host)
         out = out.replace("[ip]", ctx.ip)
         out = out.replace("[port]", ctx.port.toString())

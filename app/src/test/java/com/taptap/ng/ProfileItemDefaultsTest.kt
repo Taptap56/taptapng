@@ -50,6 +50,8 @@ class ProfileItemDefaultsTest {
         assertFalse(item.proxyEnabled)
         assertEquals("", item.proxyHost)
         assertNull(item.proxyPort)
+        // v1.0.11: proxy mode defaults to CONNECT (v1.0.10).
+        assertEquals("connect", item.proxyMode)
     }
 
     @Test
@@ -96,6 +98,9 @@ class ProfileItemDefaultsTest {
         assertFalse(loaded.proxyEnabled)
         assertEquals("", loaded.proxyHost)
         assertNull(loaded.proxyPort)
+        // v1.0.11: a v1.0.10 file has no proxyMode — it must load
+        // as "connect", so the v1.0.10 CONNECT behaviour is kept.
+        assertEquals("connect", loaded.proxyMode)
         // Gson round trip keeps the new values once saved.
         val gson = Gson()
         val saved = gson.fromJson(gson.toJson(loaded), ProfileItem::class.java)

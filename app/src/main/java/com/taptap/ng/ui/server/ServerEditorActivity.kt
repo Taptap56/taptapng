@@ -68,6 +68,14 @@ class ServerEditorActivity : AppCompatActivity() {
         private val BROWSER_DIALER_VALUES = listOf("", "OkHttp", "WebView")
         private val DNSTT_TYPE_DISPLAYS = listOf("TXT", "NULL")
         private val DNSTT_TYPE_VALUES = listOf("txt", "null")
+        // v1.0.11: proxy mode — CONNECT (v1.0.10: payload → CONNECT
+        // → TLS) or Payload saja (seperti SSH: payload → langsung
+        // TLS, tanpa CONNECT).
+        private val PROXY_MODE_DISPLAYS = listOf(
+            "CONNECT (payload → CONNECT → TLS)",
+            "Payload saja (payload → langsung TLS)",
+        )
+        private val PROXY_MODE_VALUES = listOf("connect", "payload_only")
         private val SSH_SNI_VERSION_DISPLAYS = listOf("Default", "TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3")
         private val SSH_SNI_VERSION_VALUES = listOf("default", "tls1", "tls1.1", "tls1.2", "tls1.3")
 
@@ -184,6 +192,7 @@ class ServerEditorActivity : AppCompatActivity() {
         bindDropdown(R.id.input_fingerprint, FINGERPRINTS)
         bindDropdown(R.id.input_alpn, ALPNS)
         bindDropdown(R.id.input_dnstt_type, DNSTT_TYPE_DISPLAYS, DNSTT_TYPE_VALUES, selected = "txt")
+        bindDropdown(R.id.input_proxy_mode, PROXY_MODE_DISPLAYS, PROXY_MODE_VALUES, selected = "connect")
         bindDropdown(
             R.id.input_ssh_sni_version, SSH_SNI_VERSION_DISPLAYS, SSH_SNI_VERSION_VALUES,
             selected = "default",
@@ -284,6 +293,10 @@ class ServerEditorActivity : AppCompatActivity() {
         setText(R.id.input_pemicu_interval, item.pemicuInterval?.toString() ?: "15")
         setText(R.id.input_proxy_host, item.proxyHost)
         setText(R.id.input_proxy_port, item.proxyPort?.toString() ?: "")
+        bindDropdown(
+            R.id.input_proxy_mode, PROXY_MODE_DISPLAYS, PROXY_MODE_VALUES,
+            selected = item.proxyMode.ifBlank { "connect" },
+        )
         setText(R.id.input_xray_payload, item.xrayPayload)
     }
 
@@ -705,6 +718,7 @@ class ServerEditorActivity : AppCompatActivity() {
             proxyEnabled = chip(R.id.chip_proxy).isChecked,
             proxyHost = text(R.id.input_proxy_host).trim(),
             proxyPort = text(R.id.input_proxy_port).toIntOrNull(),
+            proxyMode = dropdownValue(R.id.input_proxy_mode).ifBlank { "connect" },
         )
         if (existing == null) store.add(item) else store.update(item)
         finish()
