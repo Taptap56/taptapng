@@ -14,6 +14,7 @@ import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.data.ProfileStore
 import com.taptap.ng.data.SettingsStore
 import com.taptap.ng.service.TaptapVpnService
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
