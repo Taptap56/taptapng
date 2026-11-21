@@ -199,17 +199,32 @@ class RootForwarder(
  * memblokir refleksi, resolve mengembalikan null dan koneksi
  * ditutup fail-closed (bukan dial buta). Best-effort, tidak
  * pernah melempar.
+ *
+ * v1.0.15, perbaikan kompilasi: `getsockoptInetAddress` adalah
+ * hidden API (tidak ada di stub android.jar) dan `SOL_IP` tidak
+ * ada di OsConstants — keduanya dipanggil lewat refleksi
+ * (`Class.forName("android.system.Os")`, level IPPROTO_IP = 0,
+ * option SO_ORIGINAL_DST = 80). Bila metode tidak ada di runtime,
+ * resolve mengembalikan null (fail-closed).
  */
 class OsOriginalDstResolver : RootForwarder.OriginalDstResolver {
     override fun resolve(socket: Socket): InetAddress? {
         return runCatching {
             val fd = socketFd(socket) ?: return null
-            android.system.Os.getsockoptInetAddress(
-                fd,
-                android.system.OsConstants.SOL_IP,
-                OriginalDst.SO_ORIGINAL_DST,
+            val osClass = Class.forName("android.system.Os")
+            val method = osClass.getMethod(
+                "getsockoptInetAddress",
+                FileDescriptor::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
             )
+            method.invoke(null, fd, IPPROTO_IP, OriginalDst.SO_ORIGINAL_DST) as? InetAddress
         }.getOrNull()
+    }
+
+    companion object {
+        /** IPPROTO_IP (== SOL_IP di Linux) = 0. */
+        const val IPPROTO_IP = 0
     }
 
     private fun socketFd(socket: Socket): FileDescriptor? {
