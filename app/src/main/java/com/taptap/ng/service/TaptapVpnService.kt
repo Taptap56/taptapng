@@ -240,6 +240,14 @@ class TaptapVpnService : VpnService() {
 
     private var tunFd: ParcelFileDescriptor? = null
     private var forwarder: TunForwarder? = null
+    /**
+     * Local SOCKS proxy (v1.0.5, kelompok B): hidup mengikuti tunnel
+     * — start sesudah TUN naik, stop saat teardown, hanya bila
+     * local proxy efektif (enableLocalProxy, atau useHevTun yang
+     * memaksanya — lihat SettingsStore.isLocalProxyEffective).
+     * Dial-nya memakai ProxyClient yang sama dengan forwarder.
+     */
+    private var socksServer: SocksServer? = null
     private var probeWatchdog: DialWatchdog? = null
     /**
      * The client of the current start (M3): teardown closes it so a
@@ -525,6 +533,20 @@ class TaptapVpnService : VpnService() {
             )
             forwarder = fwd
             fwd.start()
+            // v1.0.5 (B): local SOCKS proxy — hidup mengikuti tunnel.
+            // Gagal bind (port sudah dipakai) TIDAK boleh membunuh
+            // tunnel: tangkap, catat, tunnel tetap jalan tanpa SOCKS.
+            if (settings.isLocalProxyEffective) {
+                val socks = SocksServer(
+                    config = SocksConfig.fromSettings(settings),
+                    dial = { host, port -> client.dial(host, port) },
+                )
+                socksServer = socks
+                runCatching { socks.start() }.onFailure {
+                    DialLog.failure("SOCKS", it)
+                    socksServer = null
+                }
+            }
         } catch (e: Exception) {
             runCatching { fd.close() }
             tunFd = null
@@ -617,6 +639,8 @@ class TaptapVpnService : VpnService() {
         probeWatchdog?.cancel()
         probeWatchdog = null
         synchronized(tunnelLock) {
+            runCatching { socksServer?.stop() }
+            socksServer = null
             runCatching { forwarder?.stop() }
             forwarder = null
             runCatching { tunFd?.close() }
