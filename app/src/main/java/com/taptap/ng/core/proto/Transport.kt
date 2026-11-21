@@ -119,6 +119,20 @@ object Transport {
     var protectSocket: ((Socket) -> Boolean)? = null
 
     /**
+     * v1.0.5 (Fragment): provides the live Fragment settings for
+     * the next dial, or null when fragmenting is off. Set by
+     * [com.taptap.ng.TaptapNGApp] from SettingsStore (read fresh
+     * on every dial, so a settings change applies without a
+     * restart); null = the v1.0.4 TLS path, byte-identical.
+     * Tests set this directly.
+     */
+    @Volatile
+    var fragmentConfigProvider: (() -> FragmentConfig?)? = null
+
+    /** The fragment config for this dial, or null when OFF. */
+    internal fun resolveFragmentConfig(): FragmentConfig? = fragmentConfigProvider?.invoke()
+
+    /**
      * Per-thread dial watchdog (v1.0.6, fix A). The dialling thread
      * (probe / forwarder dial) installs one before `client.dial()`
      * and stops it in a `finally` after. Transport registers the
@@ -335,12 +349,15 @@ object Transport {
                     DialLog.log("TLS", "TLS handshake -> SNI: $sni")
                 }
                 try {
+                    // v1.0.5: fragment config is resolved once per
+                    // dial (fresh read — see fragmentConfigProvider).
+                    val fragConfig = resolveFragmentConfig()
                     if (OneringTls.isOnering(item)) {
-                        val (tlsIn, tlsOut) = OneringTls.wrap(input, output, item)
+                        val (tlsIn, tlsOut) = OneringTls.wrap(input, output, item, fragmentConfig = fragConfig)
                         input = tlsIn
                         output = tlsOut
                     } else {
-                        socket = TlsUtil.wrap(plain, item, tlsProtocols)
+                        socket = TlsUtil.wrap(plain, item, tlsProtocols, fragmentConfig = fragConfig)
                         // Re-arm the watchdog on the TLS socket: closing the
                         // plain socket would not unblock the TLS read.
                         wd?.arm(socket)
