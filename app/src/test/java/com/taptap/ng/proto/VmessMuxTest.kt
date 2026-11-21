@@ -243,6 +243,10 @@ class VmessMuxTest {
                         )
                     }
                 }
+            } catch (e: java.io.IOException) {
+                // Tulis sesudah tes menutup pipa (teardown): akhir
+                // normal — lihat komentar yang sama di MuxTest.
+                if (e.message != "Pipe closed" && e.message != "Pipe broken") error = e
             } catch (e: Throwable) {
                 error = e
             } finally {

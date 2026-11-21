@@ -211,6 +211,14 @@ class MuxTest {
                 }
             } catch (e: EOFException) {
                 // Pipa ditutup: akhir normal.
+            } catch (e: IOException) {
+                // Tulis sesudah tes menutup pipa (teardown — mis.
+                // echo End sesudah conn.close()): akhir normal juga.
+                // Stub hanya menulis ke pipa milik tes; penutupan
+                // dini di tengah tes akan menggagalkan assertion
+                // utama tes itu dulu, jadi ini tidak menyembunyikan
+                // bug produksi.
+                if (e.message != "Pipe closed" && e.message != "Pipe broken") error = e
             } catch (e: Throwable) {
                 error = e
             }
@@ -254,7 +262,7 @@ class MuxTest {
             s3.output.flush()
             assertArrayEquals("satu".toByteArray(), readFully(s1.input, 4))
             assertArrayEquals("dua-dua".toByteArray(), readFully(s2.input, 7))
-            assertArrayEquals("tiga-tiga-tiga".toByteArray(), readFully(s3.input, 13))
+            assertArrayEquals("tiga-tiga-tiga".toByteArray(), readFully(s3.input, 14))
             // Server melihat target tiap session di frame New-nya.
             val news = stub.frames.filter { it.status == Mux.STATUS_NEW }
             assertEquals(3, news.size)
@@ -311,7 +319,9 @@ class MuxTest {
         var victimId = -1
         val stub = EchoStub(pipes) { f ->
             // Sesudah data pertama session kedua, server menutupnya.
-            if (f.status == Mux.STATUS_KEEP && f.data?.contentEquals("dua".toByteArray()) == true) {
+            // Frame pertama sebuah session adalah New, bukan Keep —
+            // jadi yang dicek datanya, bukan statusnya.
+            if (f.data?.contentEquals("dua".toByteArray()) == true) {
                 victimId = f.id
                 writeTestFrame(pipes.serverOut, f.id, Mux.STATUS_END, 0, null)
                 endLatch.countDown()
