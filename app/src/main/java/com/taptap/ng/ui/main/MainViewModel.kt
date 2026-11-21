@@ -8,6 +8,8 @@ import com.google.gson.reflect.TypeToken
 import com.taptap.ng.core.IpLookup
 import com.taptap.ng.core.LinkParser
 import com.taptap.ng.core.ServerTester
+import com.taptap.ng.core.proto.MuxConfig
+import com.taptap.ng.core.proto.ProxyClientFactory
 import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.data.ProfileStore
 import com.taptap.ng.data.SettingsStore
@@ -269,6 +271,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         semaphore.withPermit {
                             val r = ServerTester.testRealPingThroughProxy(
                                 item, settings.delayTestUrl,
+                                // v1.0.5 (kelompok D): tes delay memakai
+                                // jalur yang sama dengan relay — mux ON
+                                // berarti delay diukur lewat mux.
+                                clientFactory = {
+                                    ProxyClientFactory.create(
+                                        it, MuxConfig.fromSettings(settings),
+                                    )
+                                },
                             )
                             if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
                                 val t = ServerTester.testTcpDetailed(item.address, item.port)
@@ -332,7 +342,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // entry (it dialled direct, without the payload chain).
             // The TCP connect is only a fallback when the real ping
             // cannot run at all.
-            val r = ServerTester.testRealPingThroughProxy(item, settings.delayTestUrl)
+            // v1.0.5 (kelompok D): tes delay memakai jalur yang sama
+            // dengan relay — mux ON berarti delay diukur lewat mux.
+            val r = ServerTester.testRealPingThroughProxy(
+                item, settings.delayTestUrl,
+                clientFactory = {
+                    ProxyClientFactory.create(it, MuxConfig.fromSettings(settings))
+                },
+            )
             if (r.failureStage == ServerTester.CANNOT_RUN_STAGE) {
                 val t = ServerTester.testTcpDetailed(item.address, item.port)
                 applyDelayResult(item, t.ms, t.failureStage, DELAY_KIND_TCP)

@@ -40,12 +40,12 @@ class VlessTrojanTest {
                 // not by the compressed string form.
                 assertArrayEquals(
                     InetAddress.getByName(host).address,
-                    InetAddress.getByName(parsed.target.host).address,
+                    InetAddress.getByName(parsed.target?.host).address,
                 )
             } else {
-                assertEquals(host, parsed.target.host)
+                assertEquals(host, parsed.target?.host)
             }
-            assertEquals(port, parsed.target.port)
+            assertEquals(port, parsed.target?.port)
         }
     }
 
@@ -64,8 +64,8 @@ class VlessTrojanTest {
                 // domain len(1) + domain(11) = 34 bytes total.
                 val head = input.readExactBytes(19)
                 val parsed = VlessCrypto.parseRequestHeader(head + input.readExactBytes(15))
-                assertEquals("example.com", parsed.target.host)
-                assertEquals(443, parsed.target.port)
+                assertEquals("example.com", parsed.target?.host)
+                assertEquals(443, parsed.target?.port)
                 output.write(byteArrayOf(0x00, 0x00)) // version + addon length
                 output.flush()
                 val buf = ByteArray(4)
@@ -127,8 +127,8 @@ class VlessTrojanTest {
                 val output = socket.getOutputStream()
                 val head = input.readExactBytes(19)
                 val parsed = VlessCrypto.parseRequestHeader(head + input.readExactBytes(15))
-                assertEquals("example.com", parsed.target.host)
-                assertEquals(443, parsed.target.port)
+                assertEquals("example.com", parsed.target?.host)
+                assertEquals(443, parsed.target?.port)
                 // xray-like: response header only flushes once data
                 // flows — wait for the probe body first.
                 receivedProbe = input.readExactBytes(probeBody.size)
@@ -199,8 +199,8 @@ class VlessTrojanTest {
                 val output = socket.getOutputStream()
                 val head = input.readExactBytes(19)
                 val parsed = VlessCrypto.parseRequestHeader(head + input.readExactBytes(15))
-                assertEquals("example.com", parsed.target.host)
-                assertEquals(443, parsed.target.port)
+                assertEquals("example.com", parsed.target?.host)
+                assertEquals(443, parsed.target?.port)
                 // xray-like: response header only after the first
                 // body bytes arrive.
                 val buf = ByteArray(4)
