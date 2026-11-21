@@ -105,6 +105,14 @@ class TunForwarder(
      * sendiri; tes boleh menyuntikkan isinya lewat parameter ini.
      */
     private val knownHosts: MutableMap<Int, String> = ConcurrentHashMap(),
+    /**
+     * v1.0.15: tujuan IPv6 yang dikenal — string IPv6 →
+     * hostname (dari jawaban AAAA / sniffing). Dulu field privat
+     * di badan kelas; kini parameter seperti [knownHosts] supaya
+     * tes bisa menyuntikkan isinya dan gate IPv6 bisa diuji.
+     * Kunci = [TcpPacket.IpAddr.toString] (bentuk Java).
+     */
+    private val knownHosts6: MutableMap<String, String> = ConcurrentHashMap(),
 ) {
 
     private enum class State { DIALING, SYN_SENT, ESTABLISHED, CLOSED }
@@ -382,12 +390,10 @@ class TunForwarder(
 
     /**
      * v1.0.6 (M6): tujuan IPv6 yang dikenal — string IPv6 →
-     * hostname (dari jawaban AAAA / sniffing). Route-only masih
-     * IPv4 saja (lihat [RouteOnlyGate]); map ini untuk diagnosis
-     * dan gate IPv6 di masa depan.
+     * hostname (dari jawaban AAAA / sniffing). v1.0.15: map ini
+     * kini JUGA gate route-only IPv6 (lihat [RouteOnlyGate]
+     * .decideV6 + handleTcp), sejajar map IPv4.
      */
-    private val knownHosts6: MutableMap<String, String> = ConcurrentHashMap()
-
     /** Known IPv6 destinations (tests): IPv6 string → hostname. */
     fun knownHosts6Snapshot(): Map<String, String> = knownHosts6.toMap()
 
@@ -616,11 +622,17 @@ class TunForwarder(
                 // dikenal tidak didial sama sekali — RST + log, lihat
                 // RouteOnlyGate. Terjadi SEBELUM sesi dibuat, jadi
                 // tidak ada dial proxy dan tidak ada sesi bocor.
-                // v1.0.6 (M6): gate hanya IPv4 — IPv6 belum punya
-                // map Int; tujuan IPv6 selalu didial.
-                if (dstIp.isV4 && RouteOnlyGate.decide(routeOnlyEnabled, dstIp.toInt(), knownHosts) ==
-                    RouteOnlyGate.Decision.REFUSE
-                ) {
+                // v1.0.15: gate kini IPv4 DAN IPv6 — IPv6 memakai
+                // map knownHosts6 berkunci string 128-bit
+                // (decideV6); IPv4 tidak berubah.
+                val routeOnlyRefused = if (dstIp.isV4) {
+                    RouteOnlyGate.decide(routeOnlyEnabled, dstIp.toInt(), knownHosts) ==
+                        RouteOnlyGate.Decision.REFUSE
+                } else {
+                    RouteOnlyGate.decideV6(routeOnlyEnabled, dstIp.toString(), knownHosts6) ==
+                        RouteOnlyGate.Decision.REFUSE
+                }
+                if (routeOnlyRefused) {
                     DialLog.log(
                         "ROUTE-ONLY",
                         "tolak $dstIp:${tcp.dstPort} " +
@@ -1261,8 +1273,9 @@ class TunForwarder(
                 // knownHosts — IP jawaban → hostname yang ditanya
                 // — supaya route-only mengenali tujuan yang baru
                 // saja di-resolve aplikasi. v1.0.6 (M6): jawaban
-                // AAAA dicatat di knownHosts6 (IPv6 tidak
-                // di-route-only, tapi dicatat untuk diagnosis).
+                // AAAA dicatat di knownHosts6. v1.0.15: jawaban
+                // AAAA kini JUGA membuka gate route-only IPv6
+                // (decideV6 di handleTcp).
                 runCatching {
                     val qName = Sniffer.parseDnsQueryName(query)
                     if (qName != null) {

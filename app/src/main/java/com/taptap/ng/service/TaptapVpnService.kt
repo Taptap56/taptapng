@@ -20,7 +20,11 @@ import com.taptap.ng.core.Observatory
 import com.taptap.ng.core.ObservatoryRunner
 import com.taptap.ng.core.OutboundResolveMethod
 import com.taptap.ng.core.PemicuManager
+import com.taptap.ng.core.RootIptables
+import com.taptap.ng.core.RootTunnelController
 import com.taptap.ng.core.ServerTester
+import com.taptap.ng.core.Sniffer
+import com.taptap.ng.core.SuExecutor
 import com.taptap.ng.core.TunnelState
 import com.taptap.ng.core.proto.DialWatchdog
 import com.taptap.ng.core.proto.MuxConfig
@@ -271,6 +275,11 @@ class TaptapVpnService : VpnService() {
      * error paths in runStart, never on a normal stop.
      */
     private var currentClient: ProxyClient? = null
+    /**
+     * Root mode (v1.0.15): handle aktif — null bila jalan VpnService.
+     * Dihentikan + aturan dibersihkan di [teardownTunnel].
+     */
+    private var rootHandle: RootModeHandle? = null
     private val tunnelLock = Any()
 
     /**
@@ -383,6 +392,22 @@ class TaptapVpnService : VpnService() {
             val established = synchronized(tunnelLock) {
                 if (!isCurrentStart(gen)) {
                     false
+                } else if (SettingsStore(this).enableRootMode) {
+                    // v1.0.15 (Root mode): tanpa TUN — aturan
+                    // iptables + forwarder lokal. true = root jalan;
+                    // false = root tidak tersedia → fallback ke
+                    // VpnService; install gagal = throw (pesan jelas,
+                    // bukan fallback diam-diam — lihat establishRootMode).
+                    if (establishRootMode(client, item)) {
+                        true
+                    } else {
+                        DialLog.log(
+                            "ROOT",
+                            "root tidak tersedia — fallback ke VpnService",
+                        )
+                        establishTunnel(client, item)
+                        true
+                    }
                 } else {
                     establishTunnel(client, item)
                     true
@@ -429,6 +454,82 @@ class TaptapVpnService : VpnService() {
             }
         }
     }
+
+    /**
+     * Root mode (v1.0.15): ganti TUN dengan iptables + forwarder
+     * lokal. Berjalan di bawah [tunnelLock] (lihat runStart).
+     *
+     * Urutan: cek root + pasang aturan (controller — rollback
+     * otomatis bila gagal) → relay DNS → forwarder lokal.
+     * Bila listener gagal bind, aturan di-rollback supaya tidak
+     * ada REDIRECT ke port yang tidak didengarkan (internet mati).
+     *
+     * Mengembalikan true bila root jalan, false bila root TIDAK
+     * tersedia (service fallback ke VpnService), dan melempar
+     * bila install gagal (pesan jelas di status).
+     *
+     * TunnelState.up SENGAJA tetap false: tidak ada TUN, dan
+     * protect() tidak relevan — dial aplikasi sendiri dikecualikan
+     * dari REDIRECT oleh aturan owner UID, bukan oleh protect().
+     * Observatory + SOCKS lokal tidak jalan di Root mode v1
+     * (keduanya dipasang di establishTunnel).
+     */
+    private fun establishRootMode(client: ProxyClient, item: ProfileItem): Boolean {
+        val settings = SettingsStore(this)
+        val config = RootIptables.Config(appUid = android.os.Process.myUid())
+        when (val started = RootTunnelController().start(SuExecutor(), config)) {
+            is RootTunnelController.StartResult.NoRoot -> {
+                DialLog.log("ROOT", started.reason)
+                return false
+            }
+            is RootTunnelController.StartResult.Failed -> {
+                throw IllegalStateException("Root mode gagal: ${started.reason}")
+            }
+            is RootTunnelController.StartResult.Ok -> Unit
+        }
+        val knownHosts4 = java.util.concurrent.ConcurrentHashMap<Int, String>()
+        val knownHosts6 = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val dnsRelay = RootDnsRelay(
+            proxy = client,
+            recordHost = { addr, host ->
+                Sniffer.ipv4ToInt(addr)?.let { knownHosts4[it] = host.lowercase() }
+                    ?: run {
+                        if (addr is java.net.Inet6Address) {
+                            knownHosts6[TcpPacket.IpAddr(addr.address).toString()] =
+                                host.lowercase()
+                        }
+                    }
+            },
+        )
+        val forwarder = RootForwarder(
+            proxy = client,
+            routeOnlyEnabled = settings.routeOnlyEnabled,
+            knownHosts4 = knownHosts4,
+            knownHosts6 = knownHosts6,
+        )
+        try {
+            dnsRelay.start()
+            forwarder.start()
+        } catch (e: Exception) {
+            runCatching { forwarder.stop() }
+            runCatching { dnsRelay.stop() }
+            RootTunnelController().stop(SuExecutor(), config)
+            throw IllegalStateException(
+                "Root mode gagal: listener lokal gagal bind (${e.message}) — aturan dibersihkan",
+            )
+        }
+        rootHandle = RootModeHandle(config, forwarder, dnsRelay)
+        currentClient = client
+        DialLog.log("ROOT", "ROOT CONNECTED (${item.displayName()} — iptables, tanpa TUN)")
+        return true
+    }
+
+    /** Handle Root mode aktif (config + forwarder + relay DNS). */
+    private class RootModeHandle(
+        val config: RootIptables.Config,
+        val forwarder: RootForwarder,
+        val dnsRelay: RootDnsRelay,
+    )
 
     /** Build the TUN + forwarder. Runs under [tunnelLock] (see runStart). */
     private fun establishTunnel(client: ProxyClient, item: ProfileItem) {
@@ -795,6 +896,38 @@ class TaptapVpnService : VpnService() {
             forwarder = null
             runCatching { tunFd?.close() }
             tunFd = null
+            // v1.0.15 (Root mode): hentikan forwarder + relay DNS
+            // lokal, lalu HAPUS semua aturan iptables. Bila handle
+            // null tapi Root mode ON (start gagal di tengah /
+            // crash), bersihkan aturan basi best-effort dengan
+            // config default — cleanup hanya menyentuh rantai
+            // milik TaptapNG, jadi aman dipanggil selalu.
+            val root = rootHandle
+            rootHandle = null
+            if (root != null) {
+                runCatching { root.forwarder.stop() }
+                runCatching { root.dnsRelay.stop() }
+                val failed = runCatching {
+                    RootTunnelController().stop(SuExecutor(), root.config)
+                }.getOrDefault(listOf("executor gagal"))
+                if (failed.isNotEmpty()) {
+                    DialLog.log(
+                        "ROOT",
+                        "cleanup gagal (${failed.size} aturan tertinggal) — " +
+                            "pulihkan manual: ${failed.first()}",
+                    )
+                }
+            } else if (runCatching { SettingsStore(this).enableRootMode }.getOrDefault(false)) {
+                val stale = runCatching {
+                    RootTunnelController().cleanupStale(
+                        SuExecutor(),
+                        RootIptables.Config(appUid = android.os.Process.myUid()),
+                    )
+                }.getOrDefault(emptyList())
+                if (stale.isNotEmpty()) {
+                    DialLog.log("ROOT", "aturan basi tertinggal (${stale.size}) saat teardown")
+                }
+            }
             // M3: close the client so a SlowDNS session is torn down
             // (idempotent — runStart also closes it on its paths).
             runCatching { currentClient?.close() }

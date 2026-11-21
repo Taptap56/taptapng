@@ -47,4 +47,22 @@ object RouteOnlyGate {
         if (!routeOnlyEnabled) return Decision.PROXY
         return if (knownHosts.containsKey(dstIp)) Decision.PROXY else Decision.REFUSE
     }
+
+    /**
+     * v1.0.15: sama seperti [decide], untuk tujuan IPv6. Kunci map
+     * adalah bentuk string alamat ([TcpPacket.IpAddr.toString],
+     * bentuk Java/InetAddress) — map IPv6 tidak punya kunci Int,
+     * jadi kunci 128-bit diwakili string itu, sama seperti
+     * [com.taptap.ng.service.TunForwarder.knownHosts6Snapshot].
+     * Semantik sama persis: tidak dikenal → REFUSE (RST), bukan
+     * dial proxy dan bukan dial direct.
+     */
+    fun decideV6(
+        routeOnlyEnabled: Boolean,
+        dstIpKey: String,
+        knownHosts6: Map<String, String>,
+    ): Decision {
+        if (!routeOnlyEnabled) return Decision.PROXY
+        return if (knownHosts6.containsKey(dstIpKey)) Decision.PROXY else Decision.REFUSE
+    }
 }

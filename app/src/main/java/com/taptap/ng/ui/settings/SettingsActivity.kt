@@ -601,7 +601,6 @@ class SettingsActivity : AppCompatActivity() {
                     ),
                     switchItem(
                         "enable_root_mode", R.string.set_root_mode_title, R.string.set_root_mode_sub,
-                        notSupportedM2 = true,
                         isOn = { store.enableRootMode },
                         onToggle = { store.enableRootMode = it },
                     ),

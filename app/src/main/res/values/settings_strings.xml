@@ -140,7 +140,7 @@
     <string name="set_mode_title">Mode</string>
     <string name="set_mode_sub">How traffic is captured (VPN mode only in M2)</string>
     <string name="set_root_mode_title">Enable root mode</string>
-    <string name="set_root_mode_sub">Run without the VPN service, using root instead</string>
+    <string name="set_root_mode_sub">Eksperimental (v1.0.15): tanpa izin VPN, pakai iptables + root (Magisk). Tethering ikut lewat VPN. Risiko: aturan nyangkut saat crash = internet mati — lihat README v1.0.15</string>
     <string name="set_lan_sharing_title">Share VPN with LAN / tethered devices</string>
     <string name="set_lan_sharing_sub">Let tethered devices use this VPN</string>
 </resources>

@@ -22,8 +22,9 @@ import java.net.InetAddress
  *   ([TcpPacket.parseIpv6Header] menolak Next Header 0/43/44/60)
  *   — lalu lintas aplikasi Android praktis tidak pernah membawa
  *   extension header; dukungan penuh butuh parser rantai header.
- * - Route-only masih IPv4 saja (gate memakai map Int); tujuan
- *   IPv6 selalu didial, tapi jawabannya dicatat di knownHosts6.
+ * - Route-only IPv6 SUDAH di-gate sejak v1.0.15
+ *   ([RouteOnlyGate.decideV6], map knownHosts6 berkunci string
+ *   128-bit); sebelumnya tujuan IPv6 selalu didial.
  * - Paket IPv6 di TUN SUDAH ditangani sejak v1.0.6 (M6):
  *   TCP (kunci 128-bit), UDP lewat proxy, dan ICMPv6 echo —
  *   lihat [TunForwarder.handlePacket6].

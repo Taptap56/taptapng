@@ -723,6 +723,10 @@ class MainActivity : AppCompatActivity() {
     private fun toggleRunning() {
         if (TaptapVpnService.isRunning) {
             stopVpn()
+        } else if (com.taptap.ng.data.SettingsStore(this).enableRootMode) {
+            // v1.0.15 (Root mode): tanpa TUN, izin VPN tidak
+            // diperlukan — langsung start, tanpa dialog izin.
+            startVpn()
         } else {
             val intent = VpnService.prepare(this)
             if (intent != null) {

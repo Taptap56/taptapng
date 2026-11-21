@@ -4,6 +4,23 @@ package com.taptap.ng.core
  * Root mode assessment (v1.0.5, kelompok F) — ASESMEN SAJA, tidak
  * diimplementasikan.
  *
+ * v1.0.15: DIIMPLEMENTASIKAN (eksperimental) — lihat
+ * [RootIptables], [RootTunnelController],
+ * [com.taptap.ng.service.RootForwarder],
+ * [com.taptap.ng.service.RootDnsRelay]. Verdict v1.0.5 di bawah tetap
+ * dibiarkan sebagai catatan sejarah; status per poin:
+ * - Eksekutor root + fallback: ADA (SuExecutor + NoRoot → VpnService).
+ * - Aturan iptables lengkap: ADA (generator murni RootIptables) —
+ *   dengan satu penyimpangan sadar: REDIRECT, bukan TPROXY, jadi
+ *   fwmark + ip rule TIDAK dipakai (tidak dibutuhkan REDIRECT).
+ * - Forwarder kedua: ADA (RootForwarder, listener lokal +
+ *   SO_ORIGINAL_DST; port tujuan dari listener 18080=80 / 18081=443).
+ * - DNS hijack: ADA (RootDnsRelay, UDP 53 → dialUdp lewat proxy).
+ * - Lifecycle/cleanup: ADA (stop + start + boot); risiko aturan
+ *   nyangkut tetap ada bila HP mati mendadak sebelum cleanup —
+ *   itu batasan yang didokumentasikan, bukan dijamin hilang.
+ * - SELinux/Android 12+: TETAP BATASAN (lihat README v1.0.15).
+ */
  * Root mode (v2rayNG: "Root mode" / mode root) = tunnel via iptables
  * sebagai pengganti VpnService: traffic dialihkan dengan aturan
  * iptables (REDIRECT/TPROXY + mark) ke proxy lokal, tanpa perlu izin
