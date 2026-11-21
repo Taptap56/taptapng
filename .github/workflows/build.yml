@@ -15,6 +15,7 @@ on:
   push:
     branches:
       - master
+      - v1014-from-109
 
 permissions:
   contents: read
@@ -111,5 +112,5 @@ jobs:
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
-        name: taptapng-v1.0.8-release
+        name: taptapng-v1.0.14-release
         path: ${{ github.workspace }}/app/build/outputs/apk/release/*.apk

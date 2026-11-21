@@ -14,7 +14,9 @@ import java.net.SocketTimeoutException
 import javax.net.ssl.SSLException
 
 /**
- * Shared transport ladder for VMess/VLESS/Trojan (M2): TCP → TLS → WS.
+ * Shared transport ladder for VMess/VLESS/Trojan (M2): TCP → TLS → WS
+ * (or HTTPUpgrade, v1.0.14 — same upgrade request, raw stream after
+ * the 101, no WS framing).
  *
  * Order matters and matches v2rayNG: plain TCP first, TLS wraps the TCP
  * socket when item.tls is set, then the WebSocket handshake runs over
@@ -328,9 +330,9 @@ object Transport {
         var input: InputStream = plain.getInputStream()
         var output: OutputStream = plain.getOutputStream()
         val network = item.network.ifBlank { "tcp" }.lowercase()
-        if (network != "tcp" && network != "ws") {
+        if (network != "tcp" && network != "ws" && network != "httpupgrade") {
             runCatching { socket.close() }
-            throw IllegalArgumentException("network $network belum didukung (hanya tcp/ws)")
+            throw IllegalArgumentException("network $network belum didukung (hanya tcp/ws/httpupgrade)")
         }
         try {
             if (item.tls) {
@@ -419,6 +421,24 @@ object Transport {
                     output = ws.output
                 } catch (e: Exception) {
                     throw IOException("WS gagal: ${e.message}", e)
+                }
+            } else if (network == "httpupgrade") {
+                // Tahap HTTPUpgrade (v1.0.14, Xray HTTPUpgrade): the
+                // request is the standard WS-style upgrade (same
+                // bytes as WsTransport), but after the 101 the stream
+                // stays RAW — no WS framing — and the protocol runs
+                // directly on it.
+                noteStage("HTTPUpgrade")
+                try {
+                    DialLog.log(
+                        "HTTPUpgrade",
+                        "HTTPUpgrade handshake -> Host: ${wsHost(item)}, Path: ${wsPath(item)}",
+                    )
+                    HttpUpgradeTransport.connect(timedIn, output, wsHost(item), wsPath(item))
+                    input = timedIn
+                    // output stays the raw output (no framing).
+                } catch (e: Exception) {
+                    throw IOException("HTTPUpgrade gagal: ${e.message}", e)
                 }
             } else {
                 input = timedIn
