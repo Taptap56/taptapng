@@ -2,6 +2,7 @@ package com.taptap.ng.proto
 
 import com.taptap.ng.core.Base64Util
 import com.taptap.ng.core.DialLog
+import com.taptap.ng.core.proto.Transport
 import com.taptap.ng.data.ConfigType
 import com.taptap.ng.data.ProfileItem
 import java.io.ByteArrayOutputStream
