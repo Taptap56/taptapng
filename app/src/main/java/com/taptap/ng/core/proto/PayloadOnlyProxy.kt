@@ -35,8 +35,13 @@ import java.io.OutputStream
  *   the chain early (the connection is upgraded; the rest would
  *   pollute the TLS stream).
  * - Validation mirrors [SshPayload.chooseFraming] with no framing
- *   detection (TLS follows, not SSH/WS framing): a WS-upgrade
- *   template needs a 101, a plain template needs a 1xx/2xx.
+ *   detection (TLS follows, not SSH/WS framing): the LAST response
+ *   must be a 101 or a 2xx (v1.0.12 — the phone test showed the
+ *   edge answering a GET upgrade with 200 OK instead of 101; a
+ *   2xx means the server answered, and only the TLS handshake
+ *   after it can tell whether the stream was forwarded raw. A
+ *   3xx/4xx/5xx still fails here). A plain template needs a
+ *   1xx/2xx (unchanged).
  *
  * Unlike [SshPayload], every read here is byte-by-byte on the
  * RAW stream — no BufferedInputStream. The TLS layer after this
@@ -86,8 +91,16 @@ object PayloadOnlyProxy {
         val lastStatus = statuses.lastOrNull() ?: ""
         // Validation — SshPayload.chooseFraming with framing UNKNOWN
         // (no peek here; TLS follows, not SSH/WS framing).
+        // v1.0.12: the last response may be a 101 OR a 2xx. The
+        // phone test (19:28) showed the edge answering a GET
+        // upgrade with 200 OK instead of 101 — a 2xx means the
+        // server answered, and only the TLS handshake after it can
+        // tell whether the stream was forwarded raw. A 3xx/4xx/5xx
+        // (e.g. 405: the server rejects that method/path) still
+        // fails here with the same clear message.
         if (wasWsUpgrade) {
-            if (SshPayload.statusCode(lastStatus) != "101") {
+            val code = SshPayload.statusCode(lastStatus)
+            if (code != "101" && !code.startsWith("2")) {
                 throw IOException("Payload saja: upgrade websocket ditolak: $lastStatus")
             }
         } else if (lastStatus.isNotEmpty()) {
@@ -95,6 +108,9 @@ object PayloadOnlyProxy {
             if (!code.startsWith("1") && !code.startsWith("2")) {
                 throw IOException("Payload saja: proxy menolak payload: $lastStatus")
             }
+        }
+        if (lastStatus.isNotEmpty()) {
+            DialLog.log("PROXY", "Payload saja: respons terakhir diterima: $lastStatus (lanjut TLS)")
         }
         return ChainResult(
             statuses = statuses,

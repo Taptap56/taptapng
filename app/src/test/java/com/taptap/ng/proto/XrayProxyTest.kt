@@ -363,6 +363,92 @@ class XrayProxyTest {
         assertEquals(null, peer.error, "server error: ${peer.error}")
     }
 
+    // v1.0.12: syarat respons terakhir dilonggarkan dari persis
+    // 101 menjadi 101 ATAU 2xx — tes HP 19:28: GET upgrade dijawab
+    // 200 OK (bukan 101), dan 200 itu harus lolos ke TLS. PATCH
+    // dinilai sama seperti GET: yang dihitung kode responsnya,
+    // bukan method-nya.
+
+    @Test
+    fun `payload-only ws template accepts 200 as last response (v1_0_12)`() {
+        val peer = PipePeer { input, output ->
+            val get = readBlock(input)
+            assertTrue(get.contains("Host: bug.example"), "GET: $get")
+            writeResponse(output, "HTTP/1.1 200 OK")
+            val patch = readBlock(input)
+            assertTrue(patch.contains("PATCH /vmess HTTP/1.1"), "PATCH: $patch")
+            writeResponse(output, "HTTP/1.1 200 OK")
+        }
+        peer.start()
+        try {
+            val result = PayloadOnlyProxy.sendPayload(peer.input, peer.output, splitBetweenTemplate)
+            // Satu blok → satu status: jawaban PATCH (200), bukan
+            // jawaban GET (200) — validasi memakai yang terakhir.
+            assertEquals(listOf("HTTP/1.1 200 OK"), result.statuses)
+            assertEquals("HTTP/1.1 200 OK", result.lastStatus)
+            assertTrue(result.wasWsUpgrade)
+        } finally {
+            peer.join()
+        }
+        assertEquals(null, peer.error, "server error: ${peer.error}")
+    }
+
+    @Test
+    fun `payload-only ws template still rejects 405 as last response (v1_0_12)`() {
+        // 405 tetap gagal: server menolak method/path itu — obatnya
+        // ganti path/host di template, bukan melonggarkan lagi.
+        val peer = PipePeer { input, output ->
+            readBlock(input) // GET
+            writeResponse(output, "HTTP/1.1 200 OK")
+            val patch = readBlock(input)
+            assertTrue(patch.contains("PATCH /vmess HTTP/1.1"), "PATCH: $patch")
+            writeResponse(output, "HTTP/1.1 405 Method Not Allowed")
+        }
+        peer.start()
+        try {
+            val e = assertThrows(IOException::class.java) {
+                PayloadOnlyProxy.sendPayload(peer.input, peer.output, splitBetweenTemplate)
+            }
+            assertTrue(e.message!!.contains("upgrade websocket ditolak"), "pesan: ${e.message}")
+            assertTrue(e.message!!.contains("405"), "pesan: ${e.message}")
+        } finally {
+            peer.join()
+        }
+        assertEquals(null, peer.error, "server error: ${peer.error}")
+    }
+
+    @Test
+    fun `payload-only get upgrade template accepts 200 as last response (v1_0_12)`() {
+        // Kasus HP 19:28 persis: GET bug dijawab 301, GET upgrade
+        // dijawab 200 OK — dua blok terpisah, 200 harus lolos.
+        val template =
+            "GET / HTTP/1.1\r\nHost: bug.example\r\n\r\n" +
+                "GET /vmess HTTP/1.1\r\nHost: h.example\r\nUpgrade: websocket\r\n" +
+                "Connection: Upgrade\r\n\r\n"
+        val peer = PipePeer { input, output ->
+            val get = readBlock(input)
+            assertTrue(get.contains("Host: bug.example"), "GET bug: $get")
+            writeResponse(output, "HTTP/1.1 301 Moved Permanently")
+            val upgrade = readBlock(input)
+            assertTrue(upgrade.contains("GET /vmess HTTP/1.1"), "upgrade: $upgrade")
+            assertTrue(upgrade.contains("Upgrade: websocket"), "upgrade: $upgrade")
+            writeResponse(output, "HTTP/1.1 200 OK")
+        }
+        peer.start()
+        try {
+            val result = PayloadOnlyProxy.sendPayload(peer.input, peer.output, template)
+            assertEquals(
+                listOf("HTTP/1.1 301 Moved Permanently", "HTTP/1.1 200 OK"),
+                result.statuses,
+            )
+            assertEquals("HTTP/1.1 200 OK", result.lastStatus)
+            assertTrue(result.wasWsUpgrade)
+        } finally {
+            peer.join()
+        }
+        assertEquals(null, peer.error, "server error: ${peer.error}")
+    }
+
     @Test
     fun `isHttpRequest accepts requests and rejects junk`() {
         assertTrue(PayloadOnlyProxy.isHttpRequest("PATCH /vmess HTTP/1.1\r\nHost: h\r\n\r\n"))
