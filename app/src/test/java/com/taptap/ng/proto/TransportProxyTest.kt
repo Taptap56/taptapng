@@ -84,6 +84,7 @@ class TransportProxyTest {
         configType: ConfigType = ConfigType.VMESS,
         address: String = "target.invalid",
         port: Int = 443,
+        path: String = "",
     ) = ProfileItem(
         configType = configType,
         address = address,
@@ -96,6 +97,7 @@ class TransportProxyTest {
         proxyPort = proxyPort,
         xrayUsePayload = xrayUsePayload,
         xrayPayload = xrayPayload,
+        path = path,
     )
 
     @Test
@@ -308,8 +310,10 @@ class TransportProxyTest {
         proxy.start()
         try {
             // Blank template + chip on -> the XVEON default template.
+            // Path /vmess like a real entry, so [path] expands to it.
             val item = vmessItem(
                 network = "ws", tls = false, proxyPort = proxy.port, xrayPayload = "",
+                path = "/vmess",
             )
             val stream = Transport.open(item)
             runCatching { stream.close() }

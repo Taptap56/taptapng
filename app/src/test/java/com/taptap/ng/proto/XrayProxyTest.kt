@@ -145,7 +145,7 @@ class XrayProxyTest {
     fun `parse proxy target rotates bug per call`() {
         XrayPayload.RotatePicker.reset()
         assertEquals("bug1" to 80, XrayPayload.parseProxyTarget("[rotate=bug1;bug2]", null))
-        assertEquals("bug2" to 80, XrayPayload.parseProxyTarget("[rotate=bug1;bug2]:8080", null))
+        assertEquals("bug2" to 8080, XrayPayload.parseProxyTarget("[rotate=bug1;bug2]:8080", null))
     }
 
     @Test
