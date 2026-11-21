@@ -205,7 +205,7 @@ class TunForwarderDnsPolicyTest {
 
     private fun replyAddresses(h: Harness, index: Int = 0): List<String> {
         val reply = udpPayload(h.collector.snapshot()[index])!!
-        return DnsResolver.parseAnswers(reply.payload, 0x1234).map { it.hostAddress }
+        return DnsResolver.parseAnswers(reply.payload, 0x1234).map { it.hostAddress ?: "" }
     }
 
     @Test

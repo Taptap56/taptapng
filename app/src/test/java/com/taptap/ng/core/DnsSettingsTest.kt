@@ -78,7 +78,7 @@ class DnsSettingsTest {
         )
         assertEquals("10.9.9.9", hosts["example.com"]?.hostAddress)
         assertEquals("192.0.2.1", hosts["sub.example.org"]?.hostAddress)
-        assertEquals("2001:db8::1", hosts["ipv6.example"]?.hostAddress)
+        assertEquals("2001:db8:0:0:0:0:0:1", hosts["ipv6.example"]?.hostAddress)
         assertEquals(3, hosts.size)
     }
 

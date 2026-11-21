@@ -216,7 +216,7 @@ class DnsResolverMethodTest {
             ),
         )!!
         assertEquals(
-            listOf("2001:db8::1"),
+            listOf("2001:db8:0:0:0:0:0:1"),
             DnsResolver.parseAnswers(resp6, 0x1234).map { it.hostAddress },
         )
     }

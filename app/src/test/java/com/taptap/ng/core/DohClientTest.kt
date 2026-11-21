@@ -95,7 +95,7 @@ class DohClientTest {
         val stub = StubExchange(answerIp = "2001:db8::1")
         val client = DohClient(dohUrl, stub)
         val addrs = client.query("example.com", DnsResolver.TYPE_AAAA)
-        assertEquals(listOf("2001:db8::1"), addrs.map { it.hostAddress })
+        assertEquals(listOf("2001:db8:0:0:0:0:0:1"), addrs.map { it.hostAddress })
         assertEquals(DnsResolver.TYPE_AAAA, DnsResolver.parseQuery(stub.lastQuery!!)?.qtype)
     }
 
