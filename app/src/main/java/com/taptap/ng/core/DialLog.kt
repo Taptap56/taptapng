@@ -43,11 +43,11 @@ object DialLog {
      * The UNCONFIGURED default is DEBUG (show everything): the
      * v1.0.4 behaviour and the XVEON-parity log sequence are
      * unchanged until the stored setting is applied (TaptapNGApp
-     * applies it at startup, Settings applies it on change). Note
-     * the stored default is "warning", so a fresh install that
-     * applies it filters the INFO dial lines — that is what the
-     * setting means in v2rayNG, and the user can pick "info" or
-     * "debug" in Settings > Core to get them back.
+     * applies it at startup, Settings applies it on change). The
+     * stored default is "info" (v1.0.5 integration — NOT v2rayNG's
+     * "warning", which would hide every INFO dial line by default),
+     * so a fresh install keeps the full dial log; the user can pick
+     * "warning" or "error" in Settings > Core to narrow it.
      */
     enum class Level { DEBUG, INFO, WARNING, ERROR, NONE }
 

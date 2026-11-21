@@ -30,9 +30,13 @@ import com.taptap.ng.data.SettingsStore
  * their stored value.
  *
  * No Compose, no new libraries. Values are stored in
- * [SettingsStore] ("taptapng_settings"); Mux / Fragment / Observatory
- * / Hev TUN values are stored only and labelled "belum didukung di
- * M2" — M2 has no xray-core to apply them to.
+ * [SettingsStore] ("taptapng_settings"). Since v1.0.5 the Mux
+ * (TCP), Fragment, Observatory, Remote DNS and LAN-sharing values
+ * ARE applied in-app and no longer carry the "belum didukung di
+ * M2" badge; only the Mux XUDP pair, the Hev TUN rows (hidden
+ * outright — no native lib is bundled) and root mode stay
+ * stored-only / labelled, because M2 has no UDP path, no Hev
+ * library and no iptables tunnel to apply them to.
  */
 class SettingsActivity : AppCompatActivity() {
 
@@ -389,7 +393,6 @@ class SettingsActivity : AppCompatActivity() {
                         // label "Not supported yet" seperti setting
                         // core lain yang hanya tersimpan, bukan
                         // disembunyikan (nilainya tetap bisa diedit).
-                        notSupportedM2 = true,
                         rawValue = { store.remoteDns },
                         displayValue = {
                             SettingsStore.displayOrDefault(store.remoteDns, SettingsStore.DISPLAY_REMOTE_DNS)
@@ -436,14 +439,12 @@ class SettingsActivity : AppCompatActivity() {
                 listOf(
                     switchItem(
                         "mux_enabled", R.string.set_mux_title, R.string.set_mux_sub,
-                        notSupportedM2 = true,
                         isOn = { store.muxEnabled },
                         onToggle = { store.muxEnabled = it },
                     ),
                     textItem(
                         "mux_concurrency", R.string.set_mux_conn_title, R.string.set_mux_conn_sub,
                         enabled = { store.muxEnabled },
-                        notSupportedM2 = true,
                         inputType = InputType.TYPE_CLASS_NUMBER,
                         rawValue = { store.muxConcurrency },
                         displayValue = { store.muxConcurrency },
@@ -473,14 +474,12 @@ class SettingsActivity : AppCompatActivity() {
                 listOf(
                     switchItem(
                         "fragment_enabled", R.string.set_fragment_title, R.string.set_fragment_sub,
-                        notSupportedM2 = true,
                         isOn = { store.fragmentEnabled },
                         onToggle = { store.fragmentEnabled = it },
                     ),
                     textItem(
                         "fragment_packets", R.string.set_fragment_packets_title, R.string.set_fragment_packets_sub,
                         enabled = { store.fragmentEnabled },
-                        notSupportedM2 = true,
                         rawValue = { store.fragmentPackets },
                         displayValue = { store.fragmentPackets },
                         onSave = { store.fragmentPackets = it },
@@ -488,7 +487,6 @@ class SettingsActivity : AppCompatActivity() {
                     textItem(
                         "fragment_length", R.string.set_fragment_length_title, R.string.set_fragment_length_sub,
                         enabled = { store.fragmentEnabled },
-                        notSupportedM2 = true,
                         rawValue = { store.fragmentLength },
                         displayValue = { store.fragmentLength },
                         onSave = { store.fragmentLength = it },
@@ -496,7 +494,6 @@ class SettingsActivity : AppCompatActivity() {
                     textItem(
                         "fragment_interval", R.string.set_fragment_interval_title, R.string.set_fragment_interval_sub,
                         enabled = { store.fragmentEnabled },
-                        notSupportedM2 = true,
                         rawValue = { store.fragmentInterval },
                         displayValue = { store.fragmentInterval },
                         onSave = { store.fragmentInterval = it },
@@ -504,7 +501,6 @@ class SettingsActivity : AppCompatActivity() {
                     textItem(
                         "fragment_max_split", R.string.set_fragment_split_title, R.string.set_fragment_split_sub,
                         enabled = { store.fragmentEnabled },
-                        notSupportedM2 = true,
                         inputType = InputType.TYPE_CLASS_NUMBER,
                         rawValue = { store.fragmentMaxSplit },
                         displayValue = { store.fragmentMaxSplit },
@@ -517,28 +513,24 @@ class SettingsActivity : AppCompatActivity() {
                 listOf(
                     textItem(
                         "observatory_least_ping", R.string.set_obs_ping_title, R.string.set_obs_ping_sub,
-                        notSupportedM2 = true,
                         rawValue = { store.observatoryLeastPing },
                         displayValue = { store.observatoryLeastPing },
                         onSave = { store.observatoryLeastPing = it },
                     ),
                     textItem(
                         "observatory_least_load", R.string.set_obs_load_title, R.string.set_obs_load_sub,
-                        notSupportedM2 = true,
                         rawValue = { store.observatoryLeastLoad },
                         displayValue = { store.observatoryLeastLoad },
                         onSave = { store.observatoryLeastLoad = it },
                     ),
                     textItem(
                         "observatory_least_load_method", R.string.set_obs_method_title, R.string.set_obs_method_sub,
-                        notSupportedM2 = true,
                         rawValue = { store.observatoryLeastLoadMethod },
                         displayValue = { store.observatoryLeastLoadMethod },
                         onSave = { store.observatoryLeastLoadMethod = it },
                     ),
                     textItem(
                         "observatory_least_load_sampling", R.string.set_obs_sampling_title, R.string.set_obs_sampling_sub,
-                        notSupportedM2 = true,
                         inputType = InputType.TYPE_CLASS_NUMBER,
                         rawValue = { store.observatoryLeastLoadSampling },
                         displayValue = { store.observatoryLeastLoadSampling },
@@ -546,7 +538,6 @@ class SettingsActivity : AppCompatActivity() {
                     ),
                     textItem(
                         "observatory_least_load_timeout", R.string.set_obs_timeout_title, R.string.set_obs_timeout_sub,
-                        notSupportedM2 = true,
                         rawValue = { store.observatoryLeastLoadTimeout },
                         displayValue = { store.observatoryLeastLoadTimeout },
                         onSave = { store.observatoryLeastLoadTimeout = it },
@@ -616,7 +607,6 @@ class SettingsActivity : AppCompatActivity() {
                     ),
                     switchItem(
                         "lan_sharing", R.string.set_lan_sharing_title, R.string.set_lan_sharing_sub,
-                        notSupportedM2 = true,
                         isOn = { store.lanSharing },
                         onToggle = { store.lanSharing = it },
                     ),

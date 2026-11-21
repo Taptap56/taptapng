@@ -59,7 +59,7 @@ class SettingsDefaultsTest {
         assertEquals("", SettingsStore.DEFAULT_REMOTE_DNS)
         assertEquals("", SettingsStore.DEFAULT_DOMESTIC_DNS)
         assertEquals("", SettingsStore.DEFAULT_DNS_HOSTS)
-        assertEquals("warning", SettingsStore.DEFAULT_LOG_LEVEL)
+        assertEquals("info", SettingsStore.DEFAULT_LOG_LEVEL)
         assertEquals("1", SettingsStore.DEFAULT_OUTBOUND_RESOLVE_METHOD)
     }
 

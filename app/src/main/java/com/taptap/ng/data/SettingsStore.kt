@@ -358,7 +358,15 @@ class SettingsStore(context: Context) {
         const val DEFAULT_REMOTE_DNS = ""
         const val DEFAULT_DOMESTIC_DNS = ""
         const val DEFAULT_DNS_HOSTS = ""
-        const val DEFAULT_LOG_LEVEL = "warning"
+        /**
+         * v1.0.5 (integrasi): default "info", BUKAN "warning" v2rayNG.
+         * "warning" akan menyaring semua baris INFO (dial/START/PROBE/
+         * DNS) begitu setting diterapkan saat startup — log konek
+         * ala XVEON hilang secara default. Log TaptapNG IS the dial
+         * log, jadi "info" adalah default yang benar di sini; user
+         * tetap bisa memilih "warning"/"error" di Settings > Core.
+         */
+        const val DEFAULT_LOG_LEVEL = "info"
         const val DEFAULT_OUTBOUND_RESOLVE_METHOD = "1"
         const val DEFAULT_MUX_ENABLED = false
         const val DEFAULT_MUX_CONCURRENCY = "8"

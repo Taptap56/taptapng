@@ -82,6 +82,20 @@ object DnsResolver {
     var resolveMethod: OutboundResolveMethod = OutboundResolveMethod.OPERATOR_FIRST
 
     /**
+     * Utamakan IPv6 saat memilih alamat dial (v1.0.5, integrasi —
+     * setting preferIpv6; helper [Ipv6Support.orderAddresses]).
+     * Diterapkan di [resolveAll] (semua jalur, termasuk cache):
+     * false = IPv4 dulu (default v1.0.4 / v2rayNG, stabil — daftar
+     * yang sudah IPv4-dulu tidak berubah), true = IPv6 dulu.
+     * Sort stabil per keluarga, jadi offset rotasi TLS
+     * ([rotateAfterTlsFailure]) tetap menunjuk alamat yang sama.
+     * Dipasang service dari Settings tiap tunnel naik; reset di
+     * teardown.
+     */
+    @Volatile
+    var preferIpv6: Boolean = false
+
+    /**
      * Hook resolver sistem untuk tes (v1.0.5): (host, timeoutMs) ->
      * alamat. Null = [systemResolveAll] asli. Pola yang sama dengan
      * [operatorResolve] — produksi tidak pernah memasangnya.
@@ -286,14 +300,14 @@ object DnsResolver {
         val now = System.currentTimeMillis()
         val cached = addrCache[key]
         if (cached != null && now - cached.atMs < addrCacheTtlMs) {
-            return cached.addrs
+            return Ipv6Support.orderAddresses(cached.addrs, preferIpv6)
         }
         try {
             val fresh = resolveAllUncached(host, clean, port, timeoutMs)
             addrCache[key] = CachedAddr(fresh, now)
-            return fresh
+            return Ipv6Support.orderAddresses(fresh, preferIpv6)
         } catch (e: IOException) {
-            if (cached != null) return cached.addrs
+            if (cached != null) return Ipv6Support.orderAddresses(cached.addrs, preferIpv6)
             throw e
         }
     }

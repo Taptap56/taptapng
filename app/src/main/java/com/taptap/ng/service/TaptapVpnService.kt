@@ -458,6 +458,7 @@ class TaptapVpnService : VpnService() {
         // operator-first seperti v1.0.4.
         DnsResolver.resolveMethod = dnsSettings.resolveMethod()
         DnsResolver.staticHosts = dnsSettings.staticHosts()
+        DnsResolver.preferIpv6 = settings.preferIpv6
         // FakeDNS hidup hanya bila local + fake sama-sama ON (kunci
         // UI yang sama); bila fake tersimpan ON tapi local OFF,
         // catat sekali supaya tidak diam-diam mati.
@@ -793,6 +794,7 @@ class TaptapVpnService : VpnService() {
         // berikutnya (default = tanpa pemetaan + operator-first).
         DnsResolver.staticHosts = emptyMap()
         DnsResolver.resolveMethod = OutboundResolveMethod.OPERATOR_FIRST
+        DnsResolver.preferIpv6 = false
     }
 
     private fun stopTunnel() {

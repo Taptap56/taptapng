@@ -23,14 +23,13 @@ import java.net.InetAddress
  *   butuh kunci 128-bit, parser header IPv6, TCP/UDP/ICMPv6 di atas
  *   IPv6, dan penanganan MTU/extension header — itu skala M6 (full
  *   tunnel), bukan v1.0.5.
- * - [preferIpv6] BELUM tersambung ke jalur dial: dial utama memilih
- *   alamat di Transport.kt / DnsResolver.kt (resolveWithSystemFallback
- *   → urutan IPv4 dulu), dan kedua file itu di luar kelompok F di
- *   v1.0.5 — helper di file ini ([orderAddresses], [resolveOrdered])
- *   sudah siap dipakai kelompok pemilik file tersebut; menyisipkannya
- *   ke Transport dari sini akan menyentuh file kelompok lain.
- *   Konsekuensinya: preferIpv6=true saat ini tidak mengubah alamat
- *   yang didial; DnsResolver tetap mengembalikan IPv4 dulu.
+ * - [preferIpv6] TERSAMBUNG di v1.0.5 (integrasi): [DnsResolver]
+ *   mengurutkan hasil [DnsResolver.resolveAll] lewat
+ *   [orderAddresses] — false = IPv4 dulu (default v1.0.4),
+ *   true = IPv6 dulu. Berlaku untuk dial utama, prime, dan
+ *   delay test (semuanya lewat resolveAll). Paket IPv6 di TUN
+ *   tetap di-drop (di bawah), jadi preferensi ini hanya soal
+ *   alamat dial proxy, bukan lalu lintas aplikasi.
  */
 object Ipv6Support {
 
