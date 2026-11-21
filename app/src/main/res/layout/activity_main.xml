@@ -86,6 +86,21 @@
                 android:textAppearance="?attr/textAppearanceBodyMedium"
                 android:textColor="?attr/colorOnSurface"
                 android:textSize="15sp" />
+
+            <!-- Live download rate (v1.0.5, group A): shown only
+                 while Settings "Enable speed display" is on; the
+                 value comes from the latest SPEED line in DialLog. -->
+            <TextView
+                android:id="@+id/speed_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:paddingEnd="88dp"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="13sp"
+                android:visibility="gone" />
         </LinearLayout>
 
         <com.google.android.material.floatingactionbutton.FloatingActionButton

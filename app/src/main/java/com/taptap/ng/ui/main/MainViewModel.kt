@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.taptap.ng.core.IpLookup
 import com.taptap.ng.core.LinkParser
 import com.taptap.ng.core.ServerTester
 import com.taptap.ng.data.ProfileItem
@@ -55,6 +56,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _statusText = MutableStateFlow("")
     val statusText: StateFlow<String> = _statusText.asStateFlow()
 
+    /**
+     * One-shot "Cek IP" result (v1.0.5, group A): the public IP
+     * looked up through Settings ipApiUrl, or an error line. The
+     * activity toasts it, then calls [consumeIpResult]. It never
+     * touches [statusText] — the status bar is the CONNECTION
+     * state (v1.0.9).
+     */
+    private val _ipResult = MutableStateFlow<String?>(null)
+    val ipResult: StateFlow<String?> = _ipResult.asStateFlow()
+
     /** guid -> delay ms (-1 = failed). */
     private val _delays = MutableStateFlow<Map<String, Long>>(emptyMap())
     val delays: StateFlow<Map<String, Long>> = _delays.asStateFlow()
@@ -92,7 +103,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         store.load()
         _profiles.value = store.profiles.toList()
         _groups.value = store.groups()
-        if (_selectedGroup.value !in _groups.value) {
+        // The All-tab sentinel is not a real group, but it stays a
+        // valid selection while groupAllDisplay is on.
+        if (_selectedGroup.value !in _groups.value &&
+            !(_selectedGroup.value == GROUP_ALL_ID && settings.groupAllDisplay)
+        ) {
             _selectedGroup.value = _groups.value.firstOrNull() ?: ""
         }
         refreshVisible()
@@ -109,12 +124,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun refreshVisible() {
-        val q = _searchQuery.value.trim().lowercase()
-        _visibleProfiles.value = _profiles.value.filter { item ->
-            (item.group == _selectedGroup.value) &&
-                (q.isEmpty() || item.displayName().lowercase().contains(q) ||
-                    item.address.lowercase().contains(q))
-        }
+        _visibleProfiles.value = filterVisibleProfiles(
+            _profiles.value, _selectedGroup.value, settings.groupAllDisplay, _searchQuery.value,
+        )
     }
 
     fun select(guid: String) {
@@ -335,10 +347,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _statusText.value = status
     }
 
+    /**
+     * Look the public IP up through the configured IP API URL
+     * (blank = https://api.ip.sb/geoip). Runs off the main thread;
+     * the result lands in [ipResult] for the activity to toast.
+     */
+    fun checkIp() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _ipResult.value = runCatching { IpLookup.fetchIp(settings.ipApiUrl) }
+                .fold(
+                    onSuccess = { "IP: $it" },
+                    onFailure = { "Cek IP gagal: ${it.message}" },
+                )
+        }
+    }
+
+    /** Clear [ipResult] after the activity has shown it. */
+    fun consumeIpResult() {
+        _ipResult.value = null
+    }
+
     private fun afterStoreChange() {
         _profiles.value = store.profiles.toList()
         _groups.value = store.groups()
-        if (_selectedGroup.value !in _groups.value) {
+        // The All-tab sentinel is not a real group, but it stays a
+        // valid selection while groupAllDisplay is on.
+        if (_selectedGroup.value !in _groups.value &&
+            !(_selectedGroup.value == GROUP_ALL_ID && settings.groupAllDisplay)
+        ) {
             _selectedGroup.value = _groups.value.firstOrNull() ?: ""
         }
         refreshVisible()
@@ -355,6 +391,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
  */
 fun shouldRestartOnSelect(isRunning: Boolean, currentGuid: String?, newGuid: String): Boolean =
     isRunning && newGuid != currentGuid
+
+/**
+ * Sentinel "group" for the All tab (v1.0.5, group A — v2rayNG
+ * "Show an All group tab"): selecting it shows every server
+ * regardless of group. It is never a real ProfileItem.group (a
+ * user-typed group with this exact name would collide — accepted,
+ * it is not a name anyone types). Only honoured while
+ * [groupAllDisplay] is on; with the setting off the tab does not
+ * exist and the sentinel selects nothing.
+ */
+const val GROUP_ALL_ID = "__all__"
+
+/**
+ * Which profiles the list shows (v1.0.5, group A): the selected
+ * group, or ALL groups when the All tab is selected while
+ * [groupAllDisplay] is on — plus the search filter either way.
+ * Pure, so it is unit testable without an Application.
+ */
+fun filterVisibleProfiles(
+    profiles: List<ProfileItem>,
+    selectedGroup: String,
+    groupAllDisplay: Boolean,
+    query: String,
+): List<ProfileItem> {
+    val q = query.trim().lowercase()
+    val showAll = groupAllDisplay && selectedGroup == GROUP_ALL_ID
+    return profiles.filter { item ->
+        (showAll || item.group == selectedGroup) &&
+            (q.isEmpty() || item.displayName().lowercase().contains(q) ||
+                item.address.lowercase().contains(q))
+    }
+}
 
 /**
  * Drag-reorder dalam satu grup (v1.0.28 — v2rayNG moveServer):

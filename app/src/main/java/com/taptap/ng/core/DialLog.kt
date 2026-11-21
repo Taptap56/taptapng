@@ -31,6 +31,44 @@ import java.util.Locale
 object DialLog {
 
     const val TAG = "TaptapNG-Dial"
+
+    /**
+     * Log verbosity (v1.0.5, group A): maps [SettingsStore.coreLogLevel]
+     * ("debug" / "info" / "warning" / "error") onto the ring buffer +
+     * logcat. Plain [log] lines are INFO, [failure] lines are ERROR,
+     * [debug] lines are DEBUG. A line is kept only when its level is
+     * at or above [minLevel]; "none" keeps nothing, and any unknown
+     * value falls back to DEBUG (show everything) — see [levelFor].
+     *
+     * The UNCONFIGURED default is DEBUG (show everything): the
+     * v1.0.4 behaviour and the XVEON-parity log sequence are
+     * unchanged until the stored setting is applied (TaptapNGApp
+     * applies it at startup, Settings applies it on change). Note
+     * the stored default is "warning", so a fresh install that
+     * applies it filters the INFO dial lines — that is what the
+     * setting means in v2rayNG, and the user can pick "info" or
+     * "debug" in Settings > Core to get them back.
+     */
+    enum class Level { DEBUG, INFO, WARNING, ERROR, NONE }
+
+    /** Lowest level kept. Volatile: set on the main thread, read on dial threads. */
+    @Volatile
+    var minLevel: Level = Level.DEBUG
+
+    /** Parse a stored coreLogLevel value ("debug"/"info"/"warning"/"error"/"none"). */
+    fun levelFor(value: String): Level = when (value.trim().lowercase()) {
+        "debug" -> Level.DEBUG
+        "info" -> Level.INFO
+        "warning", "warn" -> Level.WARNING
+        "error" -> Level.ERROR
+        "none" -> Level.NONE
+        else -> Level.DEBUG
+    }
+
+    /** Apply a stored coreLogLevel value to [minLevel]. */
+    fun applyLevel(value: String) {
+        minLevel = levelFor(value)
+    }
     /**
      * Ring buffer size. v1.0.10: 500, up from 200 — the forwarder
      * log now flows like v2rayNG's (a line per connection/DNS
@@ -63,12 +101,19 @@ object DialLog {
      * "PRIME OK ..."), and [failure] still renders the stage as
      * the failure label ("TLS GAGAL: ...") — see below.
      */
-    fun log(stage: String, message: String) {
+    fun log(stage: String, message: String) = log(stage, message, Level.INFO)
+
+    /** Verbose line, kept only at level debug. */
+    fun debug(stage: String, message: String) = log(stage, message, Level.DEBUG)
+
+    fun log(stage: String, message: String, level: Level) {
+        if (level < minLevel || level == Level.NONE) return
         // The stage is deliberately NOT rendered (see KDoc above).
         add(message)
     }
 
     fun failure(stage: String, e: Throwable) {
+        if (Level.ERROR < minLevel) return
         add("$stage GAGAL: ${safeFailure(e)}")
     }
 

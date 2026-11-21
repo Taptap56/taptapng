@@ -23,6 +23,8 @@ class TaptapNGApp : Application() {
         // as well as to the in-app ring buffer.
         DialLog.logcatSink = { tag, msg -> Log.d(tag, msg) }
         val settings = SettingsStore(this)
+        // v1.0.5, group A: core log level gates DialLog verbosity.
+        DialLog.applyLevel(settings.coreLogLevel)
         settings.applyThemeMode()
         if (settings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             DynamicColors.applyToActivitiesIfAvailable(this)

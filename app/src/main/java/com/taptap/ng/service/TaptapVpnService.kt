@@ -412,7 +412,19 @@ class TaptapVpnService : VpnService() {
         val builder = Builder()
             .setSession("TaptapNG")
             .addAddress(tunIpv4ClientAddress(settings.vpnInterfaceAddress), 30)
-            .addRoute("0.0.0.0", 0)
+            .apply {
+                // v1.0.5, group A (v2rayNG "Bypass LAN", stored "1" =
+                // default): when on, the TUN gets the public-space
+                // routes only — LAN traffic never enters the tunnel
+                // and goes out the physical interface. When off, the
+                // single catch-all route (v1.0.4 behaviour).
+                for (route in LanBypass.tunnelRoutes(settings.vpnBypassLan)) {
+                    addRoute(route.address, route.prefixLength)
+                }
+                if (LanBypass.bypassEnabled(settings.vpnBypassLan)) {
+                    DialLog.log("VPN", "Bypass LAN aktif — rute LAN tidak lewat tunnel")
+                }
+            }
             .apply {
                 if (settings.ipv6Enabled) addRoute("::", 0)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)

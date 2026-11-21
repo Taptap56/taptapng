@@ -157,4 +157,119 @@ class DialLogTest {
             DialLog.clear()
         }
     }
+
+    // ---- coreLogLevel mapping (v1.0.5, group A) ----
+
+    @Test
+    fun `levelFor parses the stored core log level values`() {
+        assertEquals(DialLog.Level.DEBUG, DialLog.levelFor("debug"))
+        assertEquals(DialLog.Level.INFO, DialLog.levelFor("info"))
+        assertEquals(DialLog.Level.WARNING, DialLog.levelFor("warning"))
+        assertEquals(DialLog.Level.WARNING, DialLog.levelFor("warn"))
+        assertEquals(DialLog.Level.ERROR, DialLog.levelFor("error"))
+        assertEquals(DialLog.Level.NONE, DialLog.levelFor("none"))
+        // Unknown / blank falls back to debug (show everything),
+        // never to silent.
+        assertEquals(DialLog.Level.DEBUG, DialLog.levelFor("bogus"))
+        assertEquals(DialLog.Level.DEBUG, DialLog.levelFor(""))
+    }
+
+    @Test
+    fun `debug level keeps every line`() {
+        DialLog.clear()
+        DialLog.applyLevel("debug")
+        try {
+            DialLog.debug("TEST", "verbose detail")
+            DialLog.log("TEST", "normal line")
+            DialLog.failure("TEST", IllegalStateException("boom"))
+            assertEquals(3, DialLog.lines().size)
+        } finally {
+            DialLog.minLevel = DialLog.Level.DEBUG
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `info level drops debug lines but keeps info and failures`() {
+        DialLog.clear()
+        DialLog.applyLevel("info")
+        try {
+            DialLog.debug("TEST", "verbose detail")
+            DialLog.log("TEST", "normal line")
+            DialLog.failure("TEST", IllegalStateException("boom"))
+            val lines = DialLog.lines()
+            assertEquals(2, lines.size)
+            assertTrue(lines[0].contains("normal line"), lines[0])
+            assertTrue(lines[1].contains("boom"), lines[1])
+        } finally {
+            DialLog.minLevel = DialLog.Level.DEBUG
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `warning level keeps only failures`() {
+        DialLog.clear()
+        DialLog.applyLevel("warning")
+        try {
+            DialLog.debug("TEST", "verbose detail")
+            DialLog.log("TEST", "normal line")
+            DialLog.failure("TEST", IllegalStateException("boom"))
+            val lines = DialLog.lines()
+            assertEquals(1, lines.size)
+            assertTrue(lines[0].contains("boom"), lines[0])
+        } finally {
+            DialLog.minLevel = DialLog.Level.DEBUG
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `error level keeps only failures`() {
+        DialLog.clear()
+        DialLog.applyLevel("error")
+        try {
+            DialLog.log("TEST", "normal line")
+            DialLog.failure("TEST", IllegalStateException("boom"))
+            val lines = DialLog.lines()
+            assertEquals(1, lines.size)
+            assertTrue(lines[0].contains("boom"), lines[0])
+        } finally {
+            DialLog.minLevel = DialLog.Level.DEBUG
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `none level keeps nothing`() {
+        DialLog.clear()
+        DialLog.applyLevel("none")
+        try {
+            DialLog.debug("TEST", "verbose detail")
+            DialLog.log("TEST", "normal line")
+            DialLog.failure("TEST", IllegalStateException("boom"))
+            assertEquals(0, DialLog.lines().size)
+        } finally {
+            DialLog.minLevel = DialLog.Level.DEBUG
+            DialLog.clear()
+        }
+    }
+
+    @Test
+    fun `level filter applies to the logcat sink too`() {
+        DialLog.clear()
+        val seen = mutableListOf<String>()
+        DialLog.logcatSink = { _, msg -> seen.add(msg) }
+        DialLog.applyLevel("error")
+        try {
+            DialLog.log("TEST", "normal line")
+            DialLog.failure("TEST", IllegalStateException("boom"))
+            assertEquals(1, seen.size)
+            assertTrue(seen[0].contains("boom"), seen[0])
+        } finally {
+            DialLog.logcatSink = null
+            DialLog.minLevel = DialLog.Level.DEBUG
+            DialLog.clear()
+        }
+    }
 }

@@ -48,7 +48,7 @@
     <string name="set_append_http_proxy_title">Add HTTP proxy to VPN</string>
     <string name="set_append_http_proxy_sub">Also route the HTTP proxy through the VPN</string>
     <string name="set_bypass_lan_title">Bypass LAN in VPN mode</string>
-    <string name="set_bypass_lan_sub">Skip the VPN for LAN addresses</string>
+    <string name="set_bypass_lan_sub">Skip the VPN for LAN addresses (Bypass mainland China tidak didukung di M2 — pilih itu sama dengan Off)</string>
     <string name="set_interface_address_title">VPN interface address</string>
     <string name="set_interface_address_sub">0 = 10.10.14.x</string>
     <string name="set_mtu_title">VPN MTU</string>

@@ -33,6 +33,7 @@
     <string name="status_running">Running</string>
     <string name="status_stopped">Stopped</string>
     <string name="empty_servers">No servers yet. Tap + to add one.</string>
+    <string name="group_all_tab">All</string>
 
     <!-- Import menu (v2rayNG labels). -->
     <string name="import_qrcode">Import from QR code</string>
@@ -107,6 +108,7 @@
     <string name="field_pemicu_port">Port pemicu (kosong = 443)</string>
     <string name="field_pemicu_interval">Interval pemicu (detik)</string>
     <string name="more_prime_now">Prime sekarang</string>
+    <string name="more_check_ip">Cek IP</string>
     <string name="toast_pemicu_required">Domain pemicu wajib diisi saat chip Pemicu nyala</string>
     <string name="toast_prime_no_domain">Entry ini tidak punya Domain pemicu — isi dulu di editor</string>
     <string name="toast_prime_sent">Prime dikirim — lihat Log untuk hasilnya</string>

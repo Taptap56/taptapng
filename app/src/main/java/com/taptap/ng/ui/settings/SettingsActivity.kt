@@ -18,6 +18,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.taptap.ng.R
 import com.taptap.ng.TaptapNGApp
+import com.taptap.ng.core.DialLog
 import com.taptap.ng.data.SettingsStore
 
 /**
@@ -297,7 +298,18 @@ class SettingsActivity : AppCompatActivity() {
                         hint = SettingsStore.DISPLAY_HEV_TUN_RW_TIMEOUT,
                         onSave = { store.hevTunRwTimeout = it },
                     ),
-                ),
+                    // NOTE (v1.0.5, group A): the three Hev TUN rows
+                    // above are REMOVED from the list by the
+                    // HIDDEN_SETTING_KEYS filter below — Hev TUN
+                    // cannot run in TaptapNG (it needs the native
+                    // hev-socks5-tunnel library, and this app ships
+                    // no .so on purpose). The values stay stored in
+                    // SettingsStore (defaults unchanged) so an old
+                    // install keeps its data; they are only hidden
+                    // from the UI. The items stay declared here so
+                    // the removal is one visible filter, not a
+                    // silent deletion of the declarations.
+                ).filter { it.key !in HIDDEN_SETTING_KEYS },
             ),
             Section(
                 "core", R.string.set_section_core,
@@ -406,6 +418,9 @@ class SettingsActivity : AppCompatActivity() {
                         valuesRes = R.array.core_loglevel_values,
                         current = { store.coreLogLevel },
                         onSave = { store.coreLogLevel = it },
+                        // v1.0.5, group A: the level applies at once —
+                        // no restart needed for DialLog verbosity.
+                        afterChange = { DialLog.applyLevel(store.coreLogLevel) },
                     ),
                     textItem(
                         "outbound_resolve_method", R.string.set_resolve_title, R.string.set_resolve_sub,
@@ -837,6 +852,21 @@ class SettingsActivity : AppCompatActivity() {
 
     companion object {
         private const val KEY_EXPANDED = "expanded_sections"
+
+        /**
+         * Hev TUN settings are HIDDEN from the Settings UI (v1.0.5,
+         * group A): Hev TUN cannot run in TaptapNG — it needs the
+         * native hev-socks5-tunnel library, and this app ships no
+         * .so on purpose. The values stay stored (defaults
+         * unchanged); only the rows are hidden. [visibleSettingKeys]
+         * is the filter buildSections applies; unit-tested in
+         * HevTunHiddenTest.
+         */
+        val HIDDEN_SETTING_KEYS: Set<String> =
+            setOf("use_hev_tun", "hev_tun_log_level", "hev_tun_rw_timeout")
+
+        internal fun visibleSettingKeys(keys: List<String>): List<String> =
+            keys.filter { it !in HIDDEN_SETTING_KEYS }
 
         /** Sections expanded on first open, matching v2rayNG. */
         private val DEFAULT_EXPANDED = setOf("ui", "vpn", "core", "advanced", "mode")

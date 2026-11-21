@@ -42,6 +42,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.taptap.ng.AppConfig
 import com.taptap.ng.R
 import com.taptap.ng.TaptapNGApp
+import com.taptap.ng.core.DialLog
 import com.taptap.ng.core.LinkParser
 import com.taptap.ng.core.PemicuManager
 import com.taptap.ng.data.ConfigType
@@ -49,8 +50,10 @@ import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.data.SettingsStore
 import com.taptap.ng.service.TaptapVpnService
 import com.taptap.ng.ui.log.LogActivity
+import com.taptap.ng.ui.main.GROUP_ALL_ID
 import com.taptap.ng.ui.main.MainViewModel
 import com.taptap.ng.ui.main.ServerAdapter
+import com.taptap.ng.ui.main.SpeedDisplay
 import com.taptap.ng.ui.main.buildExportClipboardText
 import com.taptap.ng.ui.main.shouldRestartOnSelect
 import com.taptap.ng.ui.scanner.ScannerActivity
@@ -235,7 +238,11 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.reload()
+        // The groupAllDisplay setting may have changed in Settings —
+        // rebuild the tabs (the All tab appears / disappears).
+        rebuildTabs(viewModel.groups.value)
         syncServiceState()
+        updateSpeedDisplay()
         if (lastDoubleColumn != settings.doubleColumnDisplay) applyLayoutManager()
     }
 
@@ -248,6 +255,27 @@ class MainActivity : AppCompatActivity() {
             else getString(R.string.status_stopped)
         }
         viewModel.setRunning(running, status)
+    }
+
+    /**
+     * v1.0.5, group A (v2rayNG "Enable speed display"): the small
+     * download-rate line under the status text. OFF = hidden;
+     * ON = the rate of the newest SPEED line in DialLog (logged by
+     * the forwarder while transferring). Refreshed by the 2 s poll
+     * and on resume (the setting may have changed in Settings).
+     */
+    private fun updateSpeedDisplay() {
+        val view = findViewById<android.widget.TextView>(R.id.speed_text)
+        val text = SpeedDisplay.formatSpeedText(
+            settings.speedEnabled,
+            SpeedDisplay.latestSpeedSummary(DialLog.lines()),
+        )
+        if (text == null) {
+            view.visibility = View.GONE
+        } else {
+            view.visibility = View.VISIBLE
+            view.text = text
+        }
     }
 
     private fun applyLayoutManager() {
@@ -313,6 +341,14 @@ class MainActivity : AppCompatActivity() {
                 launch {
                     viewModel.selectedGroup.collect { group -> selectTab(group) }
                 }
+                launch {
+                    viewModel.ipResult.collect { result ->
+                        if (result != null) {
+                            Toast.makeText(this@MainActivity, result, Toast.LENGTH_LONG).show()
+                            viewModel.consumeIpResult()
+                        }
+                    }
+                }
                 // v1.0.4: the service status changes AFTER the 1.5 s
                 // post-start sync (dial failures surface ~10 s in,
                 // "Connected" on first successful dial) — poll it so
@@ -322,6 +358,7 @@ class MainActivity : AppCompatActivity() {
                     while (true) {
                         delay(2000)
                         syncServiceState()
+                        updateSpeedDisplay()
                     }
                 }
             }
@@ -333,12 +370,24 @@ class MainActivity : AppCompatActivity() {
     private fun rebuildTabs(groups: List<String>) {
         rebuildingTabs = true
         tabLayout.removeAllTabs()
-        if (groups.size > 1) {
+        // v1.0.5, group A (v2rayNG "Show an All group tab"): with
+        // groupAllDisplay on, an "All" tab leads — selecting it
+        // shows every server regardless of group.
+        val tabGroups = if (settings.groupAllDisplay) {
+            listOf(GROUP_ALL_ID) + groups
+        } else {
+            groups
+        }
+        if (tabGroups.size > 1) {
             tabLayout.visibility = View.VISIBLE
             val counts = viewModel.profiles.value.groupingBy { it.group }.eachCount()
-            for (group in groups) {
-                val label = if (group.isBlank()) "Default"
-                else "$group (${counts[group] ?: 0})"
+            for (group in tabGroups) {
+                val label = when {
+                    group == GROUP_ALL_ID ->
+                        "${getString(R.string.group_all_tab)} (${viewModel.profiles.value.size})"
+                    group.isBlank() -> "Default"
+                    else -> "$group (${counts[group] ?: 0})"
+                }
                 val tab = tabLayout.newTab().setText(label)
                 tab.tag = group
                 tabLayout.addTab(tab)
@@ -349,7 +398,7 @@ class MainActivity : AppCompatActivity() {
                 for (i in 0 until strip.childCount) {
                     val tabView = strip.getChildAt(i)
                     val group = tabLayout.getTabAt(i)?.tag as? String ?: continue
-                    if (group.isBlank()) continue
+                    if (group.isBlank() || group == GROUP_ALL_ID) continue
                     tabView.setOnLongClickListener {
                         confirmDeleteGroup(group)
                         true
@@ -469,6 +518,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.more_test_all -> viewModel.testAll(false)
                 R.id.more_test_all_real -> viewModel.testAll(true)
                 R.id.more_prime_now -> primeNow()
+                R.id.more_check_ip -> viewModel.checkIp()
                 R.id.more_update_sub -> Toast.makeText(
                     this, R.string.toast_not_available, Toast.LENGTH_SHORT
                 ).show()

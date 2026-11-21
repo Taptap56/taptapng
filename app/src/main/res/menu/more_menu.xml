@@ -31,6 +31,9 @@
         android:id="@+id/more_prime_now"
         android:title="@string/more_prime_now" />
     <item
+        android:id="@+id/more_check_ip"
+        android:title="@string/more_check_ip" />
+    <item
         android:id="@+id/more_update_sub"
         android:title="@string/more_update_sub" />
 </menu>
