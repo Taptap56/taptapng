@@ -29,10 +29,12 @@ class RootDnsRelayTest {
 
     private class EchoUdpSession : ProxyUdpSession {
         val sent = LinkedBlockingQueue<ByteArray>()
+        val sentAll = mutableListOf<ByteArray>()
         private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
 
         override fun send(datagram: ByteArray) {
             sent.add(datagram)
+            synchronized(sentAll) { sentAll += datagram }
         }
 
         override fun receive(timeoutMs: Long): ByteArray? {
@@ -102,7 +104,10 @@ class RootDnsRelayTest {
                 Thread.sleep(25)
             }
             assertEquals(listOf("8.8.8.8" to 53), proxy.udpDialed)
-            assertArrayEquals(query, proxy.lastUdp!!.sent.peek())
+            // receive() mengonsumsi antrean `sent` (poll) — isi
+            // yang dikirim dicek dari salinan `sentAll`.
+            assertEquals(1, proxy.lastUdp!!.sentAll.size)
+            assertArrayEquals(query, proxy.lastUdp!!.sentAll[0])
         } finally {
             relay.stop()
         }

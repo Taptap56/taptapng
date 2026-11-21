@@ -1,5 +1,6 @@
 package com.taptap.ng.core
 
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
@@ -28,7 +29,9 @@ class OriginalDstTest {
         bytes[3] = 0xBB.toByte()
         addr.copyInto(bytes, 8)
         val parsed = OriginalDst.parseSockaddr(bytes)!!
-        assertEquals("2001:db8::1", parsed.address.hostAddress)
+        // Java tidak memampatkan bentuk IPv6 (hostAddress =
+        // "2001:db8:0:0:0:0:0:1") — bandingkan byte-nya.
+        assertArrayEquals(addr, parsed.address.address)
         assertEquals(443, parsed.port)
     }
 

@@ -175,5 +175,8 @@ object RootIptables {
     /** Benar bila perintah ini adalah salah satu aturan milik TaptapNG (untuk audit log). */
     fun isOwnedCommand(cmd: String): Boolean =
         cmd.contains(" $CHAIN") || cmd.contains(" $TETHER_CHAIN") ||
-            cmd.contains("-j $CHAIN") || cmd.contains("-j $TETHER_CHAIN")
+            cmd.contains("-j $CHAIN") || cmd.contains("-j $TETHER_CHAIN") ||
+            // Aturan anti-loop owner-UID dipasang/dihapus bersama
+            // jump rule ke rantai TAPTAPNG — milik kita juga.
+            cmd.contains("--uid-owner")
 }
