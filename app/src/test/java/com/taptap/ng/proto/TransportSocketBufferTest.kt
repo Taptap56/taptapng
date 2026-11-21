@@ -52,6 +52,9 @@ class TransportSocketBufferTest {
                 "send buffer must be at least the requested 32 KiB, got ${socket.sendBufferSize}",
             )
             assertTrue(socket.tcpNoDelay, "TCP_NODELAY must be on after tuning")
+            // v1.0.4 (review Claude): keepAlive ikut dinyalakan —
+            // XVEON menyalakannya pada socket dial-nya.
+            assertTrue(socket.keepAlive, "SO_KEEPALIVE must be on after tuning")
         } finally {
             runCatching { socket.close() }
         }

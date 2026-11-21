@@ -400,4 +400,98 @@ class DnsResolverTest {
             stopFakeDns(server, running, serverThread)
         }
     }
+
+    // ---- v1.0.4 (review Claude atas v1.0.3): jalur resolver operator
+    // ---- pertama + rotasi alamat setelah TLS timeout. ----
+
+    @Test
+    fun `operator hook wins over direct DNS and its list is cached`() {
+        // Hook mengembalikan dua alamat; server DNS langsung sengaja
+        // diarahkan ke port mati — bila hook tidak dipakai duluan,
+        // lookup ini gagal. Gagal pada kode v1.0.3 (tanpa hook).
+        val oldHook = DnsResolver.operatorResolve
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        DnsResolver.clearAddrCache()
+        try {
+            var calls = 0
+            DnsResolver.operatorResolve = { _, _ ->
+                calls++
+                listOf(InetAddress.getByName("10.0.0.1"), InetAddress.getByName("10.0.0.2"))
+            }
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = 1
+            val all = DnsResolver.resolveAll("example.com", 443, timeoutMs = 1000)
+            assertEquals(listOf("10.0.0.1", "10.0.0.2"), all.map { it.hostAddress })
+            // Panggilan kedua datang dari cache — hook tidak dipanggil lagi.
+            DnsResolver.resolveAll("example.com", 443, timeoutMs = 1000)
+            assertEquals(1, calls)
+        } finally {
+            DnsResolver.operatorResolve = oldHook
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            DnsResolver.clearAddrCache()
+        }
+    }
+
+    @Test
+    fun `operator hook empty or throwing falls back to direct DNS`() {
+        // Hook kosong / melempar harus dilompati begitu saja — jalur
+        // lama (UDP langsung) tetap menjawab. Gagal bila hook kosong
+        // dianggap jawaban final.
+        val (server, running, serverThread) = fakeDnsServer()
+        val oldHook = DnsResolver.operatorResolve
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        DnsResolver.clearAddrCache()
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = server.localPort
+            DnsResolver.operatorResolve = { _, _ -> emptyList() }
+            assertEquals(
+                listOf("93.184.216.34"),
+                DnsResolver.resolveAll("example.com", 443, timeoutMs = 2000).map { it.hostAddress },
+            )
+            DnsResolver.clearAddrCache()
+            DnsResolver.operatorResolve = { _, _ -> throw IOException("operator mati") }
+            assertEquals(
+                listOf("93.184.216.34"),
+                DnsResolver.resolveAll("example.com", 443, timeoutMs = 2000).map { it.hostAddress },
+            )
+        } finally {
+            DnsResolver.operatorResolve = oldHook
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            DnsResolver.clearAddrCache()
+            stopFakeDns(server, running, serverThread)
+        }
+    }
+
+    @Test
+    fun `resolveWithSystemFallback rotates to the next cached address after TLS failure`() {
+        // Daftar cache [10.0.0.1, 10.0.0.2]: dial pertama memakai
+        // alamat pertama; sesudah rotateAfterTlsFailure (yang
+        // dipanggil Transport saat TLS timeout), dial berikutnya
+        // memakai alamat kedua; rotasi kedua kembali ke pertama
+        // (wrap-around modulo panjang daftar).
+        val oldHook = DnsResolver.operatorResolve
+        DnsResolver.clearAddrCache()
+        try {
+            DnsResolver.operatorResolve = { _, _ ->
+                listOf(InetAddress.getByName("10.0.0.1"), InetAddress.getByName("10.0.0.2"))
+            }
+            val first = DnsResolver.resolveWithSystemFallback("example.com", 443, timeoutMs = 1000)
+            assertEquals("10.0.0.1", first.hostAddress)
+            DnsResolver.rotateAfterTlsFailure("example.com")
+            val second = DnsResolver.resolveWithSystemFallback("example.com", 443, timeoutMs = 1000)
+            assertEquals("10.0.0.2", second.hostAddress)
+            DnsResolver.rotateAfterTlsFailure("example.com")
+            val third = DnsResolver.resolveWithSystemFallback("example.com", 443, timeoutMs = 1000)
+            assertEquals("10.0.0.1", third.hostAddress)
+            assertEquals(2, DnsResolver.rotationOffset("example.com"))
+        } finally {
+            DnsResolver.operatorResolve = oldHook
+            DnsResolver.clearAddrCache()
+        }
+    }
 }

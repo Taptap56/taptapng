@@ -87,6 +87,11 @@ object Transport {
             socket.receiveBufferSize = recvSize
             socket.sendBufferSize = sendSize
             socket.tcpNoDelay = true
+            // v1.0.4 (review Claude): XVEON menyalakan keepAlive
+            // pada socket dial-nya; TaptapNG tidak. keepAlive menjaga
+            // koneksi panjang (relay) tetap hidup di tengah NAT yang
+            // agresif menutup socket idle.
+            socket.keepAlive = true
         }.onFailure {
             DialLog.log(
                 "SOCKET",
@@ -163,6 +168,18 @@ object Transport {
 
     /** Prefer the watchdog-tagged failure over [e] when the watchdog fired. */
     fun preferWatchdogFailure(e: Exception): Exception = watchdogFailure() ?: e
+
+    /**
+     * v1.0.4: apakah kegagalan TLS ini berarti "IP ini menggantung
+     * di TLS" sehingga dial berikutnya harus merotasi ke alamat
+     * berikutnya di cache? Ya hanya bila benar-benar timeout — read
+     * timed out, atau watchdog meledak saat dial stuck di TLS
+     * (watchdog menutup socket, jadi handshake melempar
+     * SocketException, bukan timeout). Kegagalan TLS lain
+     * (sertifikat, protokol) bukan soal IP dan tidak merotasi.
+     */
+    internal fun shouldRotateAfterTlsFailure(e: Exception): Boolean =
+        e is SocketTimeoutException || watchdogFailure() != null
 
     class OpenStream(
         val socket: Socket,
@@ -331,8 +348,21 @@ object Transport {
                         output = socket.getOutputStream()
                     }
                 } catch (e: SSLException) {
+                    // v1.0.4: rotasi alamat setelah TLS timeout (lihat
+                    // shouldRotateAfterTlsFailure).
+                    if (shouldRotateAfterTlsFailure(e)) {
+                        DnsResolver.rotateAfterTlsFailure(item.address)
+                    }
                     throw SSLException("TLS gagal: ${e.message}")
                 } catch (e: Exception) {
+                    // v1.0.4: TLS timeout di satu IP — dial berikutnya
+                    // memakai alamat berikutnya di cache, bukan IP
+                    // yang baru saja menggantung (log 09:35: dial
+                    // utama memakai IP yang sama persis dengan yang
+                    // baru gagal di prime).
+                    if (shouldRotateAfterTlsFailure(e)) {
+                        DnsResolver.rotateAfterTlsFailure(item.address)
+                    }
                     throw IOException("TLS gagal: ${e.message}", e)
                 }
             }

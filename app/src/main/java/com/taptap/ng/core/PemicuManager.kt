@@ -1,6 +1,7 @@
 package com.taptap.ng.core
 
 import com.taptap.ng.AppConfig
+import com.taptap.ng.core.proto.TlsUtil
 import com.taptap.ng.data.ProfileItem
 import java.io.IOException
 import java.net.Inet4Address
@@ -8,7 +9,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
-import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.SSLSocket
 import kotlin.concurrent.thread
 
 /**
@@ -56,6 +57,14 @@ object PemicuManager {
      *  hang on a silent server. */
     const val TLS_TIMEOUT_MS = 10_000
 
+    /** Total deadline for one prime dial (v1.0.4, review Claude):
+     *  worst case was (TCP 5 s + TLS 10 s) × addresses — CloudFront
+     *  returns several A + AAAA, so the probe could wait 30 s+
+     *  before starting. The dial now stops trying new addresses
+     *  after 12 s total; per-attempt timeouts are clamped to the
+     *  remaining time. */
+    const val PRIME_TOTAL_DEADLINE_MS = 12_000L
+
     /** Min sleep of the prime loop (1 s, v1.0.25): the loop never
      *  spins faster than this, even when a target is due at once. */
     private const val MIN_SLEEP_MS = 1_000L
@@ -87,7 +96,13 @@ object PemicuManager {
             val localAddr: String,
         ) : PrimeResult()
 
-        data class Failed(val target: PemicuTarget, val error: String) : PrimeResult()
+        data class Failed(
+            val target: PemicuTarget,
+            val error: String,
+            /** Last address attempted (v1.0.4): the PRIME GAGAL line
+             *  names the IP, so the phone log says WHICH edge hung. */
+            val ip: String? = null,
+        ) : PrimeResult()
     }
 
     /**
@@ -189,13 +204,20 @@ object PemicuManager {
     }
 
     /** The log line for a prime result, same short shape as the
-     *  task spec: "PRIME OK <host>:<port> <ms>" /
-     *  "PRIME GAGAL <host> <alasan>". */
+     *  task spec: "PRIME OK <host>:<port> <ip> <ms>" /
+     *  "PRIME GAGAL <host>:<port> [<ip>] (<alasan>)". v1.0.4: the
+     *  resolved IP is logged (review Claude) — the 09:35 log could
+     *  not say which CloudFront edge hung, so the IP is now on the
+     *  line itself. */
     fun formatPrimeResult(result: PrimeResult): String = when (result) {
         is PrimeResult.Ok ->
-            "PRIME OK ${result.target.host}:${result.target.port} ${result.totalMs}ms"
+            "PRIME OK ${result.target.host}:${result.target.port} ${result.ip} ${result.totalMs}ms"
         is PrimeResult.Failed ->
-            "PRIME GAGAL ${result.target.host}:${result.target.port} (${result.error})"
+            if (result.ip != null) {
+                "PRIME GAGAL ${result.target.host}:${result.target.port} ${result.ip} (${result.error})"
+            } else {
+                "PRIME GAGAL ${result.target.host}:${result.target.port} (${result.error})"
+            }
     }
 
     // --- Dial ---
@@ -213,9 +235,14 @@ object PemicuManager {
      * (not inlined) because a real SSLSocket handshake cannot run
      * on loopback in the dev VM or CI (see TlsEngineTest), so tests
      * inject a fake that records the call and returns a protocol.
-     * Production passes [defaultTlsHandshake].
+     * Null = the production handshake ([defaultTlsHandshake]) with
+     * its timeout clamped to the remaining [deadlineMs] (v1.0.4).
      * [resolve] is the same kind of seam for the address list
      * (default: [DnsResolver.resolveAll], IPv4 first then IPv6).
+     *
+     * [deadlineMs] bounds the WHOLE dial (v1.0.4): once it is spent
+     * no new address is tried, so the probe never waits 30 s+ for
+     * a multi-address prime to finish.
      */
     fun primeDial(
         target: PemicuTarget,
@@ -223,11 +250,16 @@ object PemicuManager {
         resolve: (String, Int) -> List<InetAddress> = { host, port ->
             DnsResolver.resolveAll(host, port)
         },
-        tlsHandshake: (Socket, String, Int) -> String = { socket, host, port ->
-            defaultTlsHandshake(socket, host, port)
-        },
+        tlsHandshake: ((Socket, String, Int) -> String)? = null,
+        deadlineMs: Long = PRIME_TOTAL_DEADLINE_MS,
     ): PrimeResult {
         val started = System.currentTimeMillis()
+        val deadline = started + deadlineMs
+        val handshake = tlsHandshake ?: { socket: Socket, host: String, port: Int ->
+            val remaining = (deadline - System.currentTimeMillis())
+                .coerceAtLeast(1L).coerceAtMost(TLS_TIMEOUT_MS.toLong())
+            defaultTlsHandshake(socket, host, port, remaining.toInt())
+        }
         val addresses = try {
             resolve(target.host, target.port)
         } catch (e: Exception) {
@@ -237,16 +269,27 @@ object PemicuManager {
             return PrimeResult.Failed(target, "resolve: no address")
         }
         var lastError = "no address"
+        var lastIp: String? = null
         for (address in addresses) {
+            val remainingMs = deadline - System.currentTimeMillis()
+            if (remainingMs <= 0) {
+                lastError = "prime deadline habis (${deadlineMs}ms)"
+                break
+            }
+            lastIp = address.hostAddress
             val isV4 = address is Inet4Address
             val socket = Socket()
             activeSockets.add(socket)
             try {
                 val bypassOk = protectDial(socket, protect)
                 val tcpStart = System.currentTimeMillis()
-                socket.connect(InetSocketAddress(address, target.port), TCP_TIMEOUT_MS)
+                // Per-attempt connect timeout is clamped to the
+                // remaining deadline — a 5 s connect on the last
+                // address must not overrun the total bound.
+                val connectTimeoutMs = minOf(TCP_TIMEOUT_MS.toLong(), remainingMs).toInt()
+                socket.connect(InetSocketAddress(address, target.port), connectTimeoutMs)
                 val tcpMs = System.currentTimeMillis() - tcpStart
-                val protocol = tlsHandshake(socket, target.host, target.port)
+                val protocol = handshake(socket, target.host, target.port)
                 val localAddr = socket.localAddress?.hostAddress ?: "-"
                 val totalMs = System.currentTimeMillis() - started
                 return PrimeResult.Ok(
@@ -266,7 +309,7 @@ object PemicuManager {
                 runCatching { socket.close() }
             }
         }
-        return PrimeResult.Failed(target, lastError)
+        return PrimeResult.Failed(target, lastError, lastIp)
     }
 
     /**
@@ -299,12 +342,26 @@ object PemicuManager {
      *  SSLSocket with SNI = the prime host, handshake with a hard
      *  timeout, return the negotiated protocol. The socket is closed
      *  here (a prime only needs the handshake, not the stream);
-     *  [primeDial] also closes the plain socket in its finally. */
-    fun defaultTlsHandshake(socket: Socket, host: String, port: Int): String {
-        val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
-        val sslSocket = factory.createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
+     *  [primeDial] also closes the plain socket in its finally.
+     *
+     *  v1.0.4 (robustness, review Claude): the handshake uses a
+     *  TRUST-ALL context — a prime only needs to send a ClientHello
+     *  and see a ServerHello, it never reads application data, so
+     *  certificate validation adds nothing except a failure mode
+     *  (a bad cert would fail the prime for no reason). The MAIN
+     *  dial keeps full validation. This does NOT explain the 09:35
+     *  failure (that was a read timeout, not a certificate error)
+     *  and is not claimed as its fix. */
+    fun defaultTlsHandshake(
+        socket: Socket,
+        host: String,
+        port: Int,
+        timeoutMs: Int = TLS_TIMEOUT_MS,
+    ): String {
+        val factory = TlsUtil.trustAllContext.socketFactory
+        val sslSocket = factory.createSocket(socket, host, port, true) as SSLSocket
         try {
-            sslSocket.soTimeout = TLS_TIMEOUT_MS
+            sslSocket.soTimeout = timeoutMs
             sslSocket.startHandshake()
             return sslSocket.session.protocol ?: "TLS?"
         } finally {
@@ -389,9 +446,20 @@ object PemicuManager {
             runCatching { socket.close() }
         }
         activeSockets.clear()
-        inFlight.clear()
+        // v1.0.4: inFlight TIDAK lagi dikosongkan — thread prime lama
+        // masih jalan (socket-nya baru saja ditutup, jadi mereka
+        // selesai sendiri); mengosongkan di sini membuat start cepat
+        // sesudahnya bisa mendial host yang sama dua kali. Kunci
+        // usang tetap menghalangi loop baru mendial host itu sekali
+        // (inFlight.add gagal), lalu hilang saat thread lama selesai.
         lastPrime.clear()
     }
+
+    /** Keys of the dials currently in flight (tests). */
+    internal fun inFlightKeys(): Set<String> = inFlight.toSet()
+
+    /** Last prime time (epoch ms) for a host:port key (tests). */
+    internal fun lastPrimeAt(key: String): Long? = lastPrime[key]
 
     private fun primeLoop(targetsProvider: () -> List<PemicuTarget>, gen: Int) {
         while (gen == generation) {
@@ -468,6 +536,12 @@ object PemicuManager {
      */
     fun primeNowSync(item: ProfileItem): PrimeResult? {
         val target = targetFromProfile(item) ?: return null
+        // v1.0.4: catat prime SEBELUM dial (konvensi yang sama
+        // dengan loop, yang mencatat saat launch) — tanpanya, tick
+        // pertama loop langsung mem-prime lagi sesaat setelah
+        // connect (prime ganda). Dicatat apa pun hasilnya: prime
+        // gagal pun menunggu interval penuh sebelum dicoba lagi.
+        lastPrime[target.key()] = System.currentTimeMillis()
         val result = primeDial(target)
         DialLog.log("PRIME", formatPrimeResult(result))
         return result

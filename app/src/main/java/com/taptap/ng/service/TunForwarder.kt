@@ -15,6 +15,10 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -26,7 +30,8 @@ import kotlin.concurrent.thread
  *   session. No retransmission (the TUN is a local reliable link);
  *   retransmitted app bytes are de-duplicated by sequence number.
  * - UDP port 53 (DNS): forwarded to [dnsServer] over a protected
- *   DatagramSocket (bypasses the VPN), response wrapped back.
+ *   DatagramSocket (bypasses the VPN), response wrapped back;
+ *   on a primary timeout the fallback [dnsFallbackServer] is tried.
  *   Other UDP is dropped.
  * - ICMP echo request: answered locally.
  * - IPv6: dropped (M6).
@@ -61,6 +66,10 @@ class TunForwarder(
      * a window line appears without a 5 s transfer.
      */
     private val speedWindowMs: Long = 5000,
+    /** DNS fallback (v1.0.4): tried when the primary times out. */
+    private val dnsFallbackServer: String = "1.0.0.1",
+    /** Upstream DNS port (53). Tests point it at local servers. */
+    private val dnsPort: Int = 53,
 ) {
 
     private enum class State { DIALING, SYN_SENT, ESTABLISHED, CLOSED }
@@ -141,6 +150,25 @@ class TunForwarder(
     private val dnsQueries = java.util.concurrent.atomic.AtomicLong(0)
     private val dnsLogged = java.util.concurrent.atomic.AtomicInteger(0)
     private val dnsFailures = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * Bounded DNS relay pool (v1.0.4, review Claude): one thread
+     * per query with no cap let a DNS flood exhaust threads. 2
+     * core / 16 max / 60 s keepalive / queue 128; a query that
+     * cannot be queued is counted as a failure and logged instead
+     * of spawning a thread. Shut down in [stop] (each VPN start
+     * builds a new forwarder, so a leaked pool would accumulate).
+     */
+    internal val dnsExecutor: ThreadPoolExecutor = ThreadPoolExecutor(
+        2, 16, 60L, TimeUnit.SECONDS,
+        LinkedBlockingQueue(128),
+        ThreadFactory { r -> Thread(r, "tun-dns").apply { isDaemon = true } },
+    ).apply {
+        setRejectedExecutionHandler { _, _ ->
+            dnsFailures.incrementAndGet()
+            DialLog.log("DNS", "antrean DNS penuh — query dibuang")
+        }
+    }
 
     companion object {
         /** Max concurrent TCP sessions (v1.0.13, fix A4): XVEON caps
@@ -281,6 +309,10 @@ class TunForwarder(
             "berhenti (paket dibaca: ${packetsRead.get()}, " +
                 "DNS: ${dnsQueries.get()} query / ${dnsFailures.get()} gagal)",
         )
+        // v1.0.4: stop the DNS pool — in-flight relay threads are
+        // interrupted (their socket reads throw and are counted as
+        // failures); a new forwarder builds a new pool on restart.
+        dnsExecutor.shutdownNow()
     }
 
     private fun readLoop() {
@@ -879,7 +911,7 @@ class TunForwarder(
                     "${TcpPacket.ipToString(srcIp)}:$srcPort (#$dnsNo)",
             )
         }
-        thread(name = "tun-dns", isDaemon = true) {
+        dnsExecutor.execute {
             try {
                 val sock = DatagramSocket()
                 try {
@@ -902,7 +934,7 @@ class TunForwarder(
                             "DNS",
                             "GAGAL: protect() gagal tanpa disallow — query #$dnsNo dibuang",
                         )
-                        return@thread
+                        return@execute
                     }
                     if (!protected && detail) {
                         DialLog.log(
@@ -911,28 +943,70 @@ class TunForwarder(
                         )
                     }
                     sock.soTimeout = dnsTimeoutMs
-                    val server = InetAddress.getByName(dnsServer)
-                    sock.send(DatagramPacket(query, query.size, server, 53))
-                    val buf = ByteArray(8192)
-                    val resp = DatagramPacket(buf, buf.size)
-                    try {
-                        sock.receive(resp)
-                    } catch (e: java.net.SocketTimeoutException) {
-                        dnsFailures.incrementAndGet()
-                        DialLog.failure(
-                            "DNS",
-                            java.io.IOException("timeout $dnsServer untuk query #$dnsNo"),
-                        )
-                        return@thread
+                    // v1.0.4: coba server primer dulu, lalu fallback
+                    // saat timeout/gagal kirim — sebelumnya 1.0.0.1
+                    // hanya dipasang di addDnsServer dan tidak pernah
+                    // dipakai forwarder, jadi query dibuang begitu
+                    // 1.1.1.1 timeout.
+                    val servers = listOf(dnsServer, dnsFallbackServer).distinct()
+                    var respBytes: ByteArray? = null
+                    for ((index, serverName) in servers.withIndex()) {
+                        val last = index == servers.lastIndex
+                        try {
+                            val server = InetAddress.getByName(serverName)
+                            sock.send(DatagramPacket(query, query.size, server, dnsPort))
+                            val buf = ByteArray(8192)
+                            val resp = DatagramPacket(buf, buf.size)
+                            sock.receive(resp)
+                            respBytes = resp.data.copyOf(resp.length)
+                            break
+                        } catch (e: java.net.SocketTimeoutException) {
+                            if (last) {
+                                dnsFailures.incrementAndGet()
+                                DialLog.failure(
+                                    "DNS",
+                                    java.io.IOException("timeout $serverName untuk query #$dnsNo"),
+                                )
+                                return@execute
+                            }
+                            if (detail) {
+                                DialLog.log(
+                                    "DNS",
+                                    "timeout $serverName untuk query #$dnsNo — coba ${servers[index + 1]}",
+                                )
+                            }
+                        } catch (e: java.io.IOException) {
+                            // Gagal kirim / nama tak dikenal: server
+                            // ini tidak bisa dipakai, coba berikutnya.
+                            if (last) {
+                                dnsFailures.incrementAndGet()
+                                DialLog.failure(
+                                    "DNS",
+                                    java.io.IOException(
+                                        "gagal $serverName untuk query #$dnsNo: ${e.message}",
+                                    ),
+                                )
+                                return@execute
+                            }
+                            if (detail) {
+                                DialLog.log(
+                                    "DNS",
+                                    "gagal $serverName untuk query #$dnsNo (${e.message}) — coba ${servers[index + 1]}",
+                                )
+                            }
+                        }
                     }
-                    val respBytes = resp.data.copyOf(resp.length)
-                    val pkt = TcpPacket.buildUdp(dstIp, srcIp, 53, srcPort, respBytes)
+                    val bytes = respBytes ?: return@execute
+                    val pkt = TcpPacket.buildUdp(dstIp, srcIp, 53, srcPort, bytes)
                     writePacket(pkt)
                     if (detail) {
-                        dnsLogged.incrementAndGet()
+                        // v1.0.4: dnsLogged hanya naik sekali per
+                        // query (di baris query di atas) — sebelumnya
+                        // naik dua kali, jadi batas "5 query pertama"
+                        // sebenarnya ~2–3 query.
                         DialLog.log(
                             "DNS",
-                            "jawab ${TcpPacket.ipToString(dstIp)} ${respBytes.size}B ke " +
+                            "jawab ${TcpPacket.ipToString(dstIp)} ${bytes.size}B ke " +
                                 "${TcpPacket.ipToString(srcIp)}:$srcPort (#$dnsNo)",
                         )
                     }

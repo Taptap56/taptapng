@@ -20,7 +20,11 @@ import javax.net.ssl.X509TrustManager
  *   skipped (SNIHostName rejects IPs).
  * - ALPN = item.alpn (comma-separated) when set. `SSLParameters
  *   .applicationProtocols` needs API 29+; on older runtimes the call
- *   throws NoSuchMethodError and is silently ignored.
+ *   throws NoSuchMethodError and is silently ignored. v1.0.4: NO
+ *   default ALPN — the planned "http/1.1 default for ws" was DROPPED
+ *   after the dex check (d9.txt has no setApplicationProtocols call,
+ *   so XVEON does not always set ALPN; entry iflix already sets
+ *   http/1.1 itself).
  * - insecure = trust-all certificates (user option, same meaning as
  *   v2rayNG "allowInsecure"). No hostname verification is done on a raw
  *   SSLSocket either way — verification only exists in HttpsURLConnection.
@@ -29,7 +33,15 @@ import javax.net.ssl.X509TrustManager
  */
 object TlsUtil {
 
-    private val trustAllContext: SSLContext by lazy {
+    /** TLS 1.3 + 1.2 — the protocols XVEON offers (dex d9.txt:678
+     *  calls setEnabledProtocols). The platform default on modern
+     *  Android is the same pair, so this only narrows old runtimes
+     *  that still offer TLS 1.0/1.1. */
+    val DEFAULT_TLS_PROTOCOLS = arrayOf("TLSv1.3", "TLSv1.2")
+
+    /** Trust-all SSLContext (v1.0.4: also used by the prime dial,
+     *  which only needs a ClientHello — see PemicuManager). */
+    internal val trustAllContext: SSLContext by lazy {
         val trustAll = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
@@ -47,6 +59,30 @@ object TlsUtil {
             SSLSocketFactory.getDefault() as SSLSocketFactory
         }
         val tls = factory.createSocket(plain, item.address, item.port, true) as SSLSocket
+        applyTlsSettings(tls, item, enabledProtocols)
+        tls.soTimeout = Transport.HANDSHAKE_TIMEOUT_MS
+        tls.startHandshake()
+        // v1.0.2 (XVEON order): name the negotiated version —
+        // "TLS established: TLSv1.3" — not just "TLS ok".
+        DialLog.log("TLS", "TLS established: ${tls.session.protocol}")
+        return tls
+    }
+
+    /**
+     * Apply SNI / ALPN / protocol settings to an SSLSocket without
+     * handshaking — testable on an unconnected socket. ALPN comes
+     * ONLY from the entry's alpn field (see the header note: no
+     * default ALPN in v1.0.4). Protocols default to
+     * [DEFAULT_TLS_PROTOCOLS]; a non-null [enabledProtocols] is the
+     * SSH TLS version forcing (v1.0.30) and wins. An unsupported
+     * name must never kill the dial — fall back to negotiation and
+     * say so in the log.
+     */
+    internal fun applyTlsSettings(
+        tls: SSLSocket,
+        item: ProfileItem,
+        enabledProtocols: Array<String>? = null,
+    ) {
         val params: SSLParameters = tls.sslParameters
         val sni = item.sni.ifBlank { item.address }
         if (!AddrCodec.isIpLiteral(sni)) {
@@ -63,23 +99,13 @@ object TlsUtil {
             }
         }
         tls.sslParameters = params
-        if (enabledProtocols != null) {
-            // v1.0.30: SSH TLS version forcing (sshSniVersion).
-            // An unsupported name must never kill the dial — fall
-            // back to negotiation and say so in the log.
-            runCatching { tls.enabledProtocols = enabledProtocols }
-                .onFailure {
-                    DialLog.log(
-                        "TLS",
-                        "versi TLS ${enabledProtocols.joinToString(",")} tidak didukung — lanjut negosiasi",
-                    )
-                }
-        }
-        tls.soTimeout = Transport.HANDSHAKE_TIMEOUT_MS
-        tls.startHandshake()
-        // v1.0.2 (XVEON order): name the negotiated version —
-        // "TLS established: TLSv1.3" — not just "TLS ok".
-        DialLog.log("TLS", "TLS established: ${tls.session.protocol}")
-        return tls
+        val protocols = enabledProtocols ?: DEFAULT_TLS_PROTOCOLS
+        runCatching { tls.enabledProtocols = protocols }
+            .onFailure {
+                DialLog.log(
+                    "TLS",
+                    "versi TLS ${protocols.joinToString(",")} tidak didukung — lanjut negosiasi",
+                )
+            }
     }
 }

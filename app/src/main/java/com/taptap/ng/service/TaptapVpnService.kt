@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -347,12 +348,26 @@ class TaptapVpnService : VpnService() {
                 return
             }
             connection.reportConnected(label)
-            // v1.0.24 (M5): jaga jendela tetap buka selama VPN jalan
-            // — auto-prime tiap interval entry. Hanya bila entry ini
-            // memang punya target prime (chip nyala + domain terisi);
-            // tanpa target tidak ada loop yang jalan.
-            PemicuManager.targetFromProfile(item)?.let { target ->
-                PemicuManager.start { listOf(target) }
+            // v1.0.4 (zombie loop, review Claude): cek ulang
+            // generation SEBELUM start — Stop yang terjadi di antara
+            // cek isCurrentStart di atas dan baris ini sudah
+            // memanggil PemicuManager.stop(); start() tanpa cek akan
+            // menghidupkan loop baru yang jalan tanpa hook protect
+            // sampai Stop berikutnya. PemicuManager sendiri punya
+            // guard generation, tapi guard itu hanya membunuh loop
+            // LAMA — ia tidak tahu start() ini sudah basi. Perhatian:
+            // isCurrentStart TIDAK bisa dipakai di sini — state sudah
+            // RUNNING sesudah reportConnected, jadi yang dicek hanya
+            // generation-nya (startGeneration hanya berubah saat
+            // Stop/start baru).
+            if (gen == startGeneration) {
+                // v1.0.24 (M5): jaga jendela tetap buka selama VPN
+                // jalan — auto-prime tiap interval entry. Hanya bila
+                // entry ini memang punya target prime (chip nyala +
+                // domain terisi); tanpa target tidak ada loop yang jalan.
+                PemicuManager.targetFromProfile(item)?.let { target ->
+                    PemicuManager.start { listOf(target) }
+                }
             }
         } catch (e: Exception) {
             if (isCurrentStart(gen)) {
@@ -496,10 +511,14 @@ class TaptapVpnService : VpnService() {
                 // the tunnel's PRIMARY DNS (1.1.1.1) — the same
                 // server Android was told to use via addDnsServer.
                 // (v1.0.2 used Settings Remote DNS here; that value
-                // no longer drives the tunnel.) The proxy-host
-                // resolver (DnsResolver, 8.8.8.8) is a different
-                // path and is unchanged.
+                // no longer drives the tunnel.) v1.0.4: on a primary
+                // timeout the forwarder retries the SECONDARY DNS
+                // (1.0.0.1) — before, 1.0.0.1 was only in
+                // addDnsServer and never used by the forwarder. The
+                // proxy-host resolver (DnsResolver, 8.8.8.8) is a
+                // different path and is unchanged.
                 dnsServer = PRIMARY_DNS,
+                dnsFallbackServer = SECONDARY_DNS,
                 protectUdp = { socket -> protect(socket) },
                 onStatus = { msg -> connection.reportDialStatus(msg) },
                 tunMtu = mtu,
@@ -566,6 +585,20 @@ class TaptapVpnService : VpnService() {
         // DnsResolver queries go through the TUN and loop in the
         // forwarder's DNS relay instead of reaching 8.8.8.8.
         DnsResolver.protectUdp = { socket -> protect(socket) }
+        // Same for the operator resolver (v1.0.4, review Claude):
+        // the proxy host is resolved FIRST through the physical
+        // (non-VPN) network — the way XVEON resolves it (dex
+        // d9.txt:851 Network.getAllByName, fallback InetAddress
+        // .getAllByName). Direct UDP 8.8.8.8, then the system
+        // resolver, stay as fallbacks. No ConnectivityManager (or
+        // no usable network) means no operator path — the hook
+        // stays null and resolve behaves exactly like v1.0.3.
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        DnsResolver.operatorResolve = if (cm != null) {
+            { host, timeoutMs -> DnsResolver.networkResolveAll(cm, host, timeoutMs) }
+        } else {
+            null
+        }
     }
 
     /**
@@ -597,6 +630,7 @@ class TaptapVpnService : VpnService() {
         PemicuManager.protectSocket = null
         ServerTester.protectSocket = null
         DnsResolver.protectUdp = null
+        DnsResolver.operatorResolve = null
     }
 
     private fun stopTunnel() {

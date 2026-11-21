@@ -1,16 +1,26 @@
 package com.taptap.ng.core
 
+import com.taptap.ng.core.proto.TlsUtil
 import com.taptap.ng.data.ProfileItem
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.ByteBuffer
+import java.security.KeyStore
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLEngine
+import javax.net.ssl.SSLEngineResult
 import javax.net.ssl.SSLException
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -215,11 +225,23 @@ class PemicuManagerTest {
             tcpMs = 120, tlsProtocol = "TLSv1.3", totalMs = 212,
             bypassOk = true, localAddr = "10.0.0.1",
         )
-        assertEquals("PRIME OK chat.sociomile.com:443 212ms", PemicuManager.formatPrimeResult(ok))
+        assertEquals(
+            // v1.0.4: baris PRIME OK membawa IP hasil resolve —
+            // log 09:35 tidak bisa bilang edge mana yang menggantung.
+            "PRIME OK chat.sociomile.com:443 104.21.8.162 212ms",
+            PemicuManager.formatPrimeResult(ok),
+        )
         val failed = PemicuManager.PrimeResult.Failed(target, "Connection refused")
         assertEquals(
             "PRIME GAGAL chat.sociomile.com:443 (Connection refused)",
             PemicuManager.formatPrimeResult(failed),
+        )
+        val failedWithIp = PemicuManager.PrimeResult.Failed(
+            target, "Read timed out", "104.21.8.162",
+        )
+        assertEquals(
+            "PRIME GAGAL chat.sociomile.com:443 104.21.8.162 (Read timed out)",
+            PemicuManager.formatPrimeResult(failedWithIp),
         )
     }
 
@@ -293,6 +315,71 @@ class PemicuManagerTest {
             assertEquals("127.0.0.1", (result as PemicuManager.PrimeResult.Ok).ip)
         } finally {
             server.close()
+        }
+    }
+
+    @Test
+    fun `primeDial stops trying new addresses after the total deadline`() {
+        // v1.0.4: worst case tadinya (TCP 5 dtk + TLS 10 dtk) × jumlah
+        // alamat — probe bisa menunggu 30 dtk+. Alamat pertama
+        // (127.0.0.1) menggantung di TLS (fake tidur 1200 ms);
+        // deadline 500 ms — alamat kedua (127.0.0.2, sehat) TIDAK
+        // boleh dicoba. Gagal pada kode v1.0.3 (yang mencoba alamat
+        // kedua dan mengembalikan Ok). Kedua server memakai port yang
+        // sama (satu target port) di dua IP loopback berbeda.
+        val blackhole = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val port = blackhole.localPort
+        val good = ServerSocket(port, 1, InetAddress.getByName("127.0.0.2"))
+        val held = mutableListOf<Socket>()
+        val blackholeThread = Thread({
+            try {
+                while (true) held += blackhole.accept()
+            } catch (_: Exception) {
+                // Server ditutup.
+            }
+        }, "pemicu-test-deadline-bh").apply { isDaemon = true; start() }
+        var goodAccepts = java.util.concurrent.atomic.AtomicInteger(0)
+        val goodThread = Thread({
+            try {
+                while (true) {
+                    good.accept()?.close()
+                    goodAccepts.incrementAndGet()
+                }
+            } catch (_: Exception) {
+                // Server ditutup.
+            }
+        }, "pemicu-test-deadline-good").apply { isDaemon = true; start() }
+        try {
+            val handshake: (Socket, String, Int) -> String = { socket, _, _ ->
+                if (socket.inetAddress.hostAddress == "127.0.0.1") {
+                    Thread.sleep(1200)
+                    throw java.net.SocketTimeoutException("TLS menggantung")
+                }
+                "TLSv1.3"
+            }
+            val resolve: (String, Int) -> List<InetAddress> = { _, _ ->
+                listOf(
+                    InetAddress.getByName("127.0.0.1"),
+                    InetAddress.getByName("127.0.0.2"),
+                )
+            }
+            val target = PemicuManager.PemicuTarget("example.com", port, 15)
+            val start = System.currentTimeMillis()
+            val result = PemicuManager.primeDial(
+                target, protect = null, resolve = resolve,
+                tlsHandshake = handshake, deadlineMs = 500,
+            )
+            val elapsed = System.currentTimeMillis() - start
+            assertTrue(result is PemicuManager.PrimeResult.Failed, "expected Failed, got $result")
+            assertEquals(
+                0, goodAccepts.get(),
+                "alamat kedua tidak boleh dicoba sesudah deadline habis",
+            )
+            assertTrue(elapsed < 3000, "dial harus berhenti di deadline, bukan mencoba lagi: $elapsed ms")
+        } finally {
+            held.forEach { runCatching { it.close() } }
+            blackhole.close()
+            good.close()
         }
     }
 
@@ -407,6 +494,123 @@ class PemicuManagerTest {
     }
 
     @Test
+    fun `default ClientHello already carries the session ticket extension`() {
+        // v1.0.4 (review Claude): panggilan reflection XVEON dengan
+        // boolean=true DIINFERENSI sebagai setUseSessionTickets(true)
+        // — verifikasi dex tidak menemukan panggilan itu, dan default
+        // JVM sudah mengirim ekstensi 0x0023 (session_ticket). Tes
+        // ini mengunci fakta itu: bila default berhenti mengirimnya,
+        // panggilan itu harus ditinjau ulang — sampai saat itu, tidak
+        // ada kode mati yang ditambahkan.
+        val (_, types, _) = parseHello(captureFirstRecord("front.wetv.vip"))
+        assertTrue(
+            types.contains(0x0023),
+            "ClientHello harus membawa session_ticket (0x0023): $types",
+        )
+    }
+
+    // --- Prime trust-all context (v1.0.4, robustness) ---
+
+    /** Server SSLContext dengan sertifikat self-signed test-tls.p12
+     *  (pola yang sama dengan TlsEngineTest; password khusus tes). */
+    private fun serverContext(): SSLContext {
+        val ks = KeyStore.getInstance("PKCS12")
+        val res: InputStream = javaClass.classLoader
+            .getResourceAsStream("test-tls.p12")
+            ?: throw IllegalStateException("test-tls.p12 tidak ada di test resources")
+        res.use { ks.load(it, "taptapx-test".toCharArray()) }
+        val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+        kmf.init(ks, "taptapx-test".toCharArray())
+        return SSLContext.getInstance("TLS").apply {
+            init(kmf.keyManagers, null, null)
+        }
+    }
+
+    /** Drive sepasang SSLEngine client/server sampai handshake
+     *  selesai, hanya dengan buffer in-memory (tanpa socket — TLS
+     *  loopback JVM di-reset di lingkungan tes). Pola standar:
+     *  NEED_WRAP/NEED_UNWRAP bergantian, dua arah. */
+    private fun driveHandshake(client: SSLEngine, server: SSLEngine) {
+        val appEmpty = ByteBuffer.allocate(0)
+        val appBuf = ByteBuffer.allocate(16384)
+        val cNet = ByteBuffer.allocate(32768)
+        val sNet = ByteBuffer.allocate(32768)
+        client.beginHandshake()
+        server.beginHandshake()
+        var guard = 0
+        while (guard++ < 200) {
+            var progress = false
+            when (client.handshakeStatus) {
+                SSLEngineResult.HandshakeStatus.NEED_WRAP -> {
+                    cNet.clear()
+                    client.wrap(appEmpty, cNet)
+                    cNet.flip()
+                    progress = true
+                }
+                SSLEngineResult.HandshakeStatus.NEED_UNWRAP -> {
+                    if (sNet.hasRemaining()) {
+                        appBuf.clear()
+                        client.unwrap(sNet, appBuf)
+                        progress = true
+                    }
+                }
+                SSLEngineResult.HandshakeStatus.NEED_TASK -> {
+                    client.delegatedTask?.run()
+                    progress = true
+                }
+                else -> Unit
+            }
+            when (server.handshakeStatus) {
+                SSLEngineResult.HandshakeStatus.NEED_WRAP -> {
+                    sNet.clear()
+                    server.wrap(appEmpty, sNet)
+                    sNet.flip()
+                    progress = true
+                }
+                SSLEngineResult.HandshakeStatus.NEED_UNWRAP -> {
+                    if (cNet.hasRemaining()) {
+                        appBuf.clear()
+                        server.unwrap(cNet, appBuf)
+                        progress = true
+                    }
+                }
+                SSLEngineResult.HandshakeStatus.NEED_TASK -> {
+                    server.delegatedTask?.run()
+                    progress = true
+                }
+                else -> Unit
+            }
+            val done = { e: SSLEngine ->
+                e.handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED ||
+                    e.handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING
+            }
+            if (done(client) && done(server)) return
+            if (!progress) {
+                throw AssertionError(
+                    "handshake macet: client=${client.handshakeStatus} server=${server.handshakeStatus}",
+                )
+            }
+        }
+        throw AssertionError("handshake tidak selesai dalam $guard langkah")
+    }
+
+    @Test
+    fun `prime trust-all context completes a handshake the default context refuses`() {
+        // v1.0.4 (robustness, BUKAN perbaikan 09:35): prime dial
+        // memakai trust-all — ia hanya perlu mengirim ClientHello,
+        // bukan membaca data aplikasi. Server memakai sertifikat
+        // self-signed: konteks default MENOLAK (kontrol — membuktikan
+        // tes ini diskriminatif), konteks trust-all produksi MENERIMA.
+        val newServer = {
+            serverContext().createSSLEngine().apply { useClientMode = false }
+        }
+        assertThrows(SSLException::class.java) {
+            driveHandshake(SSLContext.getDefault().createSSLEngine(), newServer())
+        }
+        driveHandshake(TlsUtil.trustAllContext.createSSLEngine(), newServer())
+    }
+
+    @Test
     fun `primeDial reports a resolve failure instead of throwing`() {
         val target = PemicuManager.PemicuTarget("example.com", 443, 15)
         val resolve: (String, Int) -> List<InetAddress> = { _, _ ->
@@ -476,6 +680,24 @@ class PemicuManagerTest {
     }
 
     @Test
+    fun `primeNowSync records lastPrime so the loop does not prime twice`() {
+        // v1.0.4: primeNowSync tidak mengisi lastPrime — tick pertama
+        // loop langsung mem-prime lagi sesaat setelah connect (prime
+        // ganda). Port tertutup: dial gagal cepat, tapi lastPrime
+        // harus tetap tercatat (dicatat apa pun hasilnya, seperti
+        // loop yang mencatat saat launch).
+        val port = closedPort()
+        val item = itemWithPemicu(domain = "127.0.0.1", port = port)
+        PemicuManager.primeNowSync(item)
+        val at = PemicuManager.lastPrimeAt("127.0.0.1:$port")
+        assertNotNull(at, "lastPrime harus terisi sesudah primeNowSync")
+        assertTrue(
+            System.currentTimeMillis() - at!! < 10_000,
+            "lastPrime harus baru, bukan angka lama",
+        )
+    }
+
+    @Test
     fun `loop primes once at start and stops on stop`() {
         DialLog.clear()
         val target = PemicuManager.PemicuTarget("127.0.0.1", closedPort(), 5)
@@ -542,6 +764,47 @@ class PemicuManagerTest {
             val ticks = PemicuManager.loopTickCount - before
             assertTrue(ticks <= 3, "loop ticked $ticks times in about 5 s")
         } finally {
+            PemicuManager.stop()
+        }
+    }
+
+    @Test
+    fun `stop does not clear in-flight keys`() {
+        // v1.0.4 (2e): stop() mengosongkan inFlight padahal thread
+        // prime lama masih jalan — start cepat sesudahnya bisa
+        // mendial host yang sama dua kali. Kunci harus bertahan
+        // sampai thread lama selesai dan menghapusnya sendiri.
+        // Dialnya stuck di resolve (~3 dtk ke server DNS diam),
+        // jadi stop() tidak bisa membangunkannya — asersi ini
+        // deterministik, bukan balapan waktu.
+        val silent = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        PemicuManager.stop()
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = silent.localPort
+            val target = PemicuManager.PemicuTarget("probe.invalid", 443, 300)
+            PemicuManager.start { listOf(target) }
+            val deadline = System.currentTimeMillis() + 5000
+            while (!PemicuManager.inFlightKeys().contains(target.key()) &&
+                System.currentTimeMillis() < deadline
+            ) {
+                Thread.sleep(10)
+            }
+            assertTrue(
+                PemicuManager.inFlightKeys().contains(target.key()),
+                "key harus in-flight dulu",
+            )
+            PemicuManager.stop()
+            assertTrue(
+                PemicuManager.inFlightKeys().contains(target.key()),
+                "key harus bertahan sesudah stop() — thread lama masih jalan",
+            )
+        } finally {
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            silent.close()
             PemicuManager.stop()
         }
     }

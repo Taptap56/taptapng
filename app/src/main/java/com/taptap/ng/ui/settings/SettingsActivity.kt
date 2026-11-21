@@ -371,6 +371,13 @@ class SettingsActivity : AppCompatActivity() {
                     ),
                     textItem(
                         "remote_dns", R.string.set_remote_dns_title, R.string.set_remote_dns_sub,
+                        // v1.0.4 (review Claude): nilai ini tersimpan
+                        // tapi tidak lagi menggerakkan tunnel — DNS
+                        // tunnel tetap 1.1.1.1/1.0.0.1 (v1.0.3). Beri
+                        // label "Not supported yet" seperti setting
+                        // core lain yang hanya tersimpan, bukan
+                        // disembunyikan (nilainya tetap bisa diedit).
+                        notSupportedM2 = true,
                         rawValue = { store.remoteDns },
                         displayValue = {
                             SettingsStore.displayOrDefault(store.remoteDns, SettingsStore.DISPLAY_REMOTE_DNS)

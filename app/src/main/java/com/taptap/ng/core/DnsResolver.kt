@@ -1,5 +1,7 @@
 package com.taptap.ng.core
 
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.taptap.ng.core.proto.AddrCodec
 import java.io.IOException
 import java.net.DatagramPacket
@@ -30,6 +32,16 @@ import kotlin.concurrent.thread
  * tegas. v2rayNG tidak kena masalah ini karena xray-core resolve
  * sendiri lewat socket ter-protect — perilaku ini menirunya.
  *
+ * v1.0.4 (review Claude atas v1.0.3): jalur PERTAMA adalah resolver
+ * jaringan fisik operator — `Network.getAllByName` pada jaringan
+ * non-VPN, cara XVEON me-resolve host proxy. Hipotesisnya (BELUM
+ * TERBUKTI): jendela operator terbuka lewat lookup DNS operator atau
+ * lewat IP yang dikembalikan resolver operator; prime TaptapNG tidak
+ * pernah menyentuh resolver itu. Fallback tetap UDP langsung lalu
+ * sistem, jadi bila jaringan operator tidak menjawab, perilaku lama
+ * dipertahankan. Dial utama juga merotasi ke alamat berikutnya di
+ * cache setelah TLS timeout ([rotateAfterTlsFailure]).
+ *
  * Bila query langsung gagal, pemanggil memakai
  * [resolveWithSystemFallback]: fallback ke resolver sistem (relay DNS
  * TUN mungkin saja berfungsi), tapi lookup sistem itu pun dibatasi
@@ -49,6 +61,97 @@ object DnsResolver {
     /** Port server DNS (53). Diubah tes untuk menunjuk server DNS palsu lokal. */
     @Volatile
     var dnsPort: Int = 53
+
+    /**
+     * Hook resolver jaringan fisik operator (v1.0.4, review Claude
+     * atas v1.0.3): `Network.getAllByName` pada jaringan non-VPN —
+     * cara XVEON me-resolve host proxy, dan kandidat terkuat kenapa
+     * prime TaptapNG tidak bisa membuka jendela operator (hipotesis
+     * BELUM TERBUKTI; jalur ini jalan pertama, fallback tetap UDP
+     * langsung lalu sistem). Dipasang service dari
+     * [ConnectivityManager] lewat [networkResolveAll]; null = tidak
+     * ada jaringan operator yang bisa dipakai (unit test, atau CM
+     * tidak tersedia) — resolve langsung loncat ke UDP 8.8.8.8.
+     */
+    @Volatile
+    var operatorResolve: ((String, Int) -> List<InetAddress>)? = null
+
+    /**
+     * Offset rotasi per host (v1.0.4): setelah TLS timeout, dial
+     * berikutnya memakai alamat berikutnya di daftar cache
+     * ([rotateAfterTlsFailure]). Offset melekat — IP yang berhasil
+     * dipakai terus sampai ia gagal — dan dihitung modulo panjang
+     * daftar, jadi aman saat cache refresh mengubah panjang daftar.
+     */
+    private val rotateOffset = ConcurrentHashMap<String, Int>()
+
+    /**
+     * Resolve [host] lewat jaringan fisik operator: pilih jaringan
+     * non-VPN pertama yang punya kapabilitas INTERNET (jaringan
+     * operator fisik; jaringan VPN sendiri disaring keluar), lalu
+     * `Network.getAllByName` di thread daemon + join(timeout) seperti
+     * [systemResolve]. Kembalikan daftar kosong bila tidak ada
+     * jaringan yang cocok — pemanggil lanjut ke fallback. Daftar
+     * diurutkan IPv4 dulu, sama seperti jalur UDP langsung.
+     *
+     * Hanya dipanggil lewat hook [operatorResolve]; tes JVM tidak
+     * memanggil fungsi ini (butuh ConnectivityManager Android).
+     */
+    fun networkResolveAll(
+        cm: ConnectivityManager,
+        host: String,
+        timeoutMs: Int,
+    ): List<InetAddress> {
+        val networks = try {
+            cm.allNetworks
+        } catch (_: Exception) {
+            return emptyList()
+        }
+        val physical = networks.firstOrNull { network ->
+            val caps = runCatching { cm.getNetworkCapabilities(network) }.getOrNull()
+            caps != null &&
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } ?: networks.firstOrNull { network ->
+            val caps = runCatching { cm.getNetworkCapabilities(network) }.getOrNull()
+            caps != null && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        } ?: return emptyList()
+        var result: List<InetAddress>? = null
+        var error: Throwable? = null
+        val t = thread(name = "op-dns", isDaemon = true) {
+            try {
+                result = physical.getAllByName(host).sortedBy {
+                    if (it is Inet4Address) 0 else 1
+                }
+            } catch (e: Throwable) {
+                error = e
+            }
+        }
+        t.join(timeoutMs.toLong())
+        if (t.isAlive) {
+            throw SocketTimeoutException("DNS operator timeout untuk $host")
+        }
+        error?.let { throw it }
+        return result ?: emptyList()
+    }
+
+    /** Jalur operator lewat hook [operatorResolve]; kosong bila hook null. */
+    private fun operatorResolveAll(host: String, timeoutMs: Int): List<InetAddress> {
+        val hook = operatorResolve ?: return emptyList()
+        return try {
+            hook(host, timeoutMs)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Majukan offset rotasi [host] satu langkah (dipanggil saat TLS timeout). */
+    fun rotateAfterTlsFailure(host: String) {
+        rotateOffset.compute(host) { _, v -> (v ?: 0) + 1 }
+    }
+
+    /** Offset rotasi saat ini untuk [host] (tes). */
+    internal fun rotationOffset(host: String): Int = rotateOffset[host] ?: 0
 
     /**
      * Hook protect untuk socket DNS (VpnService.protect), dipasang
@@ -97,6 +200,11 @@ object DnsResolver {
      * itu. Lookup sistem dibatasi [timeoutMs] lewat thread terpisah,
      * karena `InetSocketAddress(host, port)` memanggil resolver
      * sistem tanpa timeout.
+     *
+     * v1.0.4: memakai daftar lengkap dari [resolveAll] (jalur
+     * pertama = resolver operator) + rotasi setelah TLS timeout
+     * ([rotateAfterTlsFailure]) — dial berikutnya memakai alamat
+     * berikutnya di cache, bukan alamat yang baru saja gagal TLS.
      * @throws IOException bila kedua jalur gagal (pesan ber-tag "DNS gagal").
      */
     fun resolveWithSystemFallback(
@@ -109,27 +217,11 @@ object DnsResolver {
         if (AddrCodec.isIpLiteral(clean)) {
             return InetAddress.getByName(clean)
         }
-        // v1.0.22: cache hasil resolve host proxy. Tanpa cache, SETIAP
-        // koneksi TCP dari TUN memicu satu query UDP ke 8.8.8.8 lebih
-        // dulu (satu RTT ekstra + gagal total bila UDP 53 sedang
-        // lambat/hilang), dan IP bisa berganti-ganti antar koneksi.
-        val key = clean.lowercase()
-        val now = System.currentTimeMillis()
-        val cached = addrCache[key]
-        if (cached != null && now - cached.atMs < addrCacheTtlMs) {
-            cached.addrs.firstOrNull()?.let { return it }
-        }
-        try {
-            val fresh = resolveUncached(host, clean, port, timeoutMs)
-            addrCache[key] = CachedAddr(listOf(fresh), now)
-            return fresh
-        } catch (e: IOException) {
-            // Lookup gagal: IP lama yang pernah berhasil lebih baik
-            // daripada menggagalkan koneksi.
-            val stale = cached?.addrs?.firstOrNull()
-            if (stale != null) return stale
-            throw e
-        }
+        // Stale-cache fallback tetap hidup di dalam resolveAll.
+        val all = resolveAll(host, port, timeoutMs)
+        if (all.isEmpty()) throw IOException("tidak dapat resolve $host")
+        val offset = rotateOffset[clean.lowercase()] ?: 0
+        return all[offset % all.size]
     }
 
     /**
@@ -182,6 +274,11 @@ object DnsResolver {
         port: Int,
         timeoutMs: Int,
     ): List<InetAddress> {
+        // v1.0.4: jalur pertama = resolver operator (lihat
+        // operatorResolve). Kosong bila hook null/gagal — lanjut ke
+        // UDP langsung (A + AAAA), lalu ke resolver sistem.
+        val viaOperator = operatorResolveAll(clean, timeoutMs)
+        if (viaOperator.isNotEmpty()) return viaOperator
         try {
             // A dulu; bila servernya saja tidak menjawab (timeout),
             // jangan buang waktu coba AAAA — langsung fallback sistem
@@ -201,16 +298,17 @@ object DnsResolver {
         return all
     }
 
-    /** Hapus cache resolve (dipakai tes). */
+    /** Hapus cache resolve + offset rotasi (dipakai tes). */
     fun clearAddrCache() {
         addrCache.clear()
+        rotateOffset.clear()
     }
 
     /**
      * One cached address list (IPv4 first, then IPv6) + the time it
-     * was stored. Only non-empty lists are ever cached (both
-     * [resolveAllUncached] and [resolveUncached] return non-empty
-     * or throw), so [CachedAddr.addrs] always has a first element.
+     * was stored. Only non-empty lists are ever cached
+     * ([resolveAllUncached] returns non-empty or throws), so
+     * [CachedAddr.addrs] always has a first element.
      */
     private class CachedAddr(val addrs: List<InetAddress>, val atMs: Long)
 
@@ -221,26 +319,6 @@ object DnsResolver {
      *  [dnsPort]); produksi tidak pernah mengubahnya. */
     @Volatile
     var addrCacheTtlMs: Long = 120_000L
-
-    private fun resolveUncached(
-        host: String,
-        clean: String,
-        port: Int,
-        timeoutMs: Int,
-    ): InetAddress {
-        try {
-            return resolve(clean, timeoutMs)
-        } catch (e: IOException) {
-            // Fallback: resolver sistem (relay DNS TUN mungkin jalan).
-            try {
-                val resolved = systemResolve(clean, port, timeoutMs)
-                return resolved.address
-                    ?: throw IOException("DNS gagal untuk $host: ${e.message}", e)
-            } catch (e2: Exception) {
-                throw IOException("DNS gagal untuk $host: ${e2.message ?: e.message}", e2)
-            }
-        }
-    }
 
     /**
      * Satu query DNS (tipe [qtype]) ke server langsung. Mengembalikan
