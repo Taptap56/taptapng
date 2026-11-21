@@ -468,7 +468,7 @@ class ServerEditorActivity : AppCompatActivity() {
         show(R.id.section_dnstt, slowdns)
         show(R.id.section_onering, chip(R.id.chip_onering).isChecked)
         show(R.id.section_pemicu, chip(R.id.chip_pemicu).isChecked)
-        show(R.id.section_proxy, chip(R.id.chip_proxy).isChecked)
+        show(R.id.section_http_proxy, chip(R.id.chip_proxy).isChecked)
         show(R.id.section_xray_payload, chip(R.id.chip_xray_payload).isChecked)
     }
 
