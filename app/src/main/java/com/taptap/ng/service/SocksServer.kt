@@ -326,6 +326,13 @@ class SocksServer(
      * selesai (EOF/error) → keduanya ditutup, thread pasangannya
      * bangun dari read dan mati juga. Mirip relay TunForwarder,
      * tapi di atas stream, bukan paket TUN.
+     *
+     * Terminasi mengandalkan close() yang membangunkan read yang
+     * sedang blok di thread pasangan — benar untuk socket
+     * (Socket.close() membangunkan read). Pipe in-memory TIDAK
+     * begitu (PipedInputStream.close() di sisi baca tidak
+     * membangunkan read) — stub test menutup sisi tulis pipenya
+     * (lihat SocksServerTest.StubStream).
      */
     private fun relay(clientIn: InputStream, clientOut: OutputStream, stream: ProxyStream) {
         val done = AtomicBoolean(false)

@@ -34,8 +34,17 @@ class SocksServerTest {
     private class StubStream(
         override val input: InputStream,
         override val output: OutputStream,
+        /**
+         * Sisi TULIS dari pipe [input]: menutupnya yang membangunkan
+         * read yang sedang blok di sisi baca. PipedInputStream.close()
+         * di sisi baca TIDAK membangunkan read yang macet (beda dengan
+         * Socket.close() di produksi, yang membangunkan) — tanpa ini
+         * relay thread tidak pernah selesai dan handler menggantung.
+         */
+        private val inputWriteSide: OutputStream? = null,
     ) : ProxyStream {
         override fun close() {
+            runCatching { inputWriteSide?.close() }
             runCatching { input.close() }
             runCatching { output.close() }
         }
@@ -59,7 +68,7 @@ class SocksServerTest {
         ): ProxyStream {
             if (failDial) throw IOException("dial gagal")
             dialed += targetHost to targetPort
-            return StubStream(feedIn, received)
+            return StubStream(feedIn, received, feedOut)
         }
 
         override fun close() = Unit
@@ -127,6 +136,14 @@ class SocksServerTest {
     ): ByteArray {
         write(0x05, 0x01, 0x00)
         assertEquals(byteArrayOf(0x05, 0x00).toList(), readExact(2).toList())
+        return connectRequest(host, port)
+    }
+
+    /** Hanya request CONNECT (dipakai sesudah auth — greeting sudah terkirim). */
+    private fun Harness.connectRequest(
+        host: String = "example.com",
+        port: Int = 80,
+    ): ByteArray {
         val hostBytes = host.toByteArray(Charsets.UTF_8)
         val req = ByteArrayOutputStream().apply {
             write(0x05); write(0x01); write(0x00); write(0x03)
@@ -180,7 +197,7 @@ class SocksServerTest {
         }
         h.write(sub.toByteArray())
         assertEquals(byteArrayOf(0x01, 0x00).toList(), h.readExact(2).toList())
-        val reply = h.connectDomain("example.com", 443)
+        val reply = h.connectRequest("example.com", 443)
         assertEquals(0x00, reply[1].toInt() and 0xFF)
         h.closeClient()
         h.joinHandler()
