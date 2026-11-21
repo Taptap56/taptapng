@@ -39,9 +39,11 @@ import kotlin.concurrent.thread
  * - UDP port 53 (DNS): forwarded to [dnsServer] over a protected
  *   DatagramSocket (bypasses the VPN), response wrapped back;
  *   on a primary timeout the fallback [dnsFallbackServer] is tried.
- *   Other UDP is dropped.
+ *   Other UDP is forwarded through the proxy ([ProxyClient.dialUdp],
+ *   one session per 4-tuple).
  * - ICMP echo request: answered locally.
- * - IPv6: dropped (M6).
+ * - IPv6 (v1.0.6, M6): same state machines with 128-bit session
+ *   keys — TCP, UDP (incl. DNS/53 replies as UDPv6) and ICMPv6 echo.
  *
  * The proxy dial itself must bypass the VPN: the service sets
  * `Transport.protectSocket` before creating the client, and the DNS
@@ -107,7 +109,26 @@ class TunForwarder(
 
     private enum class State { DIALING, SYN_SENT, ESTABLISHED, CLOSED }
 
-    private data class Key(val srcIp: Int, val srcPort: Int, val dstIp: Int, val dstPort: Int)
+    /**
+     * v1.0.6 (M6): kunci sesi memakai [TcpPacket.IpAddr] (4 byte
+     * IPv4 atau 16 byte IPv6) — sesi IPv6 berkunci 128-bit.
+     */
+    private data class Key(val srcIp: TcpPacket.IpAddr, val srcPort: Int, val dstIp: TcpPacket.IpAddr, val dstPort: Int)
+
+    /**
+     * v1.0.6 (M6): satu sesi UDP lewat proxy — satu [ProxyUdpSession]
+     * per 4-tuple, seperti sesi TCP. Balasan dibaca thread khusus
+     * ([replyThread]) dan ditulis balik ke TUN sebagai paket UDP.
+     * DNS (port 53) TIDAK lewat sini — tetap relay langsung
+     * (lihat [handleUdp]).
+     */
+    private data class UdpKey(val srcIp: TcpPacket.IpAddr, val srcPort: Int, val dstIp: TcpPacket.IpAddr, val dstPort: Int)
+
+    private class UdpSession(val key: UdpKey, val udp: com.taptap.ng.core.proto.ProxyUdpSession) {
+        @Volatile var lastActivityMs: Long = System.currentTimeMillis()
+        val closed = AtomicBoolean(false)
+        @Volatile var replyThread: Thread? = null
+    }
 
     private class TcpSession(val key: Key, val isn: Long) {
         @Volatile var state: State = State.DIALING
@@ -163,6 +184,13 @@ class TunForwarder(
 
     private val sessions = ConcurrentHashMap<Key, TcpSession>()
     /**
+     * v1.0.6 (M6): sesi UDP lewat proxy (kunci 4-tuple IPv4).
+     * Terpisah dari [sessions] (TCP) — eviksi + lifecycle sendiri.
+     */
+    private val udpSessions = ConcurrentHashMap<UdpKey, UdpSession>()
+    /** Thread penyapu sesi UDP idle (lihat [UDP_IDLE_MS]). */
+    private var udpSweeperThread: Thread? = null
+    /**
      * v1.0.18: the TUN write moved to a single writer thread
      * (TunWriter) — the old synchronized(writeLock) + blocking
      * write() per segment stalled every relay thread whenever one
@@ -212,6 +240,25 @@ class TunForwarder(
          * at 96 and evicts the oldest by last activity — the old
          * map was unbounded, so a SYN flood grew it forever. */
         const val MAX_SESSIONS = 96
+
+        /**
+         * v1.0.6 (M6): max sesi UDP lewat proxy (XVEON memakai
+         * batas yang sama dengan TCP; UDP tanpa balasan tidak boleh
+         * menumbuhkan map tanpa batas).
+         */
+        const val MAX_UDP_SESSIONS = 64
+
+        /**
+         * v1.0.6 (M6): sesi UDP yang tidak ada paketnya selama ini
+         * ditutup penyapu (datagram tanpa balasan — mis. QUIC yang
+         * pindah koneksi — tidak boleh menahan sesi selamanya).
+         * 120 dtk: jauh di atas interval keepalive QUIC (~25 dtk)
+         * tapi cukup pendek untuk tidak menumpuk.
+         */
+        const val UDP_IDLE_MS = 120_000L
+
+        /** Interval penyapu sesi UDP idle. */
+        const val UDP_SWEEP_MS = 30_000L
 
         /** Max queued app-data chunks per connection (XVEON: 48). */
         const val MAX_QUEUE_CHUNKS = 48
@@ -266,8 +313,8 @@ class TunForwarder(
          * kernel delivery cost) stops capping throughput at
          * ~55 Mbps.
          */
-        fun maxMssForMtu(tunMtu: Int): Int =
-            (tunMtu - 40).coerceIn(1140, MAX_SEGMENT_MSS)
+        fun maxMssForMtu(tunMtu: Int, isV6: Boolean = false): Int =
+            (tunMtu - if (isV6) 60 else 40).coerceIn(1140, MAX_SEGMENT_MSS)
 
         /**
          * Max wire bytes of one relay TCP segment at the biggest
@@ -278,6 +325,12 @@ class TunForwarder(
         const val MAX_PACKET_BYTES = 40 + MAX_SEGMENT_MSS
 
         /**
+         * v1.0.6 (M6): same, for IPv6 — the IPv6 header is 40
+         * bytes, so a max-MSS segment needs 60 + [MAX_SEGMENT_MSS].
+         */
+        const val MAX_PACKET_BYTES_V6 = 60 + MAX_SEGMENT_MSS
+
+        /**
          * SYN-ACK MSS from the MTU (v1.0.15, ceiling raised
          * v1.0.21): [maxMssForMtu], capped at the peer's MSS.
          * XVEON used clamp(tunMtu − 140, 1140, 1360) — the extra
@@ -285,8 +338,8 @@ class TunForwarder(
          * not apply to the local TUN link (the IP packet is
          * 20 + 20 + MSS ≤ tunMtu either way).
          */
-        fun synAckMss(tunMtu: Int, peerMss: Int): Int =
-            minOf(peerMss, maxMssForMtu(tunMtu))
+        fun synAckMss(tunMtu: Int, peerMss: Int, isV6: Boolean = false): Int =
+            minOf(peerMss, maxMssForMtu(tunMtu, isV6))
 
         /**
          * Short human-readable reason for a dial failure, for the
@@ -316,12 +369,31 @@ class TunForwarder(
     /** Sessions currently tracked (tests). */
     fun sessionCount(): Int = sessions.size
 
+    /** UDP sessions currently tracked (tests, v1.0.6). */
+    fun udpSessionCount(): Int = udpSessions.size
+
     /** Known destinations (tests): dst IP int → hostname. */
     fun knownHostsSnapshot(): Map<Int, String> = knownHosts.toMap()
 
     /** Record a known destination (tests / DNS relay / sniffing). */
     fun recordKnownHost(dstIp: Int, host: String) {
         if (host.isNotBlank()) knownHosts[dstIp] = host.lowercase()
+    }
+
+    /**
+     * v1.0.6 (M6): tujuan IPv6 yang dikenal — string IPv6 →
+     * hostname (dari jawaban AAAA / sniffing). Route-only masih
+     * IPv4 saja (lihat [RouteOnlyGate]); map ini untuk diagnosis
+     * dan gate IPv6 di masa depan.
+     */
+    private val knownHosts6: MutableMap<String, String> = ConcurrentHashMap()
+
+    /** Known IPv6 destinations (tests): IPv6 string → hostname. */
+    fun knownHosts6Snapshot(): Map<String, String> = knownHosts6.toMap()
+
+    /** Record a known IPv6 destination (tests / DNS relay / sniffing). */
+    fun recordKnownHost6(dstIp: TcpPacket.IpAddr, host: String) {
+        if (host.isNotBlank()) knownHosts6[dstIp.toString()] = host.lowercase()
     }
 
     fun start() {
@@ -332,7 +404,29 @@ class TunForwarder(
         // gets the big MTU (mtu=9000 mss=8960) or falls back.
         DialLog.log("TUN", "mtu=$tunMtu mss=${maxMssForMtu(tunMtu)}")
         tunWriter.start()
+        udpSweeperThread = thread(name = "tun-udp-sweep", isDaemon = true) { udpSweepLoop() }
         readerThread = thread(name = "tun-reader", isDaemon = true) { readLoop() }
+    }
+
+    /**
+     * v1.0.6 (M6): penyapu sesi UDP idle — tiap [UDP_SWEEP_MS],
+     * tutup sesi yang tidak ada paketnya selama [UDP_IDLE_MS].
+     * close() membangunkan thread balasan sesi itu (baca stream
+     * gagal → null → thread keluar).
+     */
+    private fun udpSweepLoop() {
+        while (running.get()) {
+            try {
+                Thread.sleep(UDP_SWEEP_MS)
+            } catch (_: InterruptedException) {
+                break
+            }
+            if (!running.get()) break
+            val now = System.currentTimeMillis()
+            udpSessions.values.toList()
+                .filter { now - it.lastActivityMs > UDP_IDLE_MS }
+                .forEach { closeUdpSession(it) }
+        }
     }
 
     fun stop() {
@@ -348,6 +442,10 @@ class TunForwarder(
         tunWriter.clear()
         sessions.values.toList().forEach { closeSession(it) }
         sessions.clear()
+        udpSessions.values.toList().forEach { closeUdpSession(it) }
+        udpSessions.clear()
+        udpSweeperThread?.interrupt()
+        udpSweeperThread = null
         runCatching { tunOut.close() }
         DialLog.log(
             "FORWARDER",
@@ -426,7 +524,25 @@ class TunForwarder(
         )
     }
 
+    /** Detail line for one parsed IPv6 packet (first 20 only, v1.0.6). */
+    private fun logPacket6(proto: String, srcIp: TcpPacket.IpAddr, srcPort: Int, dstIp: TcpPacket.IpAddr, dstPort: Int) {
+        if (loggedPackets.getAndIncrement() >= 20) return
+        DialLog.log(
+            "TUN",
+            "$proto $srcIp:$srcPort -> $dstIp:$dstPort (#${packetsRead.get()})",
+        )
+    }
+
     private fun handlePacket(buf: ByteArray, len: Int) {
+        if (len < 1) return
+        when (buf[0].toInt() shr 4) {
+            4 -> handlePacket4(buf, len)
+            6 -> handlePacket6(buf, len)
+            else -> Unit // Unknown version: drop.
+        }
+    }
+
+    private fun handlePacket4(buf: ByteArray, len: Int) {
         // v1.0.15: the TCP branch parses the IP header in place
         // (no copy) and copies only the TCP data payload out —
         // parseIp + parseTcp copied the whole segment twice per
@@ -437,7 +553,7 @@ class TunForwarder(
             TcpPacket.PROTO_TCP -> {
                 val tcp = TcpPacket.parseTcpSegment(buf, ipH.payloadOff, ipH.payloadLen) ?: return
                 logPacket("TCP", ipH.src, tcp.srcPort, ipH.dst, tcp.dstPort)
-                handleTcp(ipH.src, ipH.dst, tcp)
+                handleTcp(TcpPacket.IpAddr.v4(ipH.src), TcpPacket.IpAddr.v4(ipH.dst), tcp)
             }
             TcpPacket.PROTO_UDP -> {
                 val ip = TcpPacket.parseIp(buf, len) ?: return
@@ -450,13 +566,44 @@ class TunForwarder(
                 val reply = TcpPacket.buildIcmpEchoReply(buf, len) ?: return
                 writePacket(reply)
             }
-            else -> Unit // IPv6 and the rest are dropped (M6).
+            else -> Unit // Other IPv4 protocols are dropped.
+        }
+    }
+
+    /**
+     * v1.0.6 (M6): IPv6 packets — TCP / UDP / ICMPv6 echo, same
+     * state machines as IPv4 but with 128-bit session keys and
+     * IPv6 packet builders. Extension headers are dropped by
+     * [TcpPacket.parseIpv6Header].
+     */
+    private fun handlePacket6(buf: ByteArray, len: Int) {
+        val ipH = TcpPacket.parseIpv6Header(buf, len) ?: return
+        val src = TcpPacket.IpAddr.v6(ipH.src)
+        val dst = TcpPacket.IpAddr.v6(ipH.dst)
+        when (ipH.protocol) {
+            TcpPacket.PROTO_TCP -> {
+                val tcp = TcpPacket.parseTcpSegment(buf, ipH.payloadOff, ipH.payloadLen) ?: return
+                logPacket6("TCP6", src, tcp.srcPort, dst, tcp.dstPort)
+                handleTcp(src, dst, tcp)
+            }
+            TcpPacket.PROTO_UDP -> {
+                val payload = buf.copyOfRange(ipH.payloadOff, ipH.payloadOff + ipH.payloadLen)
+                val udp = TcpPacket.parseUdp(payload) ?: return
+                logPacket6("UDP6", src, udp.srcPort, dst, udp.dstPort)
+                handleUdp6(src, dst, udp)
+            }
+            TcpPacket.PROTO_ICMPV6 -> {
+                logPacket6("ICMPv6", src, 0, dst, 0)
+                val reply = TcpPacket.buildIcmpv6EchoReply(buf, len) ?: return
+                writePacket(reply)
+            }
+            else -> Unit // Other IPv6 protocols are dropped.
         }
     }
 
     // ---- TCP ----
 
-    private fun handleTcp(srcIp: Int, dstIp: Int, tcp: TcpPacket.TcpSegment) {
+    private fun handleTcp(srcIp: TcpPacket.IpAddr, dstIp: TcpPacket.IpAddr, tcp: TcpPacket.TcpSegment) {
         val key = Key(srcIp, tcp.srcPort, dstIp, tcp.dstPort)
         val session = sessions[key]
         if (tcp.flags and TcpPacket.FLAG_RST != 0) {
@@ -469,12 +616,14 @@ class TunForwarder(
                 // dikenal tidak didial sama sekali — RST + log, lihat
                 // RouteOnlyGate. Terjadi SEBELUM sesi dibuat, jadi
                 // tidak ada dial proxy dan tidak ada sesi bocor.
-                if (RouteOnlyGate.decide(routeOnlyEnabled, dstIp, knownHosts) ==
+                // v1.0.6 (M6): gate hanya IPv4 — IPv6 belum punya
+                // map Int; tujuan IPv6 selalu didial.
+                if (dstIp.isV4 && RouteOnlyGate.decide(routeOnlyEnabled, dstIp.toInt(), knownHosts) ==
                     RouteOnlyGate.Decision.REFUSE
                 ) {
                     DialLog.log(
                         "ROUTE-ONLY",
-                        "tolak ${TcpPacket.ipToString(dstIp)}:${tcp.dstPort} " +
+                        "tolak $dstIp:${tcp.dstPort} " +
                             "(tujuan tidak dikenal — tidak ada di DNS/sniffing)",
                     )
                     sendRst(srcIp, dstIp, tcp)
@@ -499,7 +648,7 @@ class TunForwarder(
                 // and the relay must be allowed to build segments
                 // that big, or the bigger MTU changes nothing.
                 val offered = TcpPacket.parseTcpOptions(tcp.options)
-                offered.mss?.let { s.peerMss = minOf(maxMssForMtu(tunMtu), it) }
+                offered.mss?.let { s.peerMss = minOf(maxMssForMtu(tunMtu, dstIp.isV6), it) }
                 s.wsOffered = offered.windowScale != null
                 s.sackOffered = offered.sackPermitted
                 sessions[key] = s
@@ -550,7 +699,12 @@ class TunForwarder(
             session.sniffAttempts++
             Sniffer.extract(payload)?.let { found ->
                 session.sniffed = true
-                recordKnownHost(session.key.dstIp, found.host)
+                // v1.0.6 (M6): IPv6 dicatat di map string-nya sendiri.
+                if (session.key.dstIp.isV4) {
+                    recordKnownHost(session.key.dstIp.toInt(), found.host)
+                } else {
+                    recordKnownHost6(session.key.dstIp, found.host)
+                }
             }
         }
         var ackNeeded = false
@@ -695,7 +849,7 @@ class TunForwarder(
 
     private fun dial(session: TcpSession) {
         val key = session.key
-        val dst = "${TcpPacket.ipToString(key.dstIp)}:${key.dstPort}"
+        val dst = "${key.dstIp}:${key.dstPort}"
         // v1.0.9: log EVERY attempt, not just failures. taptapng-6.txt
         // (2026-11-20 04:17) stopped at "PROBE ok" with no forwarder
         // lines at all, so nobody could tell whether a dial was even
@@ -724,9 +878,15 @@ class TunForwarder(
             // tidak ada artinya di luar TUN ini. Satu baris ini saja
             // yang menyentuh jalur TCP; state machine / relay paket
             // tidak berubah.
-            val dialHost = dnsPolicy.fakeDns?.lookupHost(key.dstIp)?.also {
-                DialLog.log("DNS", "fake $dst -> $it")
-            } ?: TcpPacket.ipToString(key.dstIp)
+            // FakeDNS hanya IPv4 (pool 198.18.0.0/15) — tujuan
+            // IPv6 tidak pernah fake, langsung alamatnya.
+            val dialHost = if (key.dstIp.isV4) {
+                dnsPolicy.fakeDns?.lookupHost(key.dstIp.toInt())?.also {
+                    DialLog.log("DNS", "fake $dst -> $it")
+                } ?: key.dstIp.toString()
+            } else {
+                key.dstIp.toString()
+            }
             stream = proxy.dial(
                 dialHost,
                 key.dstPort,
@@ -739,7 +899,7 @@ class TunForwarder(
             // every dial while the status stays "Connecting..." forever.
             reportDialFailure(e)
             // Refuse the connection: RST|ACK.
-            val rst = TcpPacket.buildTcp(
+            val rst = buildTcpPacket(
                 key.dstIp, key.srcIp, key.dstPort, key.srcPort,
                 0, session.clientSeq,
                 TcpPacket.FLAG_RST or TcpPacket.FLAG_ACK, ByteArray(0),
@@ -787,7 +947,7 @@ class TunForwarder(
         // SpeedStats — the SPEED window lines below are the whole
         // point of this version (measure, don't guess).
         val stats = session.speedStats
-        val dst = "${TcpPacket.ipToString(session.key.dstIp)}:${session.key.dstPort}"
+        val dst = "${session.key.dstIp}:${session.key.dstPort}"
         // v1.0.15: one read() pulls up to RELAY_READ_SIZE (several
         // VMess chunks) instead of one peer-MSS read per segment,
         // and segments are built straight from the read buffer
@@ -803,13 +963,15 @@ class TunForwarder(
         // 8960-byte segment would overflow the old buffer
         // (buildTcpInto requires out.size >= total). One buffer
         // per relay thread (max 96 sessions × 9 KiB worst case).
-        val pktBuf = ByteArray(MAX_PACKET_BYTES)
+        val pktBuf = ByteArray(
+            if (session.key.dstIp.isV6) MAX_PACKET_BYTES_V6 else MAX_PACKET_BYTES,
+        )
         // Segments never exceed what the app's SYN offered
         // (v1.0.10); coerce to >= 1 like the old code did — a
         // peer MSS of 0 would otherwise emit zero-length segments
         // forever (pos never advances). v1.0.21: cap at the
         // MTU-derived max, not the old 1460.
-        val segMss = session.peerMss.coerceIn(1, maxMssForMtu(tunMtu))
+        val segMss = session.peerMss.coerceIn(1, maxMssForMtu(tunMtu, session.key.dstIp.isV6))
         var buffered = 0
         var pos = 0
         // SPEED window bookkeeping: the window starts at the first
@@ -852,7 +1014,7 @@ class TunForwarder(
                 }
                 val take = minOf(segMss, buffered - pos)
                 val tb = if (stats != null) System.nanoTime() else 0L
-                val pktLen = TcpPacket.buildTcpInto(
+                val pktLen = buildTcpPacketInto(
                     pktBuf,
                     session.key.dstIp, session.key.srcIp,
                     session.key.dstPort, session.key.srcPort,
@@ -876,6 +1038,74 @@ class TunForwarder(
         sendFin(session)
     }
 
+    /**
+     * v1.0.6 (M6): bangun satu paket TCP ke TUN — IPv4
+     * ([TcpPacket.buildTcp]) atau IPv6 ([TcpPacket.buildTcp6])
+     * sesuai keluarga alamat sumber. Semua pengirim paket TCP
+     * (SYN-ACK / ACK / FIN / RST) lewat sini.
+     */
+    private fun buildTcpPacket(
+        srcIp: TcpPacket.IpAddr,
+        dstIp: TcpPacket.IpAddr,
+        srcPort: Int,
+        dstPort: Int,
+        seq: Long,
+        ack: Long,
+        flags: Int,
+        payload: ByteArray,
+        mss: Int = 0,
+        options: ByteArray = byteArrayOf(),
+        window: Int = TcpPacket.TCP_WINDOW,
+    ): ByteArray = if (srcIp.isV6) {
+        TcpPacket.buildTcp6(
+            srcIp.bytes, dstIp.bytes, srcPort, dstPort, seq, ack,
+            flags, payload, mss, options, window,
+        )
+    } else {
+        TcpPacket.buildTcp(
+            srcIp.toInt(), dstIp.toInt(), srcPort, dstPort, seq, ack,
+            flags, payload, mss, options, window,
+        )
+    }
+
+    /** Sama seperti [buildTcpPacket], ke buffer yang dipakai ulang (jalur relay). */
+    private fun buildTcpPacketInto(
+        out: ByteArray,
+        srcIp: TcpPacket.IpAddr,
+        dstIp: TcpPacket.IpAddr,
+        srcPort: Int,
+        dstPort: Int,
+        seq: Long,
+        ack: Long,
+        flags: Int,
+        payload: ByteArray,
+        payloadOff: Int = 0,
+        payloadLen: Int = -1,
+    ): Int = if (srcIp.isV6) {
+        TcpPacket.buildTcp6Into(
+            out, srcIp.bytes, dstIp.bytes, srcPort, dstPort, seq, ack,
+            flags, payload, payloadOff, payloadLen,
+        )
+    } else {
+        TcpPacket.buildTcpInto(
+            out, srcIp.toInt(), dstIp.toInt(), srcPort, dstPort, seq, ack,
+            flags, payload, payloadOff, payloadLen,
+        )
+    }
+
+    /** Bangun satu paket UDP ke TUN — IPv4 atau IPv6 (v1.0.6, M6). */
+    private fun buildUdpPacket(
+        srcIp: TcpPacket.IpAddr,
+        dstIp: TcpPacket.IpAddr,
+        srcPort: Int,
+        dstPort: Int,
+        payload: ByteArray,
+    ): ByteArray = if (srcIp.isV6) {
+        TcpPacket.buildUdp6(srcIp.bytes, dstIp.bytes, srcPort, dstPort, payload)
+    } else {
+        TcpPacket.buildUdp(srcIp.toInt(), dstIp.toInt(), srcPort, dstPort, payload)
+    }
+
     private fun sendSynAck(session: TcpSession) {
         val key = session.key
         // v1.0.10: echo what the SYN offered, like xray-core's tun
@@ -891,12 +1121,12 @@ class TunForwarder(
             extra.write(byteArrayOf(1, 3, 3, TcpPacket.TCP_WINDOW_SHIFT.toByte()))
         }
         val window = if (session.wsOffered) TcpPacket.TCP_WINDOW_SCALED else TcpPacket.TCP_WINDOW
-        val pkt = TcpPacket.buildTcp(
+        val pkt = buildTcpPacket(
             key.dstIp, key.srcIp, key.dstPort, key.srcPort,
             session.isn, session.clientSeq,
             TcpPacket.FLAG_SYN or TcpPacket.FLAG_ACK,
             ByteArray(0),
-            mss = synAckMss(tunMtu, session.peerMss),
+            mss = synAckMss(tunMtu, session.peerMss, key.dstIp.isV6),
             options = extra.toByteArray(),
             window = window,
         )
@@ -906,7 +1136,7 @@ class TunForwarder(
 
     private fun sendAck(session: TcpSession) {
         val key = session.key
-        val pkt = TcpPacket.buildTcp(
+        val pkt = buildTcpPacket(
             key.dstIp, key.srcIp, key.dstPort, key.srcPort,
             session.serverSeq, session.clientSeq,
             TcpPacket.FLAG_ACK, ByteArray(0),
@@ -919,7 +1149,7 @@ class TunForwarder(
         if (!session.closed.compareAndSet(false, true)) return
         logSpeedSummary(session)
         val key = session.key
-        val pkt = TcpPacket.buildTcp(
+        val pkt = buildTcpPacket(
             key.dstIp, key.srcIp, key.dstPort, key.srcPort,
             session.serverSeq, session.clientSeq,
             TcpPacket.FLAG_FIN or TcpPacket.FLAG_ACK, ByteArray(0),
@@ -956,12 +1186,12 @@ class TunForwarder(
         val snap = stats.snapshot()
         if (snap.downBytes == 0L && snap.upBytes == 0L) return
         val wallMs = System.currentTimeMillis() - session.speedStartMs
-        val dst = "${TcpPacket.ipToString(session.key.dstIp)}:${session.key.dstPort}"
+        val dst = "${session.key.dstIp}:${session.key.dstPort}"
         DialLog.log("SPEED", SpeedStats.totalLine(snap, dst, wallMs))
     }
 
-    private fun sendRst(srcIp: Int, dstIp: Int, tcp: TcpPacket.TcpSegment) {
-        val pkt = TcpPacket.buildTcp(
+    private fun sendRst(srcIp: TcpPacket.IpAddr, dstIp: TcpPacket.IpAddr, tcp: TcpPacket.TcpSegment) {
+        val pkt = buildTcpPacket(
             dstIp, srcIp, tcp.dstPort, tcp.srcPort,
             0, (tcp.seq + 1) and 0xFFFFFFFFL,
             TcpPacket.FLAG_RST or TcpPacket.FLAG_ACK, ByteArray(0),
@@ -969,14 +1199,40 @@ class TunForwarder(
         writePacket(pkt)
     }
 
-    // ---- UDP (DNS only) ----
+    // ---- UDP ----
 
+    /** UDP IPv4 (v1.0.6: delegasi ke [handleUdpCommon] dengan alamat IpAddr). */
     private fun handleUdp(ip: TcpPacket.IpPacket, udp: TcpPacket.UdpDatagram) {
-        if (udp.dstPort != 53) return
-        val query = udp.payload
-        val srcIp = ip.src
-        val srcPort = udp.srcPort
-        val dstIp = ip.dst
+        handleUdpCommon(
+            TcpPacket.IpAddr.v4(ip.src), udp.srcPort,
+            TcpPacket.IpAddr.v4(ip.dst), udp.dstPort, udp.payload,
+        )
+    }
+
+    /** UDP IPv6 (v1.0.6, M6): sama seperti IPv4, balasannya paket UDPv6. */
+    private fun handleUdp6(src: TcpPacket.IpAddr, dst: TcpPacket.IpAddr, udp: TcpPacket.UdpDatagram) {
+        handleUdpCommon(src, udp.srcPort, dst, udp.dstPort, udp.payload)
+    }
+
+    /**
+     * v1.0.6 (M6): UDP non-DNS diteruskan lewat proxy (sesi per
+     * 4-tuple); DNS port 53 TETAP relay langsung ke upstream —
+     * jangan dialihkan lewat proxy, supaya resolve aplikasi tidak
+     * bergantung pada tunnel yang sama. Berlaku untuk IPv4 dan
+     * IPv6 (balasan DNS IPv6 ditulis sebagai paket UDPv6).
+     */
+    private fun handleUdpCommon(
+        srcIp: TcpPacket.IpAddr,
+        srcPort: Int,
+        dstIp: TcpPacket.IpAddr,
+        dstPort: Int,
+        payload: ByteArray,
+    ) {
+        if (dstPort != 53) {
+            handleProxyUdp(srcIp, srcPort, dstIp, dstPort, payload)
+            return
+        }
+        val query = payload
         // v1.0.10: the DNS relay was completely silent — a query
         // that died here left no trace at all, so a browser that
         // cannot resolve looks identical to "no packets reach the
@@ -991,8 +1247,7 @@ class TunForwarder(
             dnsLogged.incrementAndGet()
             DialLog.log(
                 "DNS",
-                "query ${TcpPacket.ipToString(dstIp)} ${query.size}B dari " +
-                    "${TcpPacket.ipToString(srcIp)}:$srcPort (#$dnsNo)",
+                "query $dstIp ${query.size}B dari $srcIp:$srcPort (#$dnsNo)",
             )
         }
         dnsExecutor.execute {
@@ -1005,9 +1260,9 @@ class TunForwarder(
                 // v1.0.5 (kelompok F): catat jawaban DNS ke
                 // knownHosts — IP jawaban → hostname yang ditanya
                 // — supaya route-only mengenali tujuan yang baru
-                // saja di-resolve aplikasi. Hanya record A (IPv4);
-                // AAAA dicatat juga di jawaban tapi forwarder
-                // M2 tetap men-drop paket IPv6 (lihat Ipv6Support).
+                // saja di-resolve aplikasi. v1.0.6 (M6): jawaban
+                // AAAA dicatat di knownHosts6 (IPv6 tidak
+                // di-route-only, tapi dicatat untuk diagnosis).
                 runCatching {
                     val qName = Sniffer.parseDnsQueryName(query)
                     if (qName != null) {
@@ -1016,11 +1271,15 @@ class TunForwarder(
                         for (addr in DnsResolver.parseAnswers(respBytes, qId)) {
                             Sniffer.ipv4ToInt(addr)?.let { ip ->
                                 recordKnownHost(ip, qName)
+                            } ?: run {
+                                if (addr is java.net.Inet6Address) {
+                                    recordKnownHost6(TcpPacket.IpAddr(addr.address), qName)
+                                }
                             }
                         }
                     }
                 }
-                val pkt = TcpPacket.buildUdp(dstIp, srcIp, 53, srcPort, respBytes)
+                val pkt = buildUdpPacket(dstIp, srcIp, 53, srcPort, respBytes)
                 writePacket(pkt)
                 if (detail) {
                     // v1.0.4: dnsLogged hanya naik sekali per
@@ -1029,8 +1288,7 @@ class TunForwarder(
                     // sebenarnya ~2–3 query.
                     DialLog.log(
                         "DNS",
-                        "jawab ${TcpPacket.ipToString(dstIp)} ${respBytes.size}B ke " +
-                            "${TcpPacket.ipToString(srcIp)}:$srcPort (#$dnsNo)",
+                        "jawab $dstIp ${respBytes.size}B ke $srcIp:$srcPort (#$dnsNo)",
                     )
                 }
             } catch (e: Exception) {
@@ -1038,6 +1296,91 @@ class TunForwarder(
                 DialLog.failure("DNS", e)
             }
         }
+    }
+
+    /**
+     * v1.0.6 (M6): UDP non-DNS lewat proxy. Satu sesi per 4-tuple
+     * (dibuat saat datagram pertama, ditutup penyapu bila idle);
+     * datagram dikirim apa adanya lewat [ProxyClient.dialUdp],
+     * balasan ditulis balik ke TUN oleh thread balasan sesi itu.
+     * Entry yang tidak mendukung UDP (SSH — dialUdp default
+     * melempar UnsupportedOperationException) membuat datagram
+     * dibuang + satu baris log, bukan crash reader.
+     */
+    private fun handleProxyUdp(
+        srcIp: TcpPacket.IpAddr,
+        srcPort: Int,
+        dstIp: TcpPacket.IpAddr,
+        dstPort: Int,
+        payload: ByteArray,
+    ) {
+        val key = UdpKey(srcIp, srcPort, dstIp, dstPort)
+        var session = udpSessions[key]
+        if (session == null || session.closed.get()) {
+            if (udpSessions.size >= MAX_UDP_SESSIONS) {
+                udpSessions.values.minByOrNull { it.lastActivityMs }
+                    ?.let { closeUdpSession(it) }
+            }
+            // FakeDNS (v1.0.5): tujuan IP fake dipetakan balik ke
+            // hostname aslinya SEBELUM dial — sama seperti TCP.
+            // FakeDNS hanya IPv4; tujuan IPv6 langsung alamatnya.
+            val dialHost = if (dstIp.isV4) {
+                dnsPolicy.fakeDns?.lookupHost(dstIp.toInt())?.also {
+                    DialLog.log("DNS", "fake $dstIp:$dstPort -> $it")
+                } ?: dstIp.toString()
+            } else {
+                dstIp.toString()
+            }
+            val proxySession = try {
+                proxy.dialUdp(dialHost, dstPort)
+            } catch (e: Exception) {
+                DialLog.failure("UDP $dstIp:$dstPort", e)
+                return
+            }
+            val created = UdpSession(key, proxySession)
+            val raced = udpSessions.putIfAbsent(key, created)
+            if (raced != null && !raced.closed.get()) {
+                runCatching { proxySession.close() }
+                session = raced
+            } else {
+                session = created
+                DialLog.log("UDP", "sesi $dstIp:$dstPort")
+                created.replyThread = thread(
+                    name = "tun-udp-reply-$dstPort", isDaemon = true,
+                ) { udpReplyLoop(created) }
+            }
+        }
+        val s = session ?: return
+        s.lastActivityMs = System.currentTimeMillis()
+        try {
+            s.udp.send(payload)
+        } catch (e: Exception) {
+            DialLog.failure("UDP $dstIp:$dstPort", e)
+            closeUdpSession(s)
+        }
+    }
+
+    /** Thread balasan satu sesi UDP: datagram dari proxy → paket TUN. */
+    private fun udpReplyLoop(session: UdpSession) {
+        val key = session.key
+        try {
+            while (!session.closed.get()) {
+                val data = session.udp.receive(1000) ?: break
+                session.lastActivityMs = System.currentTimeMillis()
+                val pkt = buildUdpPacket(key.dstIp, key.srcIp, key.dstPort, key.srcPort, data)
+                writePacket(pkt)
+            }
+        } catch (_: Exception) {
+            // Sesi mati (proxy putus / TUN tutup): keluar, tutup sesi.
+        } finally {
+            closeUdpSession(session)
+        }
+    }
+
+    private fun closeUdpSession(session: UdpSession) {
+        if (!session.closed.compareAndSet(false, true)) return
+        udpSessions.remove(session.key, session)
+        runCatching { session.udp.close() }
     }
 
     /**

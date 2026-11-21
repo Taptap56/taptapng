@@ -68,6 +68,9 @@ class VmessClient(
     // first session whenever two apps dialled at once).
     private val openStreams = ConcurrentHashMap.newKeySet<ProxyStream>()
 
+    /** v1.0.6 (M6): every UDP session this client opened (same rule). */
+    private val openUdpSessions = ConcurrentHashMap.newKeySet<ProxyUdpSession>()
+
     // M3: one DNSTT session per client, shared by the probe + all
     // forwarder dials (see SlowDnsSessionPool). Unused when the
     // entry is not a SlowDNS entry.
@@ -210,6 +213,65 @@ class VmessClient(
     }
 
     /**
+     * v1.0.6 (M6): UDP over VMess. Command UDP (0x02) in the
+     * logical header; datagrams are length-prefixed over the body
+     * stream (see [UdpFraming]). The response header is read
+     * LAZILY on the first receive — same deadlock as the TCP relay
+     * (v1.0.12): the server only flushes it once data flows. Mux
+     * ON = XUDP over the mux pool instead (see [Mux]).
+     */
+    override fun dialUdp(
+        targetHost: String,
+        targetPort: Int,
+        stats: SpeedStats?,
+    ): ProxyUdpSession {
+        val pool = muxPool
+        if (pool != null) {
+            val (_, session) = pool.openUdpSession(targetHost, targetPort, stats)
+            return TrackedProxyUdpSession(MuxUdpSession(session), openUdpSessions)
+        }
+        val transport = SlowDnsTransport.open(item, slowDns, stats)
+        try {
+            val session = VmessCrypto.newSession(
+                item, targetHost, targetPort, VmessCrypto.CMD_UDP,
+            )
+            transport.output.write(session.requestBytes)
+            transport.output.flush()
+            val bodyOut = VmessBodyOutputStream(transport.output, session, stats = stats)
+            val bodyIn = VmessBodyInputStream(transport.input, session, stats = stats)
+            val lazyIn = LazyHeaderInputStream(bodyIn) {
+                try {
+                    Transport.noteStage("VMess")
+                    DialLog.log("VMess", "Verifying Xray VMess authentication & protocol stream...")
+                    VmessCrypto.readResponseHeader(transport.input, session)
+                } catch (e: java.net.SocketTimeoutException) {
+                    val failure = Transport.preferWatchdogFailure(
+                        java.net.SocketTimeoutException("VMess gagal: ${e.message}"),
+                    )
+                    DialLog.failure("VMess", failure)
+                    throw failure
+                } catch (e: Exception) {
+                    val failure = Transport.preferWatchdogFailure(e)
+                    DialLog.failure("VMess", failure)
+                    throw failure
+                }
+                transport.clearHandshakeTimeout()
+                DialLog.log("VMess", "Xray VMess handshake & transport ready!")
+            }
+            DialLog.log("VMess", "UDP $targetHost:$targetPort")
+            return TrackedProxyUdpSession(
+                LengthPrefixedUdpSession(lazyIn, bodyOut) { transport.close() },
+                openUdpSessions,
+            )
+        } catch (e: Exception) {
+            transport.close()
+            val failure = Transport.preferWatchdogFailure(e)
+            DialLog.failure("VMess", failure)
+            throw failure
+        }
+    }
+
+    /**
      * v1.0.5 (kelompok D): dial lewat mux. Satu session logis di
      * atas koneksi fisik yang sudah ada (atau baru bila pool penuh).
      * Probe: tulis probe body sebagai data frame pertama, lalu
@@ -325,6 +387,7 @@ class VmessClient(
     }
 
     override fun close() {
+        openUdpSessions.toList().forEach { runCatching { it.close() } }
         openStreams.toList().forEach { runCatching { it.close() } }
         // v1.0.5 (kelompok D): tutup semua koneksi mux (dan
         // session-sessionnya) supaya thread pembaca berhenti.
@@ -365,6 +428,15 @@ object VmessCrypto {
 
     const val VERSION: Byte = 0x01
     const val CMD_TCP: Byte = 0x01
+    /**
+     * v1.0.6 (M6): command UDP (xray-core common/protocol
+     * RequestCommandUDP = 0x02). The body after the header is a
+     * sequence of length-prefixed datagrams (see [UdpFraming]) —
+     * NOT the TCP chunk stream's data flow; each datagram is one
+     * write to the body stream, and the reader splits the stream
+     * back into datagrams by the 2-byte length.
+     */
+    const val CMD_UDP: Byte = 0x02
     /**
      * v1.0.5 (kelompok D): command Mux (xray-core
      * common/protocol RequestCommandMux = 0x03). Header mux memakai

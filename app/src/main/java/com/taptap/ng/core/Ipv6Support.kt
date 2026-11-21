@@ -18,18 +18,20 @@ import java.net.InetAddress
  *   adalah jalur standar — tidak ada yang memblokirnya di M2.
  *
  * Yang BELUM (dan kenapa — bukan diam-diam dilewati):
- * - Paket IPv6 di TUN tetap DI-DROP forwarder (M6): relay TCP M2
- *   memakai kunci sesi IPv4 32-bit + state machine TCP IPv4; IPv6
- *   butuh kunci 128-bit, parser header IPv6, TCP/UDP/ICMPv6 di atas
- *   IPv6, dan penanganan MTU/extension header — itu skala M6 (full
- *   tunnel), bukan v1.0.5.
+ * - Paket IPv6 dengan extension header di-drop forwarder
+ *   ([TcpPacket.parseIpv6Header] menolak Next Header 0/43/44/60)
+ *   — lalu lintas aplikasi Android praktis tidak pernah membawa
+ *   extension header; dukungan penuh butuh parser rantai header.
+ * - Route-only masih IPv4 saja (gate memakai map Int); tujuan
+ *   IPv6 selalu didial, tapi jawabannya dicatat di knownHosts6.
+ * - Paket IPv6 di TUN SUDAH ditangani sejak v1.0.6 (M6):
+ *   TCP (kunci 128-bit), UDP lewat proxy, dan ICMPv6 echo —
+ *   lihat [TunForwarder.handlePacket6].
  * - [preferIpv6] TERSAMBUNG di v1.0.5 (integrasi): [DnsResolver]
  *   mengurutkan hasil [DnsResolver.resolveAll] lewat
  *   [orderAddresses] — false = IPv4 dulu (default v1.0.4),
  *   true = IPv6 dulu. Berlaku untuk dial utama, prime, dan
- *   delay test (semuanya lewat resolveAll). Paket IPv6 di TUN
- *   tetap di-drop (di bawah), jadi preferensi ini hanya soal
- *   alamat dial proxy, bukan lalu lintas aplikasi.
+ *   delay test (semuanya lewat resolveAll).
  */
 object Ipv6Support {
 

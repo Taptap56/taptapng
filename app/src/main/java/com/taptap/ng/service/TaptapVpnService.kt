@@ -517,7 +517,17 @@ class TaptapVpnService : VpnService() {
                 }
             }
             .apply {
-                if (settings.ipv6Enabled) addRoute("::", 0)
+                // v1.0.6 (M6): bila IPv6 nyala, TUN juga mendapat
+                // alamat IPv6 (ULA fd00:1:2:3::1/64) + rute ::/0 —
+                // tanpa alamat IPv6 di interface, aplikasi tidak
+                // punya source address IPv6 dan tidak pernah
+                // mengirim paket IPv6 ke TUN. Alamat ini dugaan
+                // yang wajar (ULA, tidak bentrok dengan LAN) —
+                // verifikasi di HP (lihat README v1.0.6).
+                if (settings.ipv6Enabled) {
+                    addAddress("fd00:1:2:3::1", 64)
+                    addRoute("::", 0)
+                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
             }
             .addDnsServer(primaryDns)
@@ -642,6 +652,9 @@ class TaptapVpnService : VpnService() {
                 val socks = SocksServer(
                     config = SocksConfig.fromSettings(settings),
                     dial = { host, port -> client.dial(host, port) },
+                    // v1.0.6 (M6): UDP ASSOCIATE lewat jalur UDP proxy
+                    // yang sama dengan forwarder TUN.
+                    dialUdp = { host, port -> client.dialUdp(host, port) },
                 )
                 socksServer = socks
                 runCatching { socks.start() }.onFailure {
@@ -726,6 +739,9 @@ class TaptapVpnService : VpnService() {
         // ServerTester: pre-TUN protect() returns false, so the
         // probe dials direct instead of failing instantly (v1.0.7).
         Transport.protectSocket = { socket -> protect(socket) }
+        // v1.0.6 (M6): sama untuk socket UDP (relay SS UDP) —
+        // tanpa ini datagram SS masuk TUN dan berputar di forwarder.
+        Transport.protectUdpSocket = { socket -> protect(socket) }
         // Same for the prime dials (v1.0.24, M5): a prime socket
         // must bypass the TUN exactly like a probe dial.
         PemicuManager.protectSocket = { socket -> protect(socket) }
@@ -785,6 +801,7 @@ class TaptapVpnService : VpnService() {
             currentClient = null
         }
         Transport.protectSocket = null
+        Transport.protectUdpSocket = null
         PemicuManager.protectSocket = null
         ServerTester.protectSocket = null
         DnsResolver.protectUdp = null

@@ -119,6 +119,18 @@ object Transport {
     var protectSocket: ((Socket) -> Boolean)? = null
 
     /**
+     * v1.0.6 (M6): same hook for UDP sockets (Shadowsocks UDP
+     * relay + any future UDP dial). Set by TaptapVpnService to
+     * VpnService.protect(DatagramSocket) alongside
+     * [protectSocket]; null = no protection (unit tests). A
+     * refused protect is fatal only while [TunnelState.up] and
+     * without [TunnelState.appBypass] — the same rule as TCP
+     * (see [protectSocket]).
+     */
+    @Volatile
+    var protectUdpSocket: ((java.net.DatagramSocket) -> Boolean)? = null
+
+    /**
      * v1.0.5 (Fragment): provides the live Fragment settings for
      * the next dial, or null when fragmenting is off. Set by
      * [com.taptap.ng.TaptapNGApp] from SettingsStore (read fresh

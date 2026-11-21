@@ -9,6 +9,14 @@ import java.nio.ByteOrder
  * TCP to the apps on the TUN interface while the payload travels
  * through an in-app [com.taptap.ng.core.proto.ProxyClient].
  *
+ * v1.0.6 (M6): IPv6 too — [IpAddr] (4 or 16 bytes), IPv6 header
+ * parse ([parseIpv6Header]), TCP/UDP/ICMPv6 build over IPv6
+ * ([buildTcp6]/[buildUdp6]/[buildIcmpv6EchoReply]) with IPv6
+ * pseudo-header checksums. Extension headers are NOT parsed: a
+ * packet whose Next Header is an extension (0/43/44/60) is dropped
+ * (app traffic from Android virtually never carries them; the
+ * forwarder logs nothing — dropping is the safe default).
+ *
  * The forwarder only implements the subset of TCP it needs: SYN /
  * SYN-ACK / ACK / data / FIN / RST, no retransmission (the TUN is a
  * local reliable link), no window scaling, MSS 1460 by default
@@ -20,6 +28,56 @@ object TcpPacket {
     const val PROTO_ICMP = 1
     const val PROTO_TCP = 6
     const val PROTO_UDP = 17
+    const val PROTO_ICMPV6 = 58
+
+    /** Next Header values that are extension headers (dropped, see KDoc). */
+    private val IPV6_EXTENSION_HEADERS = setOf(0, 43, 44, 60)
+
+    /**
+     * An IP address, IPv4 (4 bytes) or IPv6 (16 bytes). Content
+     * equality — usable as a map key (v1.0.6: TCP/UDP session keys
+     * are [IpAddr], so IPv6 sessions are 128-bit).
+     */
+    class IpAddr(val bytes: ByteArray) {
+        val isV6: Boolean get() = bytes.size == 16
+        val isV4: Boolean get() = bytes.size == 4
+
+        /** IPv4 as Int (big-endian), or 0 for IPv6. */
+        fun toInt(): Int {
+            if (!isV4) return 0
+            return ((bytes[0].toInt() and 0xFF) shl 24) or
+                ((bytes[1].toInt() and 0xFF) shl 16) or
+                ((bytes[2].toInt() and 0xFF) shl 8) or
+                (bytes[3].toInt() and 0xFF)
+        }
+
+        override fun toString(): String =
+            java.net.InetAddress.getByAddress(bytes).hostAddress
+
+        override fun equals(other: Any?): Boolean =
+            other is IpAddr && bytes.contentEquals(other.bytes)
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+
+        companion object {
+            fun v4(ip: Int): IpAddr = IpAddr(
+                byteArrayOf(
+                    (ip ushr 24).toByte(), (ip ushr 16).toByte(),
+                    (ip ushr 8).toByte(), ip.toByte(),
+                ),
+            )
+
+            fun v6(bytes: ByteArray): IpAddr {
+                require(bytes.size == 16) { "IPv6 harus 16 byte: ${bytes.size}" }
+                return IpAddr(bytes.copyOf())
+            }
+
+            fun parse(text: String): IpAddr {
+                val addr = java.net.InetAddress.getByName(text)
+                return IpAddr(addr.address)
+            }
+        }
+    }
 
     const val FLAG_FIN = 0x01
     const val FLAG_SYN = 0x02
@@ -196,6 +254,35 @@ object TcpPacket {
         return IpHeader(src, dst, protocol, ihl, end - ihl)
     }
 
+    /** IPv6 header fields (v1.0.6, M6) — same shape as [IpHeader]
+     * but with 16-byte addresses. */
+    data class Ip6Header(
+        val src: ByteArray,
+        val dst: ByteArray,
+        val protocol: Int,
+        /** Offset of the payload inside the packet (always 40 here). */
+        val payloadOff: Int,
+        /** Length of the payload (from the Payload Length field). */
+        val payloadLen: Int,
+    )
+
+    /**
+     * Parse an IPv6 header (v1.0.6, M6). Fixed 40-byte header
+     * only — null for non-IPv6 / truncated input / extension
+     * headers (Next Header in [IPV6_EXTENSION_HEADERS]).
+     */
+    fun parseIpv6Header(packet: ByteArray, len: Int): Ip6Header? {
+        if (len < 40) return null
+        if (packet[0].toInt() shr 4 != 6) return null
+        val payloadLen = ((packet[4].toInt() and 0xFF) shl 8) or (packet[5].toInt() and 0xFF)
+        val nextHeader = packet[6].toInt() and 0xFF
+        if (nextHeader in IPV6_EXTENSION_HEADERS) return null
+        if (len < 40 + payloadLen) return null
+        val src = packet.copyOfRange(8, 24)
+        val dst = packet.copyOfRange(24, 40)
+        return Ip6Header(src, dst, nextHeader, 40, payloadLen)
+    }
+
     /**
      * Parse a TCP segment that starts at [off] in [packet]
      * (the IP payload, [len] bytes), copying ONLY the data payload
@@ -355,6 +442,167 @@ object TcpPacket {
         return total
     }
 
+    /**
+     * Build an IPv6 + TCP packet (v1.0.6, M6). Same parameters as
+     * [buildTcp], with 16-byte addresses. Delegates to
+     * [buildTcp6Into].
+     */
+    fun buildTcp6(
+        srcIp: ByteArray,
+        dstIp: ByteArray,
+        srcPort: Int,
+        dstPort: Int,
+        seq: Long,
+        ack: Long,
+        flags: Int,
+        payload: ByteArray,
+        mss: Int = 0,
+        options: ByteArray = byteArrayOf(),
+        window: Int = TCP_WINDOW,
+    ): ByteArray {
+        val total = 40 + 20 + (if (mss > 0) 4 else 0) + options.size + payload.size
+        val out = ByteArray(total)
+        buildTcp6Into(out, srcIp, dstIp, srcPort, dstPort, seq, ack, flags,
+            payload, 0, payload.size, mss, options, window)
+        return out
+    }
+
+    /**
+     * Build the same packet as [buildTcp6] into the caller-supplied
+     * [out] (which must hold at least the total) and return the
+     * wire length — no allocation (mirror of [buildTcpInto]).
+     * The TCP checksum uses the IPv6 pseudo-header (src + dst +
+     * 4-byte length + 3 zero bytes + Next Header).
+     */
+    fun buildTcp6Into(
+        out: ByteArray,
+        srcIp: ByteArray,
+        dstIp: ByteArray,
+        srcPort: Int,
+        dstPort: Int,
+        seq: Long,
+        ack: Long,
+        flags: Int,
+        payload: ByteArray,
+        payloadOff: Int = 0,
+        payloadLen: Int = -1,
+        mss: Int = 0,
+        options: ByteArray = byteArrayOf(),
+        window: Int = TCP_WINDOW,
+    ): Int {
+        require(srcIp.size == 16 && dstIp.size == 16) { "buildTcp6Into: alamat harus IPv6 16 byte" }
+        val plen = if (payloadLen < 0) payload.size - payloadOff else payloadLen
+        require(payloadOff >= 0 && plen >= 0 && payloadOff + plen <= payload.size) {
+            "buildTcp6Into: payload range tidak valid ($payloadOff..${payloadOff + plen} of ${payload.size})"
+        }
+        val mssOptLen = if (mss > 0) 4 else 0
+        val optLen = mssOptLen + options.size
+        val tcpLen = 20 + optLen + plen
+        val total = 40 + tcpLen
+        require(out.size >= total) {
+            "buildTcp6Into: buffer terlalu kecil (${out.size} < $total)"
+        }
+        val buf = ByteBuffer.wrap(out, 0, total).order(ByteOrder.BIG_ENDIAN)
+        // IPv6 header: version 6 + traffic class/flow label 0.
+        buf.put(0x60.toByte())
+        buf.put(0)
+        buf.put(0)
+        buf.put(0)
+        buf.putShort(tcpLen.toShort())
+        buf.put(PROTO_TCP.toByte())
+        buf.put(64.toByte()) // Hop limit
+        buf.put(srcIp)
+        buf.put(dstIp)
+        // TCP header.
+        buf.putShort(srcPort.toShort())
+        buf.putShort(dstPort.toShort())
+        buf.putInt(seq.toInt())
+        buf.putInt(ack.toInt())
+        buf.put(((5 + optLen / 4) shl 4).toByte())
+        buf.put(flags.toByte())
+        buf.putShort(window.toShort())
+        buf.putShort(0) // checksum, filled below
+        buf.putShort(0) // urgent pointer
+        if (mss > 0) {
+            buf.put(2.toByte())
+            buf.put(4.toByte())
+            buf.putShort(mss.toShort())
+        }
+        if (options.isNotEmpty()) buf.put(options)
+        buf.put(payload, payloadOff, plen)
+        // TCP checksum over the IPv6 pseudo-header + TCP segment.
+        // The checksum field is at TCP offset 16 (packet 56).
+        val tcpSum = tcpChecksum6(srcIp, dstIp, out, 40, tcpLen)
+        out[56] = (tcpSum ushr 8).toByte()
+        out[57] = (tcpSum and 0xFF).toByte()
+        return total
+    }
+
+    /** Build an IPv6 + UDP packet (v1.0.6, M6). UDP checksum is
+     * mandatory in IPv6 (a computed 0 is written as 0xffff). */
+    fun buildUdp6(
+        srcIp: ByteArray,
+        dstIp: ByteArray,
+        srcPort: Int,
+        dstPort: Int,
+        payload: ByteArray,
+    ): ByteArray {
+        require(srcIp.size == 16 && dstIp.size == 16) { "buildUdp6: alamat harus IPv6 16 byte" }
+        val udpLen = 8 + payload.size
+        val total = 40 + udpLen
+        val buf = ByteBuffer.allocate(total).order(ByteOrder.BIG_ENDIAN)
+        buf.put(0x60.toByte())
+        buf.put(0)
+        buf.put(0)
+        buf.put(0)
+        buf.putShort(udpLen.toShort())
+        buf.put(PROTO_UDP.toByte())
+        buf.put(64.toByte())
+        buf.put(srcIp)
+        buf.put(dstIp)
+        buf.putShort(srcPort.toShort())
+        buf.putShort(dstPort.toShort())
+        buf.putShort(udpLen.toShort())
+        buf.putShort(0) // checksum, filled below
+        buf.put(payload)
+        val out = buf.array()
+        var udpSum = udpChecksum6(srcIp, dstIp, out, 40, udpLen)
+        if (udpSum == 0) udpSum = 0xFFFF
+        out[46] = (udpSum ushr 8).toByte()
+        out[47] = (udpSum and 0xFF).toByte()
+        return out
+    }
+
+    /**
+     * Build an ICMPv6 echo reply for an echo request packet (the
+     * full IPv6 packet, [len] bytes). Returns null when it is not
+     * an echo request (type 128). Type 129 = echo reply; checksum
+     * over the IPv6 pseudo-header.
+     */
+    fun buildIcmpv6EchoReply(request: ByteArray, len: Int): ByteArray? {
+        val ip = parseIpv6Header(request, len) ?: return null
+        if (ip.protocol != PROTO_ICMPV6 || ip.payloadLen < 8) return null
+        if (request[40].toInt() and 0xFF != 128) return null // type 128 = echo request
+        val total = 40 + ip.payloadLen
+        val out = request.copyOf(total)
+        // Swap source/destination.
+        val src = request.copyOfRange(8, 24)
+        val dst = request.copyOfRange(24, 40)
+        dst.copyInto(out, 8)
+        src.copyInto(out, 24)
+        // ICMPv6 type 129 (echo reply), recompute checksum.
+        out[40] = 129.toByte()
+        out[42] = 0
+        out[43] = 0
+        val icmpSum = checksum6(
+            out, 40, ip.payloadLen,
+            out.copyOfRange(8, 24), out.copyOfRange(24, 40), PROTO_ICMPV6,
+        )
+        out[42] = (icmpSum ushr 8).toByte()
+        out[43] = (icmpSum and 0xFF).toByte()
+        return out
+    }
+
     /** Build an IPv4 + UDP packet. */
     fun buildUdp(srcIp: Int, dstIp: Int, srcPort: Int, dstPort: Int, payload: ByteArray): ByteArray {
         val udpLen = 8 + payload.size
@@ -482,6 +730,55 @@ object TcpPacket {
         while (sum ushr 16 != 0L) sum = (sum and 0xFFFF) + (sum ushr 16)
         return sum.toInt().inv() and 0xFFFF
     }
+
+    /**
+     * One's-complement sum over an IPv6 pseudo-header + a segment
+     * (v1.0.6, M6): src(16) + dst(16) + length(4 BE) + 3 zero bytes
+     * + Next Header(1) + segment bytes at [segOff] ([segLen] bytes).
+     * [src]/[dst] are the 16-byte addresses inside [packet]
+     * (at [srcOff]/[dstOff]); the segment lives in the same array.
+     * Returns the checksum value (already complemented).
+     */
+    fun checksum6(
+        packet: ByteArray,
+        segOff: Int,
+        segLen: Int,
+        src: ByteArray,
+        dst: ByteArray,
+        nextHeader: Int,
+    ): Int {
+        var sum = 0L
+        fun addBytes(b: ByteArray) {
+            var i = 0
+            while (i + 1 < b.size) {
+                sum += ((b[i].toInt() and 0xFF) shl 8) or (b[i + 1].toInt() and 0xFF)
+                i += 2
+            }
+            if (i < b.size) sum += (b[i].toInt() and 0xFF) shl 8
+        }
+        addBytes(src)
+        addBytes(dst)
+        sum += (segLen ushr 16) and 0xFFFF
+        sum += segLen and 0xFFFF
+        sum += nextHeader
+        var i = segOff
+        val end = segOff + segLen
+        while (i + 1 < end) {
+            sum += ((packet[i].toInt() and 0xFF) shl 8) or (packet[i + 1].toInt() and 0xFF)
+            i += 2
+        }
+        if (i < end) sum += (packet[i].toInt() and 0xFF) shl 8
+        while (sum ushr 16 != 0L) sum = (sum and 0xFFFF) + (sum ushr 16)
+        return sum.toInt().inv() and 0xFFFF
+    }
+
+    /** TCP checksum over the IPv6 pseudo-header (see [checksum6]). */
+    fun tcpChecksum6(srcIp: ByteArray, dstIp: ByteArray, segment: ByteArray, offset: Int, len: Int): Int =
+        checksum6(segment, offset, len, srcIp, dstIp, PROTO_TCP)
+
+    /** UDP checksum over the IPv6 pseudo-header (see [checksum6]). */
+    fun udpChecksum6(srcIp: ByteArray, dstIp: ByteArray, segment: ByteArray, offset: Int, len: Int): Int =
+        checksum6(segment, offset, len, srcIp, dstIp, PROTO_UDP)
 
     fun ipToString(ip: Int): String =
         "${ip ushr 24 and 0xFF}.${ip ushr 16 and 0xFF}.${ip ushr 8 and 0xFF}.${ip and 0xFF}"

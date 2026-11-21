@@ -2,6 +2,7 @@ package com.taptap.ng.service
 
 import com.taptap.ng.core.DialLog
 import com.taptap.ng.core.proto.ProxyStream
+import com.taptap.ng.core.proto.ProxyUdpSession
 import com.taptap.ng.data.SettingsStore
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -10,11 +11,15 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.SequenceInputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.UnknownHostException
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -38,13 +43,17 @@ import kotlin.concurrent.thread
  * (transport ladder + protocol handshake yang sama, termasuk
  * protect() bypass TUN) — tidak ada mesin dial kedua.
  *
- * UDP ASSOCIATE (socksEnableUdp): SELALU DITOLAK dengan REP 0x07
- * (Command not supported), apa pun nilai settingnya. M2 hanya punya
- * jalur TCP — tidak ada jalur UDP lewat tunnel — jadi menerima
- * perintah itu lalu diam adalah kebohongan; penolakan eksplisit
- * adalah perilaku yang benar menurut RFC 1928. Setting
- * socksEnableUdp tetap disimpan (paritas Settings) dan dilaporkan
- * di log start sebagai "UDP: tidak didukung di M2".
+ * UDP ASSOCIATE (socksEnableUdp): v1.0.6 (M6) — DITERIMA bila
+ * setting ON dan entry mendukung UDP ([dialUdp] tidak null):
+ * balasan sukses membawa alamat/port listener UDP lokal, lalu
+ * tiap datagram klien (header SOCKS UDP + payload) diteruskan
+ * lewat satu [ProxyUdpSession] per target dan balasannya
+ * dibungkus header SOCKS UDP yang sama. Bila setting OFF atau
+ * entry tidak mendukung UDP (SSH), tetap DITOLAK dengan REP 0x07
+ * (Command not supported) — menerima lalu diam adalah kebohongan.
+ * Associate berakhir saat koneksi TCP-nya ditutup (RFC 1928).
+ * Setting socksEnableUdp tetap disimpan (paritas Settings) dan
+ * dilaporkan di log start.
  *
  * Lifecycle: hidup/mati mengikuti tunnel — service memanggil
  * [start] sesudah TUN naik dan [stop] saat teardown, hanya bila
@@ -59,6 +68,9 @@ class SocksServer(
     private val config: SocksConfig,
     /** Satu stream proxied ke [host]:[port], jalur yang sama dengan forwarder. */
     private val dial: (host: String, port: Int) -> ProxyStream,
+    /** Satu sesi UDP proxied ke [host]:[port] (v1.0.6, M6). Null =
+     * entry tidak mendukung UDP (SSH) — ASSOCIATE ditolak 0x07. */
+    private val dialUdp: ((host: String, port: Int) -> ProxyUdpSession)? = null,
     /** Pabrik listener; default socket TCP nyata, diganti fake di test. */
     private val listenerFactory: (InetAddress, Int) -> SocksListener = { addr, port ->
         TcpSocksListener(addr, port)
@@ -92,7 +104,7 @@ class SocksServer(
             "SOCKS proxy jalan di ${l.localAddress.hostAddress}:$actualPort" +
                 " (auth: ${if (config.requireAuth) "on" else "off"}" +
                 ", HTTP CONNECT: ${if (config.appendHttpProxy) "on" else "off"}" +
-                ", UDP: tidak didukung di M2)",
+                ", UDP: ${udpStatus()})",
         )
         thread(name = "socks-accept", isDaemon = true) {
             while (!stopped.get()) {
@@ -117,6 +129,13 @@ class SocksServer(
                 }
             }
         }
+    }
+
+    /** Status UDP untuk log start (v1.0.6). */
+    internal fun udpStatus(): String = when {
+        !config.socksEnableUdp -> "off"
+        dialUdp == null -> "off (entry tidak mendukung UDP)"
+        else -> "on"
     }
 
     fun stop() {
@@ -178,10 +197,167 @@ class SocksServer(
                 writeReply(output, REP_SUCCESS, request)
                 relay(input, output, stream)
             }
-            // UDP ASSOCIATE + BIND: tidak ada jalurnya di M2 —
-            // tolak eksplisit (REP 0x07), jangan pura-pura jalan.
+            CMD_UDP_ASSOCIATE -> handleUdpAssociate(input, output, request)
+            // BIND: tidak ada jalurnya — tolak eksplisit (REP 0x07).
             else -> writeReply(output, REP_COMMAND_NOT_SUPPORTED, request)
         }
+    }
+
+    // ---- UDP ASSOCIATE (RFC 1928, v1.0.6 M6) ----
+
+    /** Satu target di dalam satu sesi ASSOCIATE. */
+    private class UdpAssociateTarget(
+        val session: ProxyUdpSession,
+        val host: String,
+        val port: Int,
+    ) {
+        /** Alamat UDP klien terakhir (balasan kembali ke sini). */
+        @Volatile var clientAddr: InetSocketAddress? = null
+        val closed = AtomicBoolean(false)
+    }
+
+    /**
+     * UDP ASSOCIATE: balas sukses dengan alamat/port listener UDP
+     * lokal, lalu pompa datagram klien ↔ sesi proxy sampai koneksi
+     * TCP ditutup. Tiap target punya satu [ProxyUdpSession];
+     * balasannya dibungkus header SOCKS UDP dan dikirim ke alamat
+     * UDP klien terakhir. Datagram terfragmentasi (FRAG != 0)
+     * dibuang — tidak ada reassembly.
+     */
+    private fun handleUdpAssociate(input: InputStream, output: OutputStream, request: SocksRequest) {
+        val dialUdpFn = dialUdp
+        if (!config.socksEnableUdp || dialUdpFn == null) {
+            writeReply(output, REP_COMMAND_NOT_SUPPORTED, request)
+            return
+        }
+        val udpSocket = try {
+            DatagramSocket(0, config.bindAddress())
+        } catch (_: Exception) {
+            writeReply(output, REP_GENERAL_FAILURE, request)
+            return
+        }
+        writeReplyUdp(output, udpSocket)
+        val targets = ConcurrentHashMap<String, UdpAssociateTarget>()
+        // Tutup UDP saat TCP ditutup: baca TCP sampai EOF (klien
+        // tidak mengirim apa-apa lagi sesudah ASSOCIATE), lalu
+        // tutup socket UDP — receive() di bawah bangun dan keluar.
+        thread(name = "socks-udp-watch", isDaemon = true) {
+            try {
+                while (input.read() != -1) {
+                    // Byte TCP pasca-ASSOCIATE: bukan protokol — abaikan.
+                }
+            } catch (_: Exception) {
+                // TCP putus — tutup UDP di finally bawah.
+            } finally {
+                runCatching { udpSocket.close() }
+            }
+        }
+        try {
+            val buf = ByteArray(65535)
+            while (!stopped.get()) {
+                val packet = DatagramPacket(buf, buf.size)
+                try {
+                    udpSocket.receive(packet)
+                } catch (_: IOException) {
+                    break // Socket ditutup (TCP tutup / stop()).
+                }
+                val parsed = parseSocksUdpPacket(packet.data, packet.length) ?: continue
+                val (host, port, payload) = parsed
+                val clientAddr = InetSocketAddress(packet.address, packet.port)
+                var target = targets["$host:$port"]
+                if (target == null || target.closed.get()) {
+                    val session = try {
+                        dialUdpFn(host, port)
+                    } catch (_: Exception) {
+                        continue
+                    }
+                    target = UdpAssociateTarget(session, host, port)
+                    targets["$host:$port"] = target
+                    val t = target
+                    thread(name = "socks-udp-reply-$port", isDaemon = true) {
+                        try {
+                            while (!t.closed.get()) {
+                                val data = t.session.receive(1000) ?: continue
+                                val addr = t.clientAddr ?: continue
+                                val wrapped = wrapSocksUdpPacket(t.host, t.port, data)
+                                runCatching {
+                                    udpSocket.send(DatagramPacket(wrapped, wrapped.size, addr))
+                                }
+                            }
+                        } catch (_: Exception) {
+                            // Sesi mati — dibersihkan di finally luar.
+                        }
+                    }
+                }
+                target.clientAddr = clientAddr
+                runCatching { target.session.send(payload) }
+                    .onFailure { targets.remove("$host:$port", target) }
+            }
+        } finally {
+            targets.values.forEach {
+                it.closed.set(true)
+                runCatching { it.session.close() }
+            }
+            targets.clear()
+            runCatching { udpSocket.close() }
+        }
+    }
+
+    /** Parse satu datagram SOCKS UDP. Null bila rusak / terfragmentasi. */
+    internal fun parseSocksUdpPacket(data: ByteArray, len: Int): Triple<String, Int, ByteArray>? {
+        if (len < 10) return null
+        // RSV(2) FRAG(1) ATYP(1) ...
+        if (data[2].toInt() != 0) return null // FRAG != 0: tidak ada reassembly.
+        val atyp = data[3].toInt() and 0xFF
+        val (host, afterAddr) = when (atyp) {
+            ATYP_IPV4 -> {
+                if (len < 10) return null
+                val h = (4..7).joinToString(".") { (data[it].toInt() and 0xFF).toString() }
+                h to 8
+            }
+            ATYP_DOMAIN -> {
+                val dLen = data[4].toInt() and 0xFF
+                if (len < 5 + dLen + 2) return null
+                String(data, 5, dLen, Charsets.UTF_8) to 5 + dLen
+            }
+            ATYP_IPV6 -> {
+                if (len < 22) return null
+                val raw = data.copyOfRange(4, 20)
+                InetAddress.getByAddress(raw).hostAddress to 20
+            }
+            else -> return null
+        }
+        if (len < afterAddr + 2) return null
+        val port = ((data[afterAddr].toInt() and 0xFF) shl 8) or
+            (data[afterAddr + 1].toInt() and 0xFF)
+        return Triple(host, port, data.copyOfRange(afterAddr + 2, len))
+    }
+
+    /** Bungkus payload balasan dengan header SOCKS UDP (RSV/FRAG 0 + target). */
+    internal fun wrapSocksUdpPacket(host: String, port: Int, payload: ByteArray): ByteArray {
+        val target = com.taptap.ng.core.proto.AddrCodec.encodeSocksTarget(host, port)
+        val out = ByteArray(3 + target.size + payload.size)
+        // RSV(2) + FRAG(0) sudah 0.
+        target.copyInto(out, 3)
+        payload.copyInto(out, 3 + target.size)
+        return out
+    }
+
+    /** Balasan ASSOCIATE sukses: BND = alamat/port listener UDP lokal. */
+    private fun writeReplyUdp(output: OutputStream, udpSocket: DatagramSocket) {
+        val addrBytes = udpSocket.localAddress.address
+        val atyp = if (addrBytes.size == 16) ATYP_IPV6 else ATYP_IPV4
+        val reply = ByteArrayOutputStream().apply {
+            write(0x05)
+            write(REP_SUCCESS)
+            write(0x00)
+            write(atyp)
+            write(addrBytes)
+            write((udpSocket.localPort shr 8) and 0xFF)
+            write(udpSocket.localPort and 0xFF)
+        }
+        output.write(reply.toByteArray())
+        output.flush()
     }
 
     /** Subnegosiasi user/pass (RFC 1929). True = kredensial cocok. */

@@ -151,9 +151,9 @@ class SettingsStore(context: Context) {
 
     // Mux (v1.0.5, kelompok D): mux_enabled + mux_concurrency
     // DITERAPKAN in-app untuk VMess/VLESS (TCP) lewat MuxConnection
-    // — lihat MuxConfig. mux_xudp_concurrency / mux_xudp_quic
-    // tetap STORED ONLY: M2 tidak punya jalur UDP, jadi XUDP belum
-    // bisa jalan (MuxConfig.xudpSupported = false).
+    // — lihat MuxConfig. v1.0.6 (M6): XUDP juga jalan bila mux
+    // nyala (MuxConfig.xudpSupported = enabled); mux_xudp_quic
+    // tetap hanya disimpan (tidak mengubah framing).
     var muxEnabled: Boolean
         get() = prefs.getBoolean(KEY_MUX_ENABLED, DEFAULT_MUX_ENABLED)
         set(v) = prefs.edit().putBoolean(KEY_MUX_ENABLED, v).apply()

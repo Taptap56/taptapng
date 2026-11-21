@@ -54,12 +54,11 @@ class MuxConfigTest {
     }
 
     @Test
-    fun `xudp tidak didukung di M2`() {
-        // M2 tidak punya jalur UDP (TunForwarder TCP saja) — nilai
-        // XUDP tersimpan tapi tidak pernah dipakai. Tes ini mengunci
-        // status itu supaya tidak ada yang mengklaim XUDP jalan.
+    fun `xudp didukung bila mux nyala (v1_0_6 M6)`() {
+        // v1.0.6 (M6): TunForwarder punya jalur UDP dan MuxSession
+        // UDP — XUDP jalan bila mux nyala, mati bila mux mati.
         val c = MuxConfig.fromSettingsValues(true, "8", "8", "reject")
-        assertFalse(c.xudpSupported)
+        assertTrue(c.xudpSupported)
         assertFalse(MuxConfig.DISABLED.xudpSupported)
     }
 }
