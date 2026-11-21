@@ -64,7 +64,7 @@ class RootForwarder(
 ) {
 
     /** Membaca alamat tujuan asli dari socket yang di-REDIRECT. */
-    interface OriginalDstResolver {
+    fun interface OriginalDstResolver {
         fun resolve(socket: Socket): InetAddress?
     }
 

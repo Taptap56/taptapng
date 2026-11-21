@@ -11,7 +11,7 @@ package com.taptap.ng.core
  * tidak ada interpolasi input user ke shell (UID/port adalah
  * Int dari config, bukan string bebas).
  */
-interface RootExecutor {
+fun interface RootExecutor {
     fun run(command: String): ExecResult
 }
 
