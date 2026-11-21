@@ -82,6 +82,11 @@ override fun dial(
             protectUdp = { true },
             onStatus = { statuses.add(it) },
             dnsTimeoutMs = dnsTimeoutMs,
+            // v1.0.4: fallback ikut blackhole — default 1.0.0.1
+            // adalah server DNS beneran dan menjawab example.com
+            // di CI, jadi jalur GAGAL tidak pernah tercapai di tes
+            // ini (regr. CI 44860422297: baris DNS GAGAL tak muncul).
+            dnsFallbackServer = dnsServer,
         )
 
         init {

@@ -478,15 +478,26 @@ object PemicuManager {
                     thread(name = "taptapng-prime-${target.key()}", isDaemon = true) {
                         try {
                             val result = primeDial(target)
-                            DialLog.log("PRIME", formatPrimeResult(result))
+                            // v1.0.4: jangan log hasil dial dari
+                            // generasi lama — loop sudah stop/start
+                            // lagi sejak dial ini diluncurkan, dan
+                            // barisnya akan mengotori log sesi yang
+                            // baru (regr. CI 44860422297: dial lambat
+                            // tes sebelumnya selesai sesudah
+                            // DialLog.clear() tes berikutnya).
+                            if (gen == generation) {
+                                DialLog.log("PRIME", formatPrimeResult(result))
+                            }
                         } catch (e: Exception) {
                             // primeDial never throws; this is a safety
                             // net so a loop bug can never kill the
                             // scheduler thread.
-                            DialLog.log(
-                                "PRIME",
-                                "PRIME GAGAL ${target.host}:${target.port} (${e.javaClass.simpleName})",
-                            )
+                            if (gen == generation) {
+                                DialLog.log(
+                                    "PRIME",
+                                    "PRIME GAGAL ${target.host}:${target.port} (${e.javaClass.simpleName})",
+                                )
+                            }
                         } finally {
                             inFlight.remove(target.key())
                         }

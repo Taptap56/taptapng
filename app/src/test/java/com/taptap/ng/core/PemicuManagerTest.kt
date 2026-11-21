@@ -533,8 +533,17 @@ class PemicuManagerTest {
     private fun driveHandshake(client: SSLEngine, server: SSLEngine) {
         val appEmpty = ByteBuffer.allocate(0)
         val appBuf = ByteBuffer.allocate(16384)
-        val cNet = ByteBuffer.allocate(32768)
-        val sNet = ByteBuffer.allocate(32768)
+        // Buffer net mulai kosong (flip sesudah allocate — tanpa
+        // ini hasRemaining() benar untuk 32768 byte nol dan unwrap
+        // pertama langsung makan plaintext).
+        val cNet = ByteBuffer.allocate(32768).apply { flip() }
+        val sNet = ByteBuffer.allocate(32768).apply { flip() }
+        // SSLEngine dari createSSLEngine() modenya belum di-set:
+        // beginHandshake() melempar IllegalStateException
+        // ("Client/Server mode has not yet been set") sebelum
+        // handshake apa pun (direproduksi lokal di JDK 17; sisi
+        // server di-set pemanggil via useClientMode = false).
+        client.useClientMode = true
         client.beginHandshake()
         server.beginHandshake()
         var guard = 0
@@ -542,10 +551,16 @@ class PemicuManagerTest {
             var progress = false
             when (client.handshakeStatus) {
                 SSLEngineResult.HandshakeStatus.NEED_WRAP -> {
-                    cNet.clear()
-                    client.wrap(appEmpty, cNet)
-                    cNet.flip()
-                    progress = true
+                    // Hanya wrap bila flight sebelumnya sudah habis
+                    // dikonsumsi server — clear() di sini membuang
+                    // byte yang belum di-unwrap dan merusak record
+                    // berikutnya.
+                    if (!cNet.hasRemaining()) {
+                        cNet.clear()
+                        client.wrap(appEmpty, cNet)
+                        cNet.flip()
+                        progress = true
+                    }
                 }
                 SSLEngineResult.HandshakeStatus.NEED_UNWRAP -> {
                     if (sNet.hasRemaining()) {
@@ -562,10 +577,14 @@ class PemicuManagerTest {
             }
             when (server.handshakeStatus) {
                 SSLEngineResult.HandshakeStatus.NEED_WRAP -> {
-                    sNet.clear()
-                    server.wrap(appEmpty, sNet)
-                    sNet.flip()
-                    progress = true
+                    // Sama seperti sisi client: jangan timpa flight
+                    // yang belum dikonsumsi.
+                    if (!sNet.hasRemaining()) {
+                        sNet.clear()
+                        server.wrap(appEmpty, sNet)
+                        sNet.flip()
+                        progress = true
+                    }
                 }
                 SSLEngineResult.HandshakeStatus.NEED_UNWRAP -> {
                     if (cNet.hasRemaining()) {
@@ -723,10 +742,44 @@ class PemicuManagerTest {
 
     @Test
     fun `loop does not dial when the target list is empty`() {
+        // v1.0.4 (regr. CI 44860422297): tes ini gagal karena dial
+        // lambat dari loop tes sebelumnya (stuck di resolve ~3 dtk
+        // ke server DNS diam) selesai sesudah DialLog.clear() dan
+        // mengotori log dengan PRIME GAGAL. Tes ini membangun
+        // sendiri dial lambat itu dulu, jadi tidak tergantung
+        // urutan jalan tes: tanpa guard generasi di loop, baris
+        // usang itu muncul di jendela 5 dtk di bawah dan tes gagal.
+        val silent = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        val oldServer = DnsResolver.dnsServer
+        val oldPort = DnsResolver.dnsPort
+        try {
+            DnsResolver.dnsServer = "127.0.0.1"
+            DnsResolver.dnsPort = silent.localPort
+            val slow = PemicuManager.PemicuTarget("probe.invalid", 443, 300)
+            PemicuManager.start { listOf(slow) }
+            val deadline = System.currentTimeMillis() + 5000
+            while (!PemicuManager.inFlightKeys().contains(slow.key()) &&
+                System.currentTimeMillis() < deadline
+            ) {
+                Thread.sleep(10)
+            }
+            assertTrue(
+                PemicuManager.inFlightKeys().contains(slow.key()),
+                "dial lambat harus in-flight dulu",
+            )
+            PemicuManager.stop()
+        } finally {
+            DnsResolver.dnsServer = oldServer
+            DnsResolver.dnsPort = oldPort
+            silent.close()
+            PemicuManager.stop()
+        }
         DialLog.clear()
         PemicuManager.start { emptyList() }
         try {
-            Thread.sleep(2_000)
+            // Dial lambat di atas selesai ~3 dtk sesudah
+            // diluncurkan — jendela 5 dtk mencakupnya.
+            Thread.sleep(5_000)
             assertTrue(
                 DialLog.lines().none { it.contains("PRIME OK") || it.contains("PRIME GAGAL") },
                 "log: ${DialLog.lines()}",
