@@ -271,8 +271,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The delay-test work of [testAll] (extracted so the
      *  try/finally around it stays readable). Runs on
-     *  Dispatchers.IO. */
-    private suspend fun runTestAll(items: List<ProfileItem>, realPing: Boolean) {
+     *  Dispatchers.IO. A CoroutineScope extension so the bare
+     *  [async] below resolves to the scope's async (a plain
+     *  suspend fun has no scope — the top-level async is
+     *  deprecated and fails compilation as DEPRECATION_ERROR). */
+    private suspend fun CoroutineScope.runTestAll(items: List<ProfileItem>, realPing: Boolean) {
         if (realPing) {
             // v1.0.13, fix B: real ping = full round-trip
             // through the proxy (HTTP GET to delayTestUrl).
