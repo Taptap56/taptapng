@@ -157,14 +157,15 @@ class GroupsSectionLabelsTest {
             xml.contains("android:text=\"@string/groups_rules_hint\""),
             "Aturan rute hint must stay",
         )
-        // Header buttons untouched by this change (v1.0.24 fix intact).
+        // Header buttons untouched by this change (v1.0.25 FilledAccent
+        // intact — owned by the buttons change, not by this one).
         for (id in listOf("save_main_group", "add_group", "add_rule")) {
             val block = xml.substringAfter("android:id=\"@+id/$id\"").substringBefore("/>")
             assertTrue(
-                block.contains("style=\"@style/Widget.MaterialComponents.Button.OutlinedButton\""),
-                "$id must stay an M2 OutlinedButton (v1.0.24)",
+                block.contains("style=\"@style/Widget.TaptapNG.Button.FilledAccent\""),
+                "$id must stay a FilledAccent button (v1.0.25)",
             )
-            assertTrue(block.contains("android:textSize=\"15sp\""), "$id must stay 15sp (v1.0.24)")
+            assertTrue(block.contains("android:textSize=\"15sp\""), "$id must stay 15sp (v1.0.25)")
         }
     }
 }
