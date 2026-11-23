@@ -29,7 +29,7 @@ import java.net.InetAddress
  * These tests fail on v1.0.18: there is no [decideLiveSwitch]
  * (the tap path called shouldRestartOnSelect and restarted the
  * service), no [applyLiveSwitchSelection] (nothing ever moved the
- * "Proxy" group's selected member — the route engine kept routing
+ * "taptap" group's selected member — the route engine kept routing
  * new connections to the old member even after a restart), and no
  * [VpnConnection.switchEntry] (the label could only change via a
  * (re)start).

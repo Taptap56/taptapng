@@ -25,7 +25,7 @@ import com.taptap.ng.data.GroupsStore
  * (unknown guid / factory failure).
  *
  * The same helper also repairs a stale selection found while
- * verifying this path: nothing ever synced the "Proxy" group's
+ * verifying this path: nothing ever synced the "taptap" group's
  * selected member from [com.taptap.ng.data.ProfileStore]
  * .selectedGuid after the default group was created — only the
  * default-creation path in [GroupsStore.load] reads it. So on
@@ -60,11 +60,11 @@ fun decideLiveSwitch(isRunning: Boolean, currentGuid: String?, newGuid: String):
     }
 
 /**
- * Point the default SELECT group ("Proxy" — the group the FINAL
+ * Point the default SELECT group ("taptap" — the group the FINAL
  * rule targets) at [newGuid], returning the updated group list,
  * or null when there is nothing to change:
- * - no group named "Proxy" exists;
- * - the "Proxy" group is not SELECT (URL_TEST / FALLBACK pick
+ * - no group named "taptap" exists;
+ * - the "taptap" group is not SELECT (URL_TEST / FALLBACK pick
  *   their member by probe / order, not by stored selection);
  * - the group already selects [newGuid] (effective selection,
  *   i.e. stored selection when still a member, else first member).

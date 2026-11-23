@@ -21,8 +21,8 @@ import org.junit.jupiter.api.Test
  * VM is intercepted; a live bind test belongs to CI / the phone).
  *
  * The fake deps mirror a two-server setup: one SELECT group
- * "Proxy" (both members, first selected), one URL_TEST group,
- * rules DOMAIN-SUFFIX google.com -> Proxy + FINAL -> Proxy.
+ * "taptap" (both members, first selected), one URL_TEST group,
+ * rules DOMAIN-SUFFIX google.com -> taptap + FINAL -> taptap.
  */
 class ClashApiHandlerTest {
 
@@ -96,7 +96,7 @@ class ClashApiHandlerTest {
     private fun defaultDeps(): FakeDeps {
         val deps = FakeDeps()
         deps.groups += ProxyGroup(
-            id = "g-proxy", name = "Proxy", type = ProxyGroupType.SELECT,
+            id = "g-proxy", name = "taptap", type = ProxyGroupType.SELECT,
             members = listOf("guid-a", "guid-b"), selectedMemberGuid = "guid-a",
         )
         deps.groups += ProxyGroup(
@@ -166,7 +166,7 @@ class ClashApiHandlerTest {
     fun proxiesListsGroupsAndIndividualsWithClashShape() {
         val json = bodyJson(get(defaultDeps(), "/proxies"))
         val proxies = json.getAsJsonObject("proxies")
-        val proxy = proxies.getAsJsonObject("Proxy")
+        val proxy = proxies.getAsJsonObject("taptap")
         assertEquals("Selector", proxy.get("type").asString)
         assertEquals("Server A", proxy.get("now").asString)
         assertEquals(2, proxy.getAsJsonArray("all").size())
@@ -183,9 +183,9 @@ class ClashApiHandlerTest {
 
     @Test
     fun proxiesSingleGroupReturnsItselfAndUnknownIs404() {
-        val ok = get(defaultDeps(), "/proxies/Proxy") as ApiResponse.Immediate
+        val ok = get(defaultDeps(), "/proxies/taptap") as ApiResponse.Immediate
         assertEquals(200, ok.status)
-        assertEquals("Proxy", bodyJson(ok).get("name").asString)
+        assertEquals("taptap", bodyJson(ok).get("name").asString)
         val missing = get(defaultDeps(), "/proxies/Nope") as ApiResponse.Immediate
         assertEquals(404, missing.status)
     }
@@ -195,18 +195,18 @@ class ClashApiHandlerTest {
         val deps = defaultDeps()
         val handler = ClashApiHandler(deps)
         val ok = handler.handle(
-            ApiRequest("PUT", "/proxies/Proxy", emptyMap(), emptyMap(), "{\"name\":\"Server B\"}"),
+            ApiRequest("PUT", "/proxies/taptap", emptyMap(), emptyMap(), "{\"name\":\"Server B\"}"),
         ) as ApiResponse.Immediate
         assertEquals(204, ok.status)
-        assertEquals("guid-b", deps.groups.first { it.name == "Proxy" }.selectedMemberGuid)
+        assertEquals("guid-b", deps.groups.first { it.name == "taptap" }.selectedMemberGuid)
         // Path form (Clash) works too.
         val ok2 = handler.handle(
-            ApiRequest("PUT", "/proxies/Proxy/Server A", emptyMap(), emptyMap(), ""),
+            ApiRequest("PUT", "/proxies/taptap/Server A", emptyMap(), emptyMap(), ""),
         ) as ApiResponse.Immediate
         assertEquals(204, ok2.status)
-        assertEquals("guid-a", deps.groups.first { it.name == "Proxy" }.selectedMemberGuid)
+        assertEquals("guid-a", deps.groups.first { it.name == "taptap" }.selectedMemberGuid)
         val bad = handler.handle(
-            ApiRequest("PUT", "/proxies/Proxy", emptyMap(), emptyMap(), "{\"name\":\"Nope\"}"),
+            ApiRequest("PUT", "/proxies/taptap", emptyMap(), emptyMap(), "{\"name\":\"Nope\"}"),
         ) as ApiResponse.Immediate
         assertEquals(404, bad.status)
     }
@@ -216,7 +216,7 @@ class ClashApiHandlerTest {
         val deps = defaultDeps()
         val ok = get(deps, "/proxies/Server%20A/delay?url=http://example.com&timeout=5000")
         assertEquals(42L, bodyJson(ok).get("delay").asLong)
-        val group = get(deps, "/group/Proxy/delay?url=http://example.com")
+        val group = get(deps, "/group/taptap/delay?url=http://example.com")
         assertEquals(42L, bodyJson(group).get("delay").asLong)
         deps.delayTestResult = null
         val fail = get(deps, "/proxies/Server%20A/delay") as ApiResponse.Immediate
@@ -232,10 +232,10 @@ class ClashApiHandlerTest {
         val first = arr[0].asJsonObject
         assertEquals("DOMAIN-SUFFIX", first.get("type").asString)
         assertEquals("google.com", first.get("payload").asString)
-        assertEquals("Proxy", first.get("proxy").asString)
+        assertEquals("taptap", first.get("proxy").asString)
         val final = arr[1].asJsonObject
         assertEquals("FINAL", final.get("type").asString)
-        assertEquals("Proxy", final.get("proxy").asString)
+        assertEquals("taptap", final.get("proxy").asString)
     }
 
     // ---- /connections + streams ----

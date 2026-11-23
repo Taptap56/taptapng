@@ -182,8 +182,8 @@ class RouteEngineTest {
     }
 
     @Test
-    fun noMatchingRuleFallsBackToProxyGroup() {
-        val proxy = group("g-proxy", name = "Proxy", selected = "b")
+    fun noMatchingRuleFallsBackToDefaultGroup() {
+        val proxy = group("g-proxy", name = RouteEngine.FALLBACK_GROUP_NAME, selected = "b")
         val groups = listOf(proxy)
         // No FINAL rule and no matching rule at all.
         val rules = listOf(
@@ -206,8 +206,8 @@ class RouteEngineTest {
     }
 
     @Test
-    fun noMatchingRuleWithEmptyProxyGroupReturnsDirect() {
-        val proxy = group("g-proxy", name = "Proxy", members = emptyList())
+    fun noMatchingRuleWithEmptyDefaultGroupReturnsDirect() {
+        val proxy = group("g-proxy", name = RouteEngine.FALLBACK_GROUP_NAME, members = emptyList())
         val groups = listOf(proxy)
         val rules = listOf(
             rule(RouteRuleType.DOMAIN, pattern = "other.com", target = RouteRule.TARGET_DIRECT),
@@ -229,8 +229,8 @@ class RouteEngineTest {
     }
 
     @Test
-    fun emptyRulesListFallsBackToProxyGroup() {
-        val proxy = group("g-proxy", name = "Proxy", selected = "a")
+    fun emptyRulesListFallsBackToDefaultGroup() {
+        val proxy = group("g-proxy", name = RouteEngine.FALLBACK_GROUP_NAME, selected = "a")
         assertEquals(
             "a",
             proxyGuid(RouteEngine.resolve("example.com", addr("1.2.3.4"), 443, listOf(proxy), emptyList(), emptyMap())),

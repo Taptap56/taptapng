@@ -118,6 +118,11 @@ class GroupsStore(private val file: File) {
             save()
             return
         }
+        // v1.0.21: the default group was renamed "Proxy" ->
+        // "taptap" — migrate a file written by an older build (see
+        // [migrateDefaultGroupName]) before pruning, and persist
+        // the migration so the next load is a no-op.
+        if (migrateDefaultGroupName()) save()
         if (profiles != null) {
             pruneMissingProfiles(profiles.map { it.guid }.toSet())
         }
@@ -171,6 +176,80 @@ class GroupsStore(private val file: File) {
         return changed
     }
 
+    /**
+     * v1.0.21: rename the default group "Proxy" -> [DEFAULT_GROUP_NAME].
+     * A groups.json written by v1.0.18–v1.0.20 still stores a group
+     * named "Proxy" — rename it in place (same id, so rules that
+     * target it by id, e.g. FINAL, keep working untouched).
+     *
+     * Conflict: when a group named "taptap" already exists (created
+     * by hand, or written by a newer build), the "Proxy" group is
+     * MERGED into it instead — members appended (deduped, order
+     * kept), the surviving group's stored selection wins, rules
+     * targeting a dropped group's id are re-pointed at the
+     * survivor, and the duplicate is removed. After load there is
+     * never a "Proxy" and a "taptap" side by side.
+     *
+     * Rules are also repaired when they target the literal name
+     * "Proxy" (a hand-edited file — production code always stores
+     * the group id): they are re-pointed at the surviving default
+     * group's id. Returns true when anything changed (the caller
+     * persists it, so a second load finds no "Proxy" group and no
+     * literal-"Proxy" target left and is a no-op).
+     */
+    private fun migrateDefaultGroupName(): Boolean {
+        val legacy = groups.filter { it.name == LEGACY_DEFAULT_GROUP_NAME }
+        if (legacy.isEmpty() && rules.none { it.target == LEGACY_DEFAULT_GROUP_NAME }) {
+            return false
+        }
+        var changed = false
+        // Surviving default group: an existing "taptap" group wins;
+        // otherwise the first legacy group is renamed in place.
+        val base = groups.firstOrNull { it.name == DEFAULT_GROUP_NAME }
+            ?: legacy.firstOrNull()
+        if (base != null) {
+            val others = legacy.filter { it.id != base.id }
+            val mergedMembers = (base.members + others.flatMap { it.members }).distinct()
+            val selected = base.selectedMemberGuid?.takeIf { it in mergedMembers }
+                ?: others.firstNotNullOfOrNull { it.selectedMemberGuid?.takeIf { g -> g in mergedMembers } }
+                ?: mergedMembers.firstOrNull()
+            val merged = base.copy(
+                name = DEFAULT_GROUP_NAME,
+                members = mergedMembers,
+                selectedMemberGuid = selected,
+            )
+            val droppedIds = others.map { it.id }.toSet()
+            groups = groups.mapNotNull { g ->
+                when {
+                    g.id == base.id -> merged
+                    g.id in droppedIds -> null
+                    else -> g
+                }
+            }.toMutableList()
+            changed = true
+        }
+        // Re-point rules at the surviving default group: rules that
+        // targeted a dropped legacy id, or the literal name "Proxy".
+        // (A rule already targeting the survivor's id is untouched.)
+        val targetId = groups.firstOrNull { it.name == DEFAULT_GROUP_NAME }?.id
+        if (targetId != null) {
+            val droppedIds = legacy.map { it.id }.toSet()
+            var rulesChanged = false
+            rules = rules.map { r ->
+                if (r.target == LEGACY_DEFAULT_GROUP_NAME ||
+                    (r.target in droppedIds && r.target != targetId)
+                ) {
+                    rulesChanged = true
+                    r.copy(target = targetId)
+                } else {
+                    r
+                }
+            }.toMutableList()
+            changed = changed || rulesChanged
+        }
+        return changed
+    }
+
     fun findGroup(id: String): ProxyGroup? = groups.firstOrNull { it.id == id }
 
     fun findRule(id: String): RouteRule? = rules.firstOrNull { it.id == id }
@@ -214,8 +293,15 @@ class GroupsStore(private val file: File) {
     companion object {
         const val CURRENT_VERSION = 1
 
-        /** Name of the default group (matches the Clash default). */
-        const val DEFAULT_GROUP_NAME = "Proxy"
+        /** Name of the default group (v1.0.21: renamed from "Proxy"). */
+        const val DEFAULT_GROUP_NAME = "taptap"
+
+        /**
+         * Pre-v1.0.21 name of the default group. Only used by
+         * [migrateDefaultGroupName] to recognise (and rename/merge)
+         * a group stored under the old name — never written anymore.
+         */
+        const val LEGACY_DEFAULT_GROUP_NAME = "Proxy"
 
         fun defaultFile(filesDir: File): File = File(filesDir, AppConfig.GROUPS_FILE)
     }

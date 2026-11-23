@@ -864,12 +864,12 @@ class TaptapVpnService : VpnService() {
         tunFd = fd
         currentClient = client
         // M7: routing — grup + aturan dari GroupsStore (default:
-        // grup "Proxy" SELECT berisi semua profil + FINAL -> Proxy,
+        // grup "taptap" SELECT berisi semua profil + FINAL -> taptap,
         // jadi perilaku sama seperti sebelum M7), cache delay
         // url-test (diisi loop berkala, di-seed sekali dari
         // Observatory), dan cache client per guid anggota grup.
         // Client entry terpilih = client tunnel ini sendiri, jadi
-        // keputusan default (FINAL -> Proxy -> entry terpilih)
+        // keputusan default (FINAL -> taptap -> entry terpilih)
         // memakai client yang sama persis seperti sebelum M7.
         // LIVE RELOAD (W3): resolver membaca grup/aturan dari
         // GroupsStore BERSAMA (ClashApiRuntime — dipakai juga oleh
@@ -880,7 +880,7 @@ class TaptapVpnService : VpnService() {
         val profileStore = ProfileStore(ProfileStore.defaultFile(filesDir)).apply { load() }
         val groupsStore = ClashApiRuntime.ensureGroupsStore(filesDir)
         groupsStore.load(profileStore.profiles, profileStore.selectedGuid)
-        // v1.0.19 (live switch): samakan seleksi grup "Proxy"
+        // v1.0.19 (live switch): samakan seleksi grup "taptap"
         // dengan entry yang dipilih — lihat [LiveSwitch]: tanpa
         // ini route engine tetap merute koneksi baru ke anggota
         // SELECT lama (seleksi grup tidak pernah disinkron dari

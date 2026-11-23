@@ -37,11 +37,11 @@ sealed interface RouteDecision {
  *   immediately when their rule matches.
  * - When NO rule matches at all (e.g. the list has no FINAL rule),
  *   the engine falls back to the group named [FALLBACK_GROUP_NAME]
- *   ("Proxy" — the default group [com.taptap.ng.data.GroupsStore]
+ *   ("taptap" — the default group [com.taptap.ng.data.GroupsStore]
  *   creates) when it exists and has a usable member; otherwise
  *   [RouteDecision.Direct] — fail-open, so traffic still flows
  *   rather than being silently dropped. A default configuration
- *   always has FINAL → Proxy, so this path only runs for a
+ *   always has FINAL → taptap, so this path only runs for a
  *   hand-edited config without FINAL.
  *
  * Member selection ([selectMember]):
@@ -61,7 +61,7 @@ sealed interface RouteDecision {
  * Clash mode (M7, W3 — [SettingsStore.clashMode], PATCH /configs):
  * - "rule" (default) = the rule loop below.
  * - "global" = always the selected/effective member of the group
- *   named [FALLBACK_GROUP_NAME] ("Proxy"), or the first group when
+ *   named [FALLBACK_GROUP_NAME] ("taptap"), or the first group when
  *   there is no such group; an unusable group falls back to
  *   [RouteDecision.Direct] (fail-open).
  * - "direct" = always [RouteDecision.Direct].
@@ -74,7 +74,7 @@ object RouteEngine {
      * stay equal to
      * [com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME].
      */
-    const val FALLBACK_GROUP_NAME = "Proxy"
+    const val FALLBACK_GROUP_NAME = "taptap"
 
     /** Clash modes (see class doc). Stored in SettingsStore.clashMode. */
     const val MODE_RULE = "rule"
@@ -117,7 +117,7 @@ object RouteEngine {
                 }
             }
         }
-        // No rule matched: fall back to the "Proxy" group, else Direct.
+        // No rule matched: fall back to the "taptap" group, else Direct.
         val fallback = groups.firstOrNull { it.name == FALLBACK_GROUP_NAME }
         if (fallback != null) {
             selectMember(fallback, delays)?.let { return RouteDecision.Proxy(it) }
