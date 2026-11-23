@@ -43,7 +43,7 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
 
-    - name: Run unit tests (SSH + LinkParser round-trip + proto + ProfileStore + ServerTester + MainToolbar)
+    - name: Run unit tests (SSH + LinkParser round-trip + proto + ProfileStore + GroupsConfig repro/migration + ServerTester + MainToolbar)
       run: |
         cd ${{ github.workspace }}
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
@@ -112,5 +112,15 @@ jobs:
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
-        name: taptapng-v1.0.17-release
+        name: taptapng-v1.0.18-release
         path: ${{ github.workspace }}/app/build/outputs/apk/release/*.apk
+
+    - name: Upload R8 mapping (diagnose obfuscated names)
+      # v1.0.18: v1.0.17 shipped WITHOUT a mapping, so the
+      # "n20 cannot be cast to ec0" toast could only be decoded by
+      # hand from classes.dex. Keep the mapping with every release.
+      uses: actions/upload-artifact@v7
+      if: ${{ success() }}
+      with:
+        name: taptapng-v1.0.18-mapping
+        path: ${{ github.workspace }}/app/build/outputs/mapping/release/mapping.txt

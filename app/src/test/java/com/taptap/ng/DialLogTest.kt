@@ -256,6 +256,38 @@ class DialLogTest {
     }
 
     @Test
+    fun `failure logs stack frames but never the exception message for unsafe types`() {
+        // v1.0.18: failure() appends the stack trace (frames only)
+        // so a START GAGAL can be diagnosed from the exported log.
+        // The message itself must NOT ride along: for unsafe types
+        // (IllegalArgumentException from UUID parsing) it carries
+        // the raw input — stackTraceToString would leak it.
+        DialLog.clear()
+        try {
+            val uuid = "de305d54-75b4-431b-adb2-eb6b9e546014"
+            DialLog.failure(
+                "START",
+                IllegalArgumentException("bad uuid $uuid"),
+            )
+            val lines = DialLog.lines()
+            assertEquals(1, lines.size, "trace rides in the same line: $lines")
+            assertFalse(lines[0].contains(uuid), "UUID leaked into dial log: ${lines[0]}")
+            assertTrue(
+                lines[0].contains("stack trace (IllegalArgumentException)"),
+                lines[0],
+            )
+            assertTrue(lines[0].contains("at com.taptap.ng.DialLogTest"), lines[0])
+            // Capped: summary + header + at most MAX frames.
+            assertTrue(
+                lines[0].lines().size <= 2 + DialLog.MAX_FAILURE_TRACE_FRAMES,
+                "uncapped trace: ${lines[0].lines().size} lines",
+            )
+        } finally {
+            DialLog.clear()
+        }
+    }
+
+    @Test
     fun `level filter applies to the logcat sink too`() {
         DialLog.clear()
         val seen = mutableListOf<String>()

@@ -114,7 +114,32 @@ object DialLog {
 
     fun failure(stage: String, e: Throwable) {
         if (Level.ERROR < minLevel) return
-        add("$stage GAGAL: ${safeFailure(e)}")
+        add("$stage GAGAL: ${safeFailure(e)}${failureTrace(e)}")
+    }
+
+    /**
+     * v1.0.18: the full stack trace rides along with the failure
+     * line (capped at [MAX_FAILURE_TRACE_FRAMES] frames) so a
+     * START GAGAL on the phone can actually be diagnosed from the
+     * exported log — v1.0.17 only ever printed the exception class
+     * name ("ClassCastException"), which named nothing. Frames
+     * only, never the exception message: [stackTraceToString]
+     * would print the message verbatim, and for unsafe types
+     * (e.g. IllegalArgumentException from UUID parsing) the
+     * message carries the raw input — see [safeFailure]. The
+     * trace stays in the log (ring buffer + logcat); the toast /
+     * status text comes from [com.taptap.ng.service.TaptapVpnService]
+     * via `dialFailureReason` and is untouched by this.
+     */
+    const val MAX_FAILURE_TRACE_FRAMES = 30
+
+    private fun failureTrace(e: Throwable): String {
+        val frames = e.stackTrace.take(MAX_FAILURE_TRACE_FRAMES)
+        if (frames.isEmpty()) return ""
+        return buildString {
+            append("\n    stack trace (${e.javaClass.simpleName}):")
+            for (f in frames) append("\n    at $f")
+        }
     }
 
     private fun safeFailure(e: Throwable): String {

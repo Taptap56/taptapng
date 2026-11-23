@@ -1,6 +1,7 @@
 package com.taptap.ng.data
 
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.taptap.ng.AppConfig
 import com.taptap.ng.core.ProxyGroup
 import com.taptap.ng.core.ProxyGroupType
@@ -11,10 +12,24 @@ import java.io.File
 /**
  * On-disk shape of groups.json (M7). `version` is 1; a future
  * format bump reads the old version here and migrates.
+ *
+ * v1.0.18: every key is explicit ([SerializedName]) so R8 can
+ * never rename it again. The v1.0.17 release wrote obfuscated
+ * keys — `"a"` = groups, `"b"` = rules (verified from the
+ * shipped classes.dex: GroupsConfig's ctor (ArrayList, ArrayList)
+ * stores its 1st arg in field `a` and its 2nd in `b`, and save()
+ * passes (groups, rules) in that order; `version` was folded
+ * away entirely, so a v1.0.17 file has no version key and reads
+ * back as the default 1). Those keys stay readable as
+ * [SerializedName.alternate]s, so a v1.0.17 file migrates instead
+ * of falling back to the default.
  */
 internal data class GroupsConfig(
+    @SerializedName("version")
     val version: Int = 1,
+    @SerializedName(value = "groups", alternate = ["a"])
     val groups: List<ProxyGroup> = emptyList(),
+    @SerializedName(value = "rules", alternate = ["b"])
     val rules: List<RouteRule> = emptyList(),
 )
 
@@ -72,6 +87,25 @@ class GroupsStore(private val file: File) {
             val text = file.readText()
             val cfg = gson.fromJson(text, GroupsConfig::class.java)
                 ?: throw IllegalStateException("empty groups.json")
+            // v1.0.18 (layer 3): a poisoned file parses "fine" but
+            // its elements are LinkedTreeMap, not ProxyGroup /
+            // RouteRule — that is exactly what the v1.0.17 release
+            // produced (R8 stripped the generic Signature), and
+            // `toMutableList()` never checks an element (erasure),
+            // so the ClassCastException only exploded later, at
+            // pruneMissingProfiles() OUTSIDE this runCatching, and
+            // killed the start. Validate here, INSIDE the
+            // runCatching: a wrong-typed element falls back to the
+            // default like any other corrupt file. The `as List<Any?>`
+            // is deliberate — checking `it is ProxyGroup` on the
+            // typed list would be a no-op the compiler warns about.
+            @Suppress("UNCHECKED_CAST")
+            val rawGroups = cfg.groups as List<Any?>
+            @Suppress("UNCHECKED_CAST")
+            val rawRules = cfg.rules as List<Any?>
+            if (rawGroups.any { it !is ProxyGroup } || rawRules.any { it !is RouteRule }) {
+                throw IllegalStateException("groups.json has wrong element types")
+            }
             groups = cfg.groups.toMutableList()
             rules = cfg.rules.toMutableList()
         }.onFailure {

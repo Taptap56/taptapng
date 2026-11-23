@@ -10,6 +10,22 @@
 -keep class com.taptap.ng.data.ConfigType { *; }
 -keepclassmembers enum com.taptap.ng.data.ConfigType { *; }
 -keep class com.taptap.ng.data.ProfileStore { *; }
+# v1.0.18 (START GAGAL ClassCastException, M7): the groups model
+# needs the same treatment. Without these keeps R8 strips the
+# generic Signature from GroupsConfig's list fields, so Gson reads
+# every group as a LinkedTreeMap and the first typed access
+# (GroupsStore.pruneMissingProfiles, outside load()'s runCatching)
+# throws "LinkedTreeMap cannot be cast to ProxyGroup" on every
+# start after the first (groups.json only exists from start #2).
+# -keepattributes Signature above only helps classes that are kept.
+-keep class com.taptap.ng.data.GroupsConfig { *; }
+-keep class com.taptap.ng.data.GroupsStore { *; }
+-keep class com.taptap.ng.core.ProxyGroup { *; }
+-keep class com.taptap.ng.core.RouteRule { *; }
+-keep class com.taptap.ng.core.ProxyGroupType { *; }
+-keep class com.taptap.ng.core.RouteRuleType { *; }
+-keepclassmembers enum com.taptap.ng.core.ProxyGroupType { *; }
+-keepclassmembers enum com.taptap.ng.core.RouteRuleType { *; }
 -keep class * extends com.google.gson.reflect.TypeToken
 -keep class com.google.gson.reflect.TypeToken { *; }
 
