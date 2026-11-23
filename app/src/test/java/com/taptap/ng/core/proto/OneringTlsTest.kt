@@ -6,14 +6,13 @@ import com.taptap.ng.data.ProfileItem
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.Socket
 import java.security.KeyStore
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import javax.naming.ldap.LdapName
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLEngine
 import javax.net.ssl.TrustManagerFactory
-import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -37,9 +36,9 @@ import org.junit.jupiter.api.Test
  */
 class OneringTlsTest {
 
-    private fun oneringItem(insecure: Boolean = true, sni: String = "support.zoom.us") = ProfileItem(
+    private fun oneringItem(insecure: Boolean = true, sni: String = "support.zoom.us", address: String = "127.0.0.1") = ProfileItem(
         remarks = "Onering test",
-        address = "127.0.0.1",
+        address = address,
         port = 443,
         tls = true,
         insecure = insecure,
@@ -200,8 +199,15 @@ class OneringTlsTest {
         // against the SNI (v1.0.20). The test cert is issued for
         // localhost, so the SNI here must be localhost, not the
         // default support.zoom.us (that mismatch is covered by the
-        // hostname-mismatch test below).
-        val captured = runHandshake(oneringItem(insecure = false, sni = "localhost"), testTrustManager())
+        // hostname-mismatch test below). The [hostnameAwareVerify]
+        // seam is replaced by a fake that mimics what
+        // X509TrustManagerExtensions does on Android (chain check
+        // + hostname check) — the real extensions class is
+        // Android-only and cannot run on the JVM.
+        val validating = ValidatingHostnameAwareVerify()
+        val captured = withHostnameAwareVerify(validating::verify) {
+            runHandshake(oneringItem(insecure = false, sni = "localhost"), testTrustManager())
+        }
         val extensions = parseClientHelloExtensions(captured)
         assertEquals(OneringHello.EXTENSION_TYPE, extensions[0].first)
     }
@@ -220,8 +226,15 @@ class OneringTlsTest {
         }, "onering-test-server-untrusted").apply { isDaemon = true }
         serverThread.start()
         try {
-            assertThrows(Exception::class.java) {
-                OneringTls.wrap(serverToClient.input, clientToServer.output, oneringItem(insecure = false))
+            // Seam fake delegates the chain check to the platform
+            // TrustManager, so the self-signed test cert is
+            // rejected by genuine chain validation (not by the
+            // JVM android.jar stub).
+            val validating = ValidatingHostnameAwareVerify()
+            withHostnameAwareVerify(validating::verify) {
+                assertThrows(Exception::class.java) {
+                    OneringTls.wrap(serverToClient.input, clientToServer.output, oneringItem(insecure = false))
+                }
             }
         } finally {
             runCatching { serverSession.close() }
@@ -230,53 +243,71 @@ class OneringTlsTest {
     }
 
     /**
-     * v1.0.20: X509ExtendedTrustManager that records WHICH
-     * checkServerTrusted overload the BC client calls, delegating
-     * the real validation to the platform test trust manager.
-     * Proves the client calls the hostname-aware 3-arg overload
-     * with the SNI — the call Android's NetworkSecurityTrustManager
-     * requires once a <domain-config> exists (the 2-arg call is
-     * refused there and broke every Onering entry in v1.0.19).
+     * v1.0.20 (rework): fake for the [hostnameAwareVerify] seam
+     * that mimics what X509TrustManagerExtensions does on
+     * Android — chain check via the TrustManager it is given
+     * PLUS hostname verification of the leaf certificate against
+     * its DNS SANs / CN — and records every hostname it is
+     * called with. The real extensions class is Android-only and
+     * cannot run on the JVM, so the seam is the only thing a JVM
+     * test can observe; runtime proof stays the phone log.
      */
-    private class RecordingExtendedTrustManager(
-        private val delegate: X509TrustManager,
-    ) : X509ExtendedTrustManager() {
-        var twoArgCalls = 0
-        var threeArgCalls = 0
-        var threeArgHostname: String? = null
+    private class ValidatingHostnameAwareVerify {
+        val hostnames = mutableListOf<String>()
 
-        private fun extendedDelegate(): X509ExtendedTrustManager =
-            delegate as X509ExtendedTrustManager
-
-        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) =
-            delegate.checkClientTrusted(chain, authType)
-
-        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-            twoArgCalls++
-            delegate.checkServerTrusted(chain, authType)
+        fun verify(tm: X509TrustManager, chain: Array<X509Certificate>, authType: String, hostname: String) {
+            hostnames += hostname
+            tm.checkServerTrusted(chain, authType)
+            val leaf = chain.first()
+            if (!certificateMatchesHostname(leaf, hostname)) {
+                throw CertificateException("Sertifikat tidak cocok dengan hostname: $hostname")
+            }
         }
+    }
 
-        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, host: String) {
-            threeArgCalls++
-            threeArgHostname = host
-            extendedDelegate().checkServerTrusted(chain, authType, host)
+    /** Replace the [hostnameAwareVerify] seam for [block], restoring it afterwards. */
+    private inline fun <T> withHostnameAwareVerify(
+        verify: (X509TrustManager, Array<X509Certificate>, String, String) -> Unit,
+        block: () -> T,
+    ): T {
+        val previous = hostnameAwareVerify
+        hostnameAwareVerify = verify
+        try {
+            return block()
+        } finally {
+            hostnameAwareVerify = previous
         }
+    }
 
-        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, engine: SSLEngine) =
-            extendedDelegate().checkServerTrusted(chain, authType, engine)
+    /** True when [hostname] matches a DNS SAN or the CN of [cert] (single-label `*.` wildcard). */
+    private fun certificateMatchesHostname(cert: X509Certificate, hostname: String): Boolean {
+        val candidates = mutableListOf<String>()
+        runCatching { cert.subjectAlternativeNames }.getOrNull()?.forEach { entry ->
+            if ((entry[0] as? Int) == 7) (entry[1] as? String)?.let { candidates += it }
+        }
+        runCatching {
+            LdapName(cert.subjectX500Principal.name).rdns.forEach { rdn ->
+                if (rdn.type.equals("CN", ignoreCase = true)) candidates += rdn.value.toString()
+            }
+        }
+        return candidates.any { hostnameMatchesPattern(it, hostname) }
+    }
 
-        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, socket: Socket) =
-            extendedDelegate().checkServerTrusted(chain, authType, socket)
-
-        override fun getAcceptedIssuers(): Array<X509Certificate> = delegate.acceptedIssuers
+    private fun hostnameMatchesPattern(pattern: String, hostname: String): Boolean {
+        if (!pattern.startsWith("*.")) return pattern.equals(hostname, ignoreCase = true)
+        val suffix = pattern.substring(1) // ".example.com"
+        if (!hostname.endsWith(suffix, ignoreCase = true)) return false
+        val prefix = hostname.dropLast(suffix.length)
+        return prefix.isNotEmpty() && '.' !in prefix
     }
 
     /**
-     * v1.0.20: plain (non-extended) X509TrustManager that records
+     * v1.0.20 (rework): plain (non-extended) X509TrustManager that records
      * its 2-arg calls and delegates validation to the platform
-     * test trust manager. Proves the fallback path: when the
-     * TrustManager is not an X509ExtendedTrustManager, the client
-     * still validates (2-arg) instead of crashing on a cast.
+     * test trust manager. Proves the fallback paths still validate
+     * (2-arg) instead of crashing — the seam is skipped (blank
+     * hostname) or the extensions wrapper refuses the TrustManager
+     * (IllegalArgumentException).
      */
     private class RecordingPlainTrustManager(
         private val delegate: X509TrustManager,
@@ -295,26 +326,53 @@ class OneringTlsTest {
     }
 
     @Test
-    fun `hostname aware three arg overload is called with SNI`() {
-        // v1.0.20 regression test: the BC client must call
-        // checkServerTrusted(chain, authType, hostname) with the
-        // SNI, never the 2-arg overload Android refuses once a
-        // <domain-config> exists. SNI localhost matches the test
-        // cert (CN/SAN localhost), so the handshake must complete.
-        val recording = RecordingExtendedTrustManager(testTrustManager())
-        runHandshake(oneringItem(insecure = false, sni = "localhost"), recording)
-        assertEquals(1, recording.threeArgCalls, "overload 3-arg harus dipanggil tepat 1x")
-        assertEquals("localhost", recording.threeArgHostname)
-        assertEquals(0, recording.twoArgCalls, "overload 2-arg tidak boleh dipanggil")
+    fun `hostname aware seam is called once with SNI`() {
+        // v1.0.20 (rework): the BC client must verify through
+        // the hostnameAwareVerify seam exactly once, with the
+        // SNI as hostname — that seam is what drives
+        // X509TrustManagerExtensions on Android, the call the
+        // platform TrustManager requires once a <domain-config>
+        // exists. SNI localhost matches the test cert (CN/SAN
+        // localhost), so the handshake must complete.
+        val validating = ValidatingHostnameAwareVerify()
+        val recording = RecordingPlainTrustManager(testTrustManager())
+        withHostnameAwareVerify(validating::verify) {
+            runHandshake(oneringItem(insecure = false, sni = "localhost"), recording)
+        }
+        assertEquals(listOf("localhost"), validating.hostnames, "seam hostname-aware harus dipanggil tepat 1x dengan SNI")
+        assertEquals(1, recording.twoArgCalls, "fake seam harus mendelegasikan chain check ke 2-arg tepat 1x")
     }
 
     @Test
-    fun `fallback to two arg when trust manager is not extended`() {
-        // v1.0.20: a plain X509TrustManager (not extended) must
-        // still validate through the 2-arg call — no blind cast,
-        // no crash, handshake completes.
+    fun `fallback to two arg when hostname is blank`() {
+        // v1.0.20 (rework): a blank hostname (SNI and address
+        // both empty) must skip the seam entirely and validate
+        // through the 2-arg call — the seam below fails the test
+        // if it is ever invoked. Handshake still completes: the
+        // 2-arg check validates the chain, there is just no
+        // hostname to verify against.
         val recording = RecordingPlainTrustManager(testTrustManager())
-        runHandshake(oneringItem(insecure = false, sni = "localhost"), recording)
+        withHostnameAwareVerify({ _, _, _, _ ->
+            throw AssertionError("seam hostname-aware tidak boleh dipanggil saat hostname kosong")
+        }) {
+            runHandshake(oneringItem(insecure = false, sni = "", address = ""), recording)
+        }
+        assertEquals(1, recording.twoArgCalls, "overload 2-arg harus dipanggil tepat 1x")
+    }
+
+    @Test
+    fun `fallback to two arg when extensions reject the trust manager`() {
+        // v1.0.20 (rework): X509TrustManagerExtensions throws
+        // IllegalArgumentException for a TrustManager that is not
+        // a supported platform type; the client must fall back to
+        // the 2-arg call instead of failing the handshake. The
+        // seam below stands in for that constructor throw.
+        val recording = RecordingPlainTrustManager(testTrustManager())
+        withHostnameAwareVerify({ _, _, _, _ ->
+            throw IllegalArgumentException("unsupported TrustManager type")
+        }) {
+            runHandshake(oneringItem(insecure = false, sni = "localhost"), recording)
+        }
         assertEquals(1, recording.twoArgCalls, "overload 2-arg harus dipanggil tepat 1x")
     }
 
@@ -334,14 +392,22 @@ class OneringTlsTest {
         }, "onering-test-server-hostname-mismatch").apply { isDaemon = true }
         serverThread.start()
         try {
-            assertThrows(Exception::class.java) {
-                OneringTls.wrap(
-                    serverToClient.input,
-                    clientToServer.output,
-                    oneringItem(insecure = false, sni = "support.zoom.us"),
-                    testTrustManager(),
-                )
+            // Seam fake verifies the hostname against the leaf
+            // cert (SAN/CN) exactly like X509TrustManagerExtensions
+            // does on Android, so the mismatch is rejected by
+            // genuine hostname verification.
+            val validating = ValidatingHostnameAwareVerify()
+            withHostnameAwareVerify(validating::verify) {
+                assertThrows(Exception::class.java) {
+                    OneringTls.wrap(
+                        serverToClient.input,
+                        clientToServer.output,
+                        oneringItem(insecure = false, sni = "support.zoom.us"),
+                        testTrustManager(),
+                    )
+                }
             }
+            assertEquals(listOf("support.zoom.us"), validating.hostnames)
         } finally {
             runCatching { serverSession.close() }
             serverThread.join(5_000)

@@ -21,17 +21,34 @@ v1.0.19, bukan masalah server atau jendela prime.
   Sejak ada domain-config, `NetworkSecurityTrustManager` Android
   MENOLAK pemanggilan 2-arg
   `checkServerTrusted(chain, authType)` dan menuntut versi
-  hostname-aware 3-arg. Satu-satunya pemanggil 2-arg ke platform
+  hostname-aware. Satu-satunya pemanggil 2-arg ke platform
   TrustManager di codebase adalah `OneringTls.kt` di
   `bcTlsAuthentication` — dipakai semua entry Onering. Jalur plain
-  selamat karena Conscrypt memanggil versi 3-arg sendiri dengan
+  selamat karena Conscrypt memanggil versi hostname-aware sendiri dengan
   peer host; prime dial pakai trustAllContext sendiri.
-- **Perbaikan:** `bcTlsAuthentication` kini menerima hostname
-  (SNI / domain asli, sudah ada di `OneringTlsClient`) dan memanggil
-  `checkServerTrusted(chain, authType, hostname)` pada
-  `X509ExtendedTrustManager` — dengan `as?` + fallback ke 2-arg
-  bila TrustManager-nya bukan extended (test double / trust-all),
-  tanpa `as` buta. `network_security_config.xml` TIDAK diubah.
+- **Perbaikan (rework):** `bcTlsAuthentication` kini menerima hostname
+  (SNI / domain asli, sudah ada di `OneringTlsClient`) dan memverifikasi
+  lewat `android.net.http.X509TrustManagerExtensions` — API publik
+  Android (sejak API 17; minSdk app 24) yang memang dibuat untuk kasus
+  tanpa SSLEngine/SSLSocket, persis jalur raw-TLS Bouncy Castle ini:
+  konstruktornya membungkus TrustManager platform, dan
+  `checkServerTrusted(chain, authType, host)`-nya menggerakkan jalur
+  hostname-aware TrustManager platform, termasuk penegakan
+  domain-config. Bila konstruktor extensions melempar
+  `IllegalArgumentException` (TrustManager bukan tipe platform yang
+  didukung wrapper) atau hostname kosong, fallback ke 2-arg
+  `checkServerTrusted(chain, authType)` — aman untuk TrustManager
+  non-platform karena tidak ada domain-config yang ditegakkan.
+  `network_security_config.xml` TIDAK diubah.
+- **Koreksi premis:** percobaan v1.0.20 pertama memanggil overload
+  3-arg `checkServerTrusted(chain, authType, hostname)` pada
+  `X509ExtendedTrustManager` — overload itu TIDAK ADA
+  (X509ExtendedTrustManager hanya punya overload 3-arg Socket dan
+  SSLEngine), sehingga kode tidak compile (CI 45238965988,
+  `:app:compileDebugKotlin`). Rework ini menggantinya dengan
+  X509TrustManagerExtensions, yang memang API yang benar untuk
+  kasus ini. Akar masalahnya tetap sama dan terbukti dari log HP:
+  sejak ada `<domain-config>`, pemanggilan 2-arg ditolak platform.
 - **Perilaku verifikasi berubah (disengaja):** sebelumnya sertifikat
   hanya dicek rantainya tanpa verifikasi hostname; kini hostname
   diverifikasi terhadap SNI domain asli. Untuk Onering itu benar —
@@ -40,19 +57,24 @@ v1.0.19, bukan masalah server atau jendela prime.
   `*.cloudfront.net`). Entry Onering yang sertifikatnya TIDAK cocok
   dengan SNI-nya kini ditolak — itu perilaku yang diinginkan,
   bukan bug.
-- **Tes:** `OneringTlsTest` — (1) overload 3-arg dipanggil tepat
-  1x dengan hostname = SNI (`RecordingExtendedTrustManager`);
-  (2) fallback 2-arg saat TrustManager bukan extended
-  (`RecordingPlainTrustManager`, handshake tetap jalan);
+- **Tes:** `OneringTlsTest` — (1) seam hostname-aware dipanggil tepat
+  1x dengan hostname = SNI (`ValidatingHostnameAwareVerify`, fake yang
+  meniru X509TrustManagerExtensions: chain check + verifikasi hostname
+  terhadap SAN/CN sertifikat); (2) fallback 2-arg saat hostname kosong;
   (3) sertifikat yang tidak cocok hostname ditolak (SNI
-  `support.zoom.us` vs sertifikat tes `localhost`). Tes validasi
-  platform yang sudah ada disesuaikan: SNI-nya kini `localhost`
-  agar cocok dengan sertifikat tes.
+  `support.zoom.us` vs sertifikat tes `localhost`); (4) fallback 2-arg
+  saat extensions melempar `IllegalArgumentException` (TrustManager
+  bukan tipe platform). Tes validasi platform yang sudah ada
+  disesuaikan: SNI-nya kini `localhost` agar cocok dengan sertifikat
+  tes, dan memakai fake seam yang sama.
 
 ## Catatan
 
 - JVM tidak bisa mereproduksi penolakan 2-arg khas Android
-  (TrustManager JDK bukan NetworkSecurityTrustManager) — bukti
-  runtime-nya tetap log HP. Tes JVM membuktikan overload yang
-  dipanggil dan perilaku verifikasinya, bukan penolakan itu sendiri.
+  (TrustManager JDK bukan NetworkSecurityTrustManager) dan tidak bisa
+  menjalankan `X509TrustManagerExtensions` yang asli (kelas
+  Android-only; android.jar di JVM hanya stub) — bukti runtime-nya
+  tetap log HP. Tes JVM membuktikan seam hostname-aware dipanggil
+  dengan SNI yang benar, perilaku fallback-nya, dan verifikasi
+  hostname-nya lewat fake, bukan penolakan itu sendiri.
 - Tidak ada perubahan UI, rute, grup, atau perilaku non-Onering.
