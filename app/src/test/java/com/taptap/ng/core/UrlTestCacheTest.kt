@@ -2,6 +2,8 @@ package com.taptap.ng.core
 
 import com.taptap.ng.data.ConfigType
 import com.taptap.ng.data.ProfileItem
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -33,11 +35,12 @@ class UrlTestCacheTest {
 
     private fun urlTestGroup(
         id: String = "g1",
+        name: String = "UrlTest",
         members: List<String> = listOf("a", "b"),
         intervalSec: Int = 300,
     ) = ProxyGroup(
         id = id,
-        name = "UrlTest",
+        name = name,
         type = ProxyGroupType.URL_TEST,
         members = members,
         urlTestIntervalSec = intervalSec,
@@ -190,5 +193,108 @@ class UrlTestCacheTest {
         )
         assertEquals(0L, loop.nextDueInMs(listOf(urlTestGroup()), nowMs = 1000L))
         assertEquals(30L * 60_000, loop.nextDueInMs(emptyList(), nowMs = 1000L))
+    }
+
+    // v1.0.28: the loop never logged before (grep DialLog on
+    // UrlTestCache.kt = 0) — rounds ran invisibly. These tests
+    // fail on the old code (no log sink at all) and pass on the
+    // new code.
+
+    private fun loopWithLog(
+        lines: MutableList<String>,
+        tester: (ProfileItem, String) -> ServerTester.TestResult,
+    ) = UrlTestLoop(
+        cache = UrlTestCache(),
+        groupsProvider = { emptyList() },
+        profilesProvider = { emptyList() },
+        tester = tester,
+        log = { lines += it },
+    )
+
+    @Test
+    fun probeGroupWritesStartLineOncePerGroup() {
+        val lines = mutableListOf<String>()
+        val loop = loopWithLog(lines) { item, _ ->
+            ServerTester.TestResult(if (item.guid == "81") 312L else 662L, null)
+        }
+        val group = urlTestGroup(id = "g-tes", name = "tes", members = listOf("81", "iflix"))
+        val profiles = listOf(item("81"), item("iflix"))
+        loop.probeDue(listOf(group), profiles, nowMs = 1000L)
+        // Second round after the interval: start line must NOT repeat.
+        loop.probeDue(listOf(group), profiles, nowMs = 301_000L)
+        val starts = lines.filter { it.startsWith("url-test mulai:") }
+        assertEquals(1, starts.size)
+        assertEquals(
+            "url-test mulai: grup 'tes' — URL tes http://www.gstatic.com/generate_204, " +
+                "interval 300 dtk, anggota: 81, iflix",
+            starts.single(),
+        )
+    }
+
+    @Test
+    fun probeGroupWritesRoundLineWithMembersAndPicked() {
+        val lines = mutableListOf<String>()
+        val loop = loopWithLog(lines) { item, _ ->
+            ServerTester.TestResult(if (item.guid == "81") 312L else 662L, null)
+        }
+        loop.probeGroup(
+            urlTestGroup(id = "g-tes", name = "tes", members = listOf("81", "iflix")),
+            listOf(item("81"), item("iflix")),
+        )
+        assertTrue(
+            lines.any { it == "url-test 'tes': 81=312ms, iflix=662ms — terpilih: 81 (312ms)" },
+            "round line missing, got: $lines",
+        )
+    }
+
+    @Test
+    fun probeGroupRoundLineWhenAllMembersFail() {
+        val lines = mutableListOf<String>()
+        val loop = loopWithLog(lines) { _, _ -> ServerTester.TestResult(-1, "timeout") }
+        loop.probeGroup(
+            urlTestGroup(id = "g-tes", name = "tes", members = listOf("81", "iflix")),
+            listOf(item("81"), item("iflix")),
+        )
+        assertTrue(
+            lines.any {
+                it == "url-test 'tes': 81=gagal, iflix=gagal — terpilih: - (tidak ada yang menjawab)"
+            },
+            "round line missing, got: $lines",
+        )
+    }
+
+    @Test
+    fun kickWakesLoopForNewGroupAtOnce() {
+        // Regression for the 30-minute wait: with no URL_TEST
+        // group at tunnel start the loop slept MAX_SLEEP_MS, so a
+        // group created afterwards was first probed up to 30 min
+        // later. After kick() its first round must run at once.
+        val cache = UrlTestCache()
+        val groups = mutableListOf<ProxyGroup>()
+        val latch = CountDownLatch(1)
+        val loop = UrlTestLoop(
+            cache = cache,
+            groupsProvider = { groups.toList() },
+            profilesProvider = { listOf(item("81"), item("iflix")) },
+            tester = { _, _ ->
+                latch.countDown()
+                ServerTester.TestResult(100L, null)
+            },
+            log = {},
+        )
+        loop.start()
+        try {
+            // Let the worker enter its 30-min wait (no groups yet).
+            Thread.sleep(500)
+            groups += urlTestGroup(id = "g-tes", name = "tes", members = listOf("81", "iflix"))
+            loop.kick()
+            assertTrue(
+                latch.await(5, TimeUnit.SECONDS),
+                "ronde pertama grup baru harus jalan <5 dtk sesudah kick",
+            )
+            assertEquals(100L, cache.delay("81"))
+        } finally {
+            loop.stop()
+        }
     }
 }

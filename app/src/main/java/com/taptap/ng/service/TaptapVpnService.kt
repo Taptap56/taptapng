@@ -911,6 +911,7 @@ class TaptapVpnService : VpnService() {
             profilesProvider = { profileStore.profiles.toList() },
         )
         urlTestLoop = testLoop
+        ClashApiRuntime.urlTestLoop = testLoop
         testLoop.start()
         try {
             val tunIn = FileInputStream(fd.fileDescriptor)
@@ -1023,6 +1024,7 @@ class TaptapVpnService : VpnService() {
             runCatching { urlTestLoop?.stop() }
             urlTestLoop = null
             urlTestCache = null
+            ClashApiRuntime.urlTestLoop = null
             ClashApiRuntime.urlTestCache = null
             ClashApiRuntime.forwarder = null
             routeClientCache.values.filter { it !== client }
@@ -1127,6 +1129,7 @@ class TaptapVpnService : VpnService() {
         runCatching { urlTestLoop?.stop() }
         urlTestLoop = null
         urlTestCache = null
+        ClashApiRuntime.urlTestLoop = null
         ClashApiRuntime.urlTestCache = null
         ClashApiRuntime.forwarder = null
         routeClientCache.values.filter { it !== currentClient }

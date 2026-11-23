@@ -1,6 +1,7 @@
 package com.taptap.ng.core
 
 import com.taptap.ng.data.ProfileItem
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -105,6 +106,16 @@ class UrlTestCache {
  * [probeGroup] / [dueGroups] / [probeDue] are the testable core:
  * the thread only sleeps until the next group is due and calls
  * them. [tester] is injectable so tests can stub the probe.
+ *
+ * v1.0.28: every round is visible in the Log — [probeGroup]
+ * writes one start line per URL_TEST group (the first time it is
+ * probed) and one round line per round (member delays + the
+ * picked member) through [log], which defaults to
+ * [DialLog.log] at INFO (shown at the default log level; the
+ * loop never logged anything before, so rounds ran invisibly).
+ * [kick] wakes the sleeping worker at once, so a URL_TEST group
+ * created / edited / selected after the tunnel came up gets its
+ * first round immediately instead of up to [MAX_SLEEP_MS] later.
  */
 class UrlTestLoop(
     private val cache: UrlTestCache,
@@ -115,9 +126,23 @@ class UrlTestLoop(
     },
     /** False = rounds are postponed (e.g. screen off), like Observatory. */
     private val isActive: () -> Boolean = { true },
+    /** Log sink; defaults to DialLog INFO (visible in the Log page). */
+    private val log: (String) -> Unit = { DialLog.log("URL-TEST", it) },
 ) {
     private val running = AtomicBoolean(false)
     private var worker: Thread? = null
+
+    /** Group ids whose start line was already written (once per loop). */
+    private val loggedStartIds =
+        Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
+    /** The worker waits on this; [kick] notifies it. */
+    private val sleepLock = Object()
+
+    /** Wake the worker at once (e.g. a URL_TEST group just appeared). */
+    fun kick() {
+        synchronized(sleepLock) { sleepLock.notifyAll() }
+    }
 
     /** guid-group last round start, keyed by group id. */
     private val lastProbeMs = ConcurrentHashMap<String, Long>()
@@ -127,12 +152,27 @@ class UrlTestLoop(
         worker = thread(name = "url-test", isDaemon = true) {
             while (running.get()) {
                 val now = System.currentTimeMillis()
-                val groups = runCatching { groupsProvider() }.getOrElse { emptyList() }
+                var groups = runCatching { groupsProvider() }.getOrElse { emptyList() }
                 val nextDueIn = nextDueInMs(groups, now)
-                try {
-                    Thread.sleep(nextDueIn.coerceIn(MIN_SLEEP_MS, MAX_SLEEP_MS))
-                } catch (_: InterruptedException) {
-                    break
+                // A due group probes at once — no minimum sleep
+                // first (a never-probed group is due at tunnel
+                // start). Otherwise wait until the next group is
+                // due; [kick] notifies early when a URL_TEST group
+                // appears / changes while the tunnel is up.
+                if (nextDueIn > 0) {
+                    try {
+                        synchronized(sleepLock) {
+                            sleepLock.wait(nextDueIn.coerceIn(MIN_SLEEP_MS, MAX_SLEEP_MS))
+                        }
+                    } catch (_: InterruptedException) {
+                        break
+                    }
+                    if (!running.get()) break
+                    // Re-read after the wait: a kick means the
+                    // groups may have changed while asleep, and
+                    // the pre-sleep snapshot would miss the new
+                    // group entirely for one more round.
+                    groups = runCatching { groupsProvider() }.getOrElse { emptyList() }
                 }
                 if (!running.get()) break
                 if (!isActive()) {
@@ -195,11 +235,28 @@ class UrlTestLoop(
      * selection / order, never by probe). A member with no profile
      * is skipped; a probe failure records null (unknown), never a
      * stale number. Returns guid -> delay ms for probed members.
+     *
+     * v1.0.28: writes the Log lines for the group — one start line
+     * the first time it is probed (name + test URL + interval +
+     * members) and one round line per round (each member's delay
+     * + the picked member, i.e. the lowest delay — the same pick
+     * the route engine makes). Only member display names and
+     * delays are logged, never credentials or proxy URLs.
      */
     fun probeGroup(group: ProxyGroup, profiles: List<ProfileItem>): Map<String, Long?> {
         if (group.type != ProxyGroupType.URL_TEST) return emptyMap()
         val out = LinkedHashMap<String, Long?>()
         val url = group.urlTestUrl.ifBlank { ProxyGroup.DEFAULT_URL_TEST_URL }
+        if (loggedStartIds.add(group.id)) {
+            val names = group.members.map { guid ->
+                profiles.firstOrNull { it.guid == guid }?.displayName() ?: guid
+            }
+            log(
+                "url-test mulai: grup '${group.name}' — URL tes $url, " +
+                    "interval ${group.effectiveUrlTestIntervalSec} dtk, " +
+                    "anggota: ${names.joinToString(", ").ifEmpty { "-" }}",
+            )
+        }
         for (guid in group.members) {
             val item = profiles.firstOrNull { it.guid == guid } ?: continue
             val result = runCatching { tester(item, url) }
@@ -210,6 +267,18 @@ class UrlTestLoop(
             val delay = result.ms.takeIf { it >= 0 }
             cache.record(guid, delay)
             out[guid] = delay
+        }
+        if (out.isNotEmpty()) {
+            val parts = out.entries.joinToString(", ") { (guid, ms) ->
+                val name = profiles.firstOrNull { it.guid == guid }?.displayName() ?: guid
+                "$name=${ms?.let { "${it}ms" } ?: "gagal"}"
+            }
+            val best = out.entries.filter { it.value != null }.minByOrNull { it.value!! }
+            val picked = best?.let { (guid, ms) ->
+                val name = profiles.firstOrNull { it.guid == guid }?.displayName() ?: guid
+                "$name (${ms}ms)"
+            } ?: "- (tidak ada yang menjawab)"
+            log("url-test '${group.name}': $parts — terpilih: $picked")
         }
         return out
     }

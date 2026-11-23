@@ -1,6 +1,7 @@
 package com.taptap.ng.service
 
 import com.taptap.ng.core.UrlTestCache
+import com.taptap.ng.core.UrlTestLoop
 import com.taptap.ng.data.GroupsStore
 import com.taptap.ng.data.ProfileStore
 import java.io.File
@@ -34,6 +35,18 @@ object ClashApiRuntime {
     @Volatile
     var urlTestCache: UrlTestCache? = null
 
+    /**
+     * Url-test loop of the running tunnel; null when the VPN is
+     * down. Set / cleared by [TaptapVpnService] next to
+     * [urlTestCache]; [refreshGroups] kicks it so a URL_TEST group
+     * created / edited / selected while the tunnel is up gets its
+     * first round at once instead of up to 30 minutes later
+     * (v1.0.28 — the loop slept MAX_SLEEP_MS when no URL_TEST
+     * group existed at tunnel start).
+     */
+    @Volatile
+    var urlTestLoop: UrlTestLoop? = null
+
     /** Live forwarder of the running tunnel; null when the VPN is down. */
     @Volatile
     var forwarder: TunForwarder? = null
@@ -63,6 +76,10 @@ object ClashApiRuntime {
         val profiles = ProfileStore(ProfileStore.defaultFile(filesDir))
             .apply { load() }
         store.load(profiles.profiles, profiles.selectedGuid)
+        // v1.0.28: a group may have appeared / changed on disk
+        // (GroupsActivity, PUT select) — wake the loop so its
+        // first round runs now, not at the next due time.
+        urlTestLoop?.kick()
         return store
     }
 }

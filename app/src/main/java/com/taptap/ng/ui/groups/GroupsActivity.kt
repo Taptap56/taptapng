@@ -30,6 +30,7 @@ import com.taptap.ng.core.RouteRule
 import com.taptap.ng.core.RouteRuleType
 import com.taptap.ng.data.GroupsStore
 import com.taptap.ng.data.ProfileStore
+import com.taptap.ng.service.ClashApiRuntime
 
 /**
  * M7 editor for proxy groups + route rules (Views, mirroring
@@ -99,6 +100,20 @@ class GroupsActivity : AppCompatActivity() {
         findViewById<View>(R.id.add_rule).setOnClickListener { showRuleDialog(null) }
         findViewById<View>(R.id.save_main_group).setOnClickListener { saveMainGroupName() }
         refresh()
+    }
+
+    /**
+     * v1.0.28: edits in this screen are written to groups.json by
+     * [GroupsStore] itself, but the running tunnel reads the
+     * SHARED store — reload it (and wake the url-test loop, see
+     * [ClashApiRuntime.refreshGroups]) when leaving, so a URL_TEST
+     * group created / edited here gets its first round without
+     * having to open the dashboard first. No-op when the VPN is
+     * down (no loop) and when nothing changed (same file).
+     */
+    override fun onPause() {
+        super.onPause()
+        runCatching { ClashApiRuntime.refreshGroups(filesDir) }
     }
 
     private fun refresh() {

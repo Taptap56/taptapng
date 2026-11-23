@@ -518,6 +518,10 @@ object ClashApiServer {
             store.updateGroup(group.copy(selectedMemberGuid = ref))
             val names = profiles().associateBy({ it.guid }, { it.displayName() })
             DialLog.log("CLASH", "pilih grup '$groupName' -> '${names[ref] ?: proxyName}'")
+            // v1.0.28: the selection may have (re)activated a
+            // URL_TEST group (e.g. nested "tes" picked in the main
+            // group) — wake the loop for its first round now.
+            ClashApiRuntime.urlTestLoop?.kick()
             return true
         }
 
