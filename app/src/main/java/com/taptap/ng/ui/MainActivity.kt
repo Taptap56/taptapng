@@ -58,7 +58,9 @@ import com.taptap.ng.data.ConfigType
 import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.data.SettingsStore
 import com.taptap.ng.service.ClashApiServer
+import com.taptap.ng.service.LiveSwitchDecision
 import com.taptap.ng.service.TaptapVpnService
+import com.taptap.ng.service.decideLiveSwitch
 import com.taptap.ng.ui.groups.GroupsActivity
 import com.taptap.ng.ui.log.LogActivity
 import com.taptap.ng.ui.main.DashboardUrl
@@ -67,7 +69,6 @@ import com.taptap.ng.ui.main.MainViewModel
 import com.taptap.ng.ui.main.ServerAdapter
 import com.taptap.ng.ui.main.SpeedDisplay
 import com.taptap.ng.ui.main.buildExportClipboardText
-import com.taptap.ng.ui.main.shouldRestartOnSelect
 import com.taptap.ng.ui.scanner.ScannerActivity
 import com.taptap.ng.ui.server.ServerEditorActivity
 import com.taptap.ng.ui.settings.SettingsActivity
@@ -215,17 +216,23 @@ class MainActivity : AppCompatActivity() {
 
         adapter = ServerAdapter(object : ServerAdapter.Callbacks {
             override fun onSelect(guid: String) {
-                // v1.0.10: like v2rayNG, tapping a different server
-                // while the VPN runs switches the connection to it
-                // at once — the old behaviour only moved the accent
-                // bar and kept the old entry running until a manual
-                // stop/start, which is exactly the "cara pilih akun
-                // kerasa beda" the user reported.
-                val restart = shouldRestartOnSelect(
+                // v1.0.19 (Issue 2): Clash-style live switch — ketuk
+                // server lain saat VPN jalan PINDAH TANPA restart
+                // (tunnel + forwarder tetap hidup; hanya seleksi
+                // grup "Proxy" yang pindah — lihat LiveSwitch).
+                // Ketuk server yang sama = no-op; saat VPN mati
+                // ketuk tetap pilih saja, start berikutnya memakai
+                // entry itu (perilaku lama, tidak berubah).
+                when (decideLiveSwitch(
                     viewModel.isRunning.value, viewModel.selectedGuid.value, guid,
-                )
-                viewModel.select(guid)
-                if (restart) restartService()
+                )) {
+                    LiveSwitchDecision.NO_OP -> Unit
+                    LiveSwitchDecision.SELECT_ONLY -> viewModel.select(guid)
+                    LiveSwitchDecision.SWITCH_LIVE -> {
+                        viewModel.select(guid)
+                        switchService(guid)
+                    }
+                }
             }
             override fun onShare(item: ProfileItem) = showShareDialog(item)
             override fun onEdit(item: ProfileItem) = openEditor(item.guid, null)
@@ -1019,6 +1026,23 @@ class MainActivity : AppCompatActivity() {
         stopVpn()
         // Small delay so the old TUN is released before the new start.
         fab.postDelayed({ toggleRunning() }, 500)
+    }
+
+    /**
+     * v1.0.19 (Issue 2): minta service pindah live ke [guid]
+     * tanpa stop/start (ACTION_SWITCH). Service yang memvalidasi
+     * entry, memindah seleksi grup + label + loop Pemicu — bila
+     * ditolak, tunnel tetap jalan di entry lama (lihat
+     * TaptapVpnService.switchTunnel).
+     */
+    private fun switchService(guid: String) {
+        val intent = Intent(this, TaptapVpnService::class.java)
+            .setAction(TaptapVpnService.ACTION_SWITCH)
+            .putExtra(TaptapVpnService.EXTRA_GUID, guid)
+        startService(intent)
+        // The service moves the "Connected:" label itself; the 2 s
+        // poll picks it up. No optimistic text here — a rejected
+        // switch must not flash the new entry's name.
     }
 
     private fun confirm(message: String, onConfirm: () -> Unit) {
