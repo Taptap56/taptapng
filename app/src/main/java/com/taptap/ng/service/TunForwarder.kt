@@ -591,6 +591,15 @@ class TunForwarder(
         udpSweeperThread?.interrupt()
         udpSweeperThread = null
         runCatching { tunOut.close() }
+        // v1.0.19 (CI 45233588619): join the reader — bounded (2 s),
+        // like the writer above. stop() closed tunIn, so the blocked
+        // read errors out and the loop logs "baca TUN selesai" — but
+        // without the join that line lands on the reader thread AFTER
+        // stop() returns, so a later test's `before` marker (or the
+        // phone's next start) can see it as if it belonged to the new
+        // run. A stuck fd cannot hang teardown: the join times out.
+        runCatching { readerThread?.join(2000) }
+        readerThread = null
         DialLog.log(
             "FORWARDER",
             "berhenti (paket dibaca: ${packetsRead.get()}, " +
