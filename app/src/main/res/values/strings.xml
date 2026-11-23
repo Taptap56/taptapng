@@ -146,6 +146,7 @@
     <string name="groups_rule_type">Tipe aturan</string>
     <string name="groups_rule_pattern">Pola (kosong untuk FINAL)</string>
     <string name="groups_rule_target">Target</string>
+    <string name="groups_rule_enabled">Aktifkan aturan</string>
     <string name="groups_name_required">Nama grup wajib diisi</string>
     <string name="groups_need_member">Pilih minimal satu anggota</string>
     <string name="groups_pattern_required">Pola wajib diisi (kecuali FINAL)</string>

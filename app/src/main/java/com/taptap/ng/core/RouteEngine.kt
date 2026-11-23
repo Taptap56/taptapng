@@ -25,6 +25,11 @@ sealed interface RouteDecision {
  * Semantics (locked by RouteEngineTest):
  * - Rules are evaluated top-down; the first rule that matches AND
  *   resolves to a usable target wins.
+ * - A rule that is switched off ([RouteRule.isEnabled] == false)
+ *   is skipped entirely, as if it were not in the list (v1.0.23).
+ *   FINAL is the exception: it has no toggle and is always
+ *   evaluated, so a hand-edited file can never switch the last
+ *   resort off.
  * - A rule whose target is a group with NO usable member (empty
  *   group, or a SELECT group with no members) does NOT match: the
  *   engine falls through to the next rule instead of killing the
@@ -104,6 +109,9 @@ object RouteEngine {
             }
         }
         for (rule in rules) {
+            // v1.0.23: a switched-off rule is skipped; FINAL has no
+            // toggle and is always evaluated.
+            if (rule.type != RouteRuleType.FINAL && !rule.isEnabled) continue
             if (!rule.matches(host, ip)) continue
             when (rule.target) {
                 RouteRule.TARGET_DIRECT -> return RouteDecision.Direct

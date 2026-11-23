@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One route rule row: type + pattern, target. -->
+<!-- One route rule row: type + pattern, target, on/off toggle.
+     FINAL ("Rute akhir") has no toggle — it is always active. -->
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
@@ -42,9 +44,21 @@
             android:textAppearance="?attr/textAppearanceBodySmall" />
     </LinearLayout>
 
-    <!-- Reorder: up/down move the rule one step in the top-down
-         match order. At the edges the button is disabled (dimmed),
-         never hidden, so the row layout stays stable. -->
+    <!-- On/off toggle (v1.0.23) + reorder (v1.0.23): up/down move
+         the rule one step in the top-down match order. At the edges
+         the button is disabled (dimmed), never hidden, so the row
+         layout stays stable. -->
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/rule_enabled"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical"
+        android:scaleX="0.8"
+        android:scaleY="0.8"
+        android:contentDescription="@string/groups_rule_enabled"
+        app:thumbTint="@color/switch_thumb"
+        app:trackTint="@color/switch_track" />
+
     <ImageButton
         android:id="@+id/rule_move_up"
         android:layout_width="48dp"
