@@ -1,11 +1,31 @@
-# TaptapNG v1.0.20 (entry Onering konek lagi — perbaikan regresi v1.0.19)
+# TaptapNG v1.0.20 (dashboard kebuka + entry Onering konek lagi — perbaikan 2 regresi v1.0.19)
 
 Rilis 24 November 2026. APK `taptapng-v1.0.20.apk` (vc21, `com.taptap.ng`,
 ditandatangani keystore rilis stabil — bisa menimpa v1.0.2 ke atas).
-3 tes unit baru `OneringTlsTest` ditambahkan (dijalankan CI, Gradle
-diblokir di VM), plus seluruh regresi yang sudah ada.
+4 tes unit baru `OneringTlsTest` + 4 tes `ClashApiServerBindTest`
+ditambahkan (dijalankan CI, Gradle diblokir di VM), plus seluruh
+regresi yang sudah ada.
 
 ## Yang diperbaiki
+
+### Regresi — Dashboard tidak kebuka di v1.0.19: SELESAI
+
+Di v1.0.18 tab Dashboard gagal dengan `ERR_CLEARTEXT_NOT_PERMITTED`;
+di v1.0.19 cleartext-nya sudah benar tapi error BERUBAH jadi
+`ERR_CONNECTION_REFUSED`. Log HP 2026-11-24 01:19 mencatat
+`API Clash jalan di ::1:9091` — server Clash API bind ke `::1`
+(IPv6 loopback), sedangkan URL dashboard hardcoded `127.0.0.1`.
+
+- **Akar penyebab:** `ClashApiServer.kt` memakai
+  `InetAddress.getLoopbackAddress()` saat `clashApiAllowLan` mati —
+  di HP ini resolve ke `::1`, bukan `127.0.0.1`.
+- **Perbaikan:** fungsi baru `bindAddress(allowLan)` bind eksplisit
+  ke `InetAddress.getByName("127.0.0.1")` saat LAN mati; cabang LAN
+  (`0.0.0.0`) tidak diubah. `network_security_config.xml` tidak
+  diubah (cleartext loopback-only dari v1.0.19 tetap).
+- **Tes:** `ClashApiServerBindTest` — (1) non-LAN = 127.0.0.1,
+  (2) hasil bind IPv4 bukan IPv6, (3) LAN = 0.0.0.0,
+  (4) host bind cocok dengan host URL dashboard.
 
 ### Regresi — Entry Onering gagal TLS di v1.0.19: SELESAI
 
