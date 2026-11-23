@@ -29,6 +29,13 @@
                 app:title="@string/title_server" />
 
             <com.google.android.material.tabs.TabLayout
+                android:id="@+id/main_tabs"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:tabGravity="fill"
+                app:tabMode="fixed" />
+
+            <com.google.android.material.tabs.TabLayout
                 android:id="@+id/group_tabs"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -44,6 +51,76 @@
             android:clipToPadding="false"
             android:paddingBottom="80dp"
             app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+
+        <!-- M7 (W5): Dashboard tab container. The WebView itself is
+             created lazily in code on first selection (never at
+             Activity creation, to save memory) and added as the
+             first child, so the two overlays below sit on top of it. -->
+        <FrameLayout
+            android:id="@+id/dashboard_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone"
+            app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+            <!-- Clash API disabled: enable it from here instead of
+                 forcing the user into Settings. -->
+            <LinearLayout
+                android:id="@+id/dashboard_disabled"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="?attr/colorSurface"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="24dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:text="@string/dashboard_disabled"
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:textSize="15sp" />
+
+                <Button
+                    android:id="@+id/dashboard_enable_button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/dashboard_enable" />
+            </LinearLayout>
+
+            <!-- Load error (server not ready yet / bind failed):
+                 retry without leaving the tab. -->
+            <LinearLayout
+                android:id="@+id/dashboard_error"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="?attr/colorSurface"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="24dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:text="@string/dashboard_load_error"
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:textSize="15sp" />
+
+                <Button
+                    android:id="@+id/dashboard_retry_button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/action_refresh" />
+            </LinearLayout>
+        </FrameLayout>
 
         <TextView
             android:id="@+id/empty_servers"

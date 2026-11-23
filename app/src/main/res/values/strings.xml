@@ -112,6 +112,11 @@
     <string name="more_groups_routes">Grup proxy &amp; rute</string>
 
     <!-- M7: proxy groups + route rules. -->
+    <string name="tab_server">Server</string>
+    <string name="tab_dashboard">Dashboard</string>
+    <string name="dashboard_disabled">Clash API is off — the dashboard needs the local API server.</string>
+    <string name="dashboard_enable">Enable Clash API</string>
+    <string name="dashboard_load_error">Dashboard failed to load — the local API server may not be ready yet.</string>
     <string name="groups_title">Grup proxy &amp; rute</string>
     <string name="groups_section_groups">Grup proxy</string>
     <string name="groups_section_rules">Aturan rute</string>

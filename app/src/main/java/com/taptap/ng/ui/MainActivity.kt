@@ -1,5 +1,6 @@
 package com.taptap.ng.ui
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -9,6 +10,7 @@ import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.drawable.Animatable
+import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
 import android.view.Gravity
@@ -16,8 +18,15 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.ImageView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
@@ -48,9 +57,11 @@ import com.taptap.ng.core.PemicuManager
 import com.taptap.ng.data.ConfigType
 import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.data.SettingsStore
+import com.taptap.ng.service.ClashApiServer
 import com.taptap.ng.service.TaptapVpnService
 import com.taptap.ng.ui.groups.GroupsActivity
 import com.taptap.ng.ui.log.LogActivity
+import com.taptap.ng.ui.main.DashboardUrl
 import com.taptap.ng.ui.main.GROUP_ALL_ID
 import com.taptap.ng.ui.main.MainViewModel
 import com.taptap.ng.ui.main.ServerAdapter
@@ -79,6 +90,32 @@ class MainActivity : AppCompatActivity() {
     private lateinit var emptyView: View
     private lateinit var fab: FloatingActionButton
     private lateinit var adapter: ServerAdapter
+
+    // M7 (W5): Server | Dashboard toggle in the top bar (same
+    // position as TB/TC). The Dashboard WebView is created lazily
+    // on first selection, never at Activity creation.
+    private lateinit var mainTabs: TabLayout
+    private lateinit var dashboardContainer: View
+    private lateinit var dashboardDisabled: View
+    private lateinit var dashboardError: View
+    private var dashboardWebView: WebView? = null
+    private var dashboardMode = false
+    /** Full dashboard URL currently loaded (may hold the secret — never log it). */
+    private var dashboardUrlLoaded: String? = null
+
+    /** Back goes through WebView history while in Dashboard mode. */
+    private val dashboardBackCallback = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            val webView = dashboardWebView
+            if (webView != null && webView.canGoBack()) {
+                webView.goBack()
+                return
+            }
+            // No history left: fall through to normal back.
+            isEnabled = false
+            onBackPressedDispatcher.onBackPressed()
+        }
+    }
 
     private var rebuildingTabs = false
     private var lastDoubleColumn: Boolean? = null
@@ -135,6 +172,19 @@ class MainActivity : AppCompatActivity() {
         recyclerView = findViewById(R.id.server_list)
         emptyView = findViewById(R.id.empty_servers)
         fab = findViewById(R.id.fab_toggle)
+        mainTabs = findViewById(R.id.main_tabs)
+        dashboardContainer = findViewById(R.id.dashboard_container)
+        dashboardDisabled = findViewById(R.id.dashboard_disabled)
+        dashboardError = findViewById(R.id.dashboard_error)
+        dashboardMode = savedInstanceState?.getBoolean(KEY_DASHBOARD_MODE, false) ?: false
+        onBackPressedDispatcher.addCallback(this, dashboardBackCallback)
+        setupMainTabs()
+        findViewById<Button>(R.id.dashboard_enable_button).setOnClickListener {
+            enableClashApiAndLoad()
+        }
+        findViewById<Button>(R.id.dashboard_retry_button).setOnClickListener {
+            reloadDashboard()
+        }
 
         val toolbar = findViewById<Toolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -238,6 +288,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        dashboardWebView?.onResume()
+        dashboardWebView?.resumeTimers()
+        // Port/secret may have changed in Settings while this tab
+        // was open — showDashboard() reloads only if the URL changed.
+        if (dashboardMode) showDashboard()
         viewModel.reload()
         // The groupAllDisplay setting may have changed in Settings —
         // rebuild the tabs (the All tab appears / disappears).
@@ -247,6 +302,25 @@ class MainActivity : AppCompatActivity() {
         if (lastDoubleColumn != settings.doubleColumnDisplay) applyLayoutManager()
     }
 
+    override fun onPause() {
+        dashboardWebView?.onPause()
+        dashboardWebView?.pauseTimers()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        dashboardWebView?.let { webView ->
+            (webView.parent as? ViewGroup)?.removeView(webView)
+            webView.destroy()
+        }
+        dashboardWebView = null
+        super.onDestroy()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_DASHBOARD_MODE, dashboardMode)
+    }
     /** Read the real service state (it may have failed to start, e.g.
      *  SSH profile selected) instead of trusting the optimistic UI. */
     private fun syncServiceState() {
@@ -298,7 +372,9 @@ class MainActivity : AppCompatActivity() {
                 launch {
                     viewModel.visibleProfiles.collect { items ->
                         adapter.items = items
-                        emptyView.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
+                        if (!dashboardMode) {
+                            emptyView.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
+                        }
                     }
                 }
                 launch {
@@ -379,7 +455,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             groups
         }
-        if (tabGroups.size > 1) {
+        if (tabGroups.size > 1 && !dashboardMode) {
             tabLayout.visibility = View.VISIBLE
             val counts = viewModel.profiles.value.groupingBy { it.group }.eachCount()
             for (group in tabGroups) {
@@ -422,6 +498,179 @@ class MainActivity : AppCompatActivity() {
                 return
             }
         }
+    }
+
+    // ---- Dashboard tab (M7, W5) ----
+    // Toggle Server | Dashboard in the top bar, same position as
+    // TB/TC (TabLayout above the group tabs, not a drawer item, not
+    // a menu, not a separate Activity). Server mode is exactly the
+    // old screen; Dashboard mode swaps the server list area for a
+    // WebView onto the bundled yacd served by the local Clash API.
+
+    private fun setupMainTabs() {
+        mainTabs.addTab(mainTabs.newTab().setText(R.string.tab_server).setTag(false))
+        mainTabs.addTab(mainTabs.newTab().setText(R.string.tab_dashboard).setTag(true))
+        mainTabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                setDashboardMode(tab.tag as? Boolean ?: false)
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+            override fun onTabReselected(tab: TabLayout.Tab) = Unit
+        })
+        mainTabs.getTabAt(if (dashboardMode) 1 else 0)?.select()
+        // Selecting the already-selected Server tab fires nothing,
+        // so apply the restored mode explicitly.
+        setDashboardMode(dashboardMode)
+    }
+
+    private fun setDashboardMode(dashboard: Boolean) {
+        dashboardMode = dashboard
+        if (dashboard) {
+            tabLayout.visibility = View.GONE
+            recyclerView.visibility = View.GONE
+            emptyView.visibility = View.GONE
+            fab.visibility = View.GONE
+            dashboardContainer.visibility = View.VISIBLE
+            showDashboard()
+        } else {
+            dashboardContainer.visibility = View.GONE
+            recyclerView.visibility = View.VISIBLE
+            fab.visibility = View.VISIBLE
+            // group_tabs visibility is owned by rebuildTabs; re-run
+            // it so the tabs come back exactly as before, and
+            // restore the empty view the collector owns.
+            rebuildTabs(viewModel.groups.value)
+            emptyView.visibility =
+                if (viewModel.visibleProfiles.value.isEmpty()) View.VISIBLE else View.GONE
+        }
+        updateBackCallback()
+    }
+
+    /**
+     * Show the dashboard, or the disabled panel when the Clash API
+     * is off. The WebView is created lazily here, on first
+     * selection — never at Activity creation. The loaded URL is
+     * re-checked on every show so a port/secret change in Settings
+     * is picked up without a restart.
+     */
+    private fun showDashboard() {
+        if (!settings.clashApiEnabled) {
+            dashboardDisabled.visibility = View.VISIBLE
+            dashboardError.visibility = View.GONE
+            dashboardWebView?.visibility = View.GONE
+            return
+        }
+        dashboardDisabled.visibility = View.GONE
+        val webView = dashboardWebView ?: createDashboardWebView().also { dashboardWebView = it }
+        webView.visibility = View.VISIBLE
+        val url = currentDashboardUrl()
+        if (dashboardUrlLoaded != url) {
+            dashboardError.visibility = View.GONE
+            dashboardUrlLoaded = url
+            // Never log `url`: it may carry ?secret=.
+            webView.loadUrl(url)
+        }
+    }
+
+    /**
+     * "Aktifkan": the simplest safe enable path — flip the same
+     * setting the Settings screen flips and restart the server the
+     * same way it does, then load the dashboard. No app restart.
+     */
+    private fun enableClashApiAndLoad() {
+        settings.clashApiEnabled = true
+        ClashApiServer.restart(this)
+        showDashboard()
+    }
+
+    private fun reloadDashboard() {
+        dashboardError.visibility = View.GONE
+        val webView = dashboardWebView ?: run { showDashboard(); return }
+        dashboardUrlLoaded = currentDashboardUrl()
+        // Never log the URL: it may carry ?secret=.
+        webView.loadUrl(dashboardUrlLoaded!!)
+    }
+
+    private fun currentDashboardUrl(): String = DashboardUrl.build(
+        SettingsStore.clashApiPortInt(settings.clashApiPort),
+        settings.clashApiSecret,
+    )
+
+    /** Origin the WebView is allowed to stay inside (loopback + API port). */
+    private fun dashboardOrigin(): String =
+        "http://127.0.0.1:${SettingsStore.clashApiPortInt(settings.clashApiPort)}/"
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createDashboardWebView(): WebView {
+        val webView = WebView(this)
+        webView.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        )
+        webView.settings.apply {
+            // yacd needs JS + DOM storage + localStorage (it keeps
+            // its API config and preferences there).
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            databaseEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+        }
+        webView.webViewClient = object : WebViewClient() {
+            /**
+             * Navigation decision: same-origin links (the dashboard
+             * itself, including its in-app routes) stay in the
+             * WebView; anything leaving the local origin opens in
+             * the system browser instead of navigating the
+             * dashboard away.
+             */
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: WebResourceRequest,
+            ): Boolean {
+                val url = request.url.toString()
+                if (url.startsWith(dashboardOrigin())) return false
+                runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                }
+                return true
+            }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                dashboardError.visibility = View.GONE
+                updateBackCallback()
+            }
+
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: WebResourceError,
+            ) {
+                // Main frame only: a failed sub-resource (icon,
+                // chunk) must not blank the whole dashboard.
+                if (request.isForMainFrame) showDashboardError()
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                errorResponse: WebResourceResponse,
+            ) {
+                if (request.isForMainFrame) showDashboardError()
+            }
+        }
+        (dashboardContainer as ViewGroup).addView(webView, 0)
+        return webView
+    }
+
+    private fun showDashboardError() {
+        dashboardError.visibility = View.VISIBLE
+        updateBackCallback()
+    }
+
+    private fun updateBackCallback() {
+        dashboardBackCallback.isEnabled =
+            dashboardMode && (dashboardWebView?.canGoBack() == true)
     }
 
     // ---- Toolbar / menus ----
@@ -778,5 +1027,9 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(android.R.string.ok) { _, _ -> onConfirm() }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    companion object {
+        private const val KEY_DASHBOARD_MODE = "dashboard_mode"
     }
 }
