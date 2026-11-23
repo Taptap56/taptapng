@@ -49,6 +49,11 @@
             android:theme="@style/Theme.TaptapNG" />
 
         <activity
+            android:name=".ui.groups.GroupsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.TaptapNG" />
+
+        <activity
             android:name=".ui.settings.SettingsActivity"
             android:exported="false"
             android:theme="@style/Theme.TaptapNG" />

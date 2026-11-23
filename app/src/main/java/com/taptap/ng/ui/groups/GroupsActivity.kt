@@ -1,0 +1,433 @@
+package com.taptap.ng.ui.groups
+
+import android.content.Context
+import android.os.Bundle
+import android.text.InputType
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.EditText
+import android.widget.ImageButton
+import android.widget.LinearLayout
+import android.widget.Spinner
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.textfield.TextInputLayout
+import com.taptap.ng.R
+import com.taptap.ng.TaptapNGApp
+import com.taptap.ng.core.ProxyGroup
+import com.taptap.ng.core.ProxyGroupType
+import com.taptap.ng.core.RouteRule
+import com.taptap.ng.core.RouteRuleType
+import com.taptap.ng.data.GroupsStore
+import com.taptap.ng.data.ProfileStore
+
+/**
+ * M7 editor for proxy groups + route rules (Views, mirroring
+ * ServerEditorActivity's dialogs and the flat rows of item_server).
+ * The route engine (W2) and the Clash API (W3) read the same
+ * [GroupsStore]; this activity only edits it — it never dials.
+ *
+ * Entry point: MainActivity overflow menu "Grup proxy & rute".
+ */
+class GroupsActivity : AppCompatActivity() {
+
+    private lateinit var profileStore: ProfileStore
+    private lateinit var groupsStore: GroupsStore
+    private lateinit var groupAdapter: GroupAdapter
+    private lateinit var ruleAdapter: RuleAdapter
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(TaptapNGApp.wrapLocale(newBase))
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_groups)
+
+        profileStore = ProfileStore(ProfileStore.defaultFile(filesDir))
+        profileStore.load()
+        groupsStore = GroupsStore(GroupsStore.defaultFile(filesDir))
+        groupsStore.load(profileStore.profiles, profileStore.selectedGuid)
+
+        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
+        toolbar.title = getString(R.string.groups_title)
+        setSupportActionBar(toolbar)
+        toolbar.setNavigationOnClickListener { finish() }
+
+        groupAdapter = GroupAdapter(
+            onEdit = { showGroupDialog(it) },
+            onDelete = { confirmDeleteGroup(it) },
+        )
+        ruleAdapter = RuleAdapter(
+            onEdit = { showRuleDialog(it) },
+            onDelete = { confirmDeleteRule(it) },
+        )
+        findViewById<RecyclerView>(R.id.groups_list).apply {
+            layoutManager = LinearLayoutManager(this@GroupsActivity)
+            adapter = groupAdapter
+        }
+        findViewById<RecyclerView>(R.id.rules_list).apply {
+            layoutManager = LinearLayoutManager(this@GroupsActivity)
+            adapter = ruleAdapter
+        }
+        findViewById<View>(R.id.add_group).setOnClickListener { showGroupDialog(null) }
+        findViewById<View>(R.id.add_rule).setOnClickListener { showRuleDialog(null) }
+        refresh()
+    }
+
+    private fun refresh() {
+        groupAdapter.submit(groupsStore.groups.toList())
+        ruleAdapter.submit(groupsStore.rules.toList())
+        findViewById<View>(R.id.empty_groups).visibility =
+            if (groupsStore.groups.isEmpty()) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.empty_rules).visibility =
+            if (groupsStore.rules.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    // ---- Group dialog ----
+
+    private fun showGroupDialog(existing: ProxyGroup?) {
+        val servers = profileStore.profiles.toList()
+        val ctx = this
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, pad / 2)
+        }
+        val nameInput = EditText(ctx).apply {
+            hint = getString(R.string.groups_group_name)
+            setText(existing?.name ?: "")
+        }
+        root.addView(TextInputLayout(ctx).apply { addView(nameInput) })
+
+        val typeSpinner = Spinner(ctx).apply {
+            adapter = ArrayAdapter(
+                ctx, android.R.layout.simple_spinner_dropdown_item,
+                ProxyGroupType.values().map { typeLabel(it) },
+            )
+            setSelection(existing?.type?.ordinal ?: 0)
+        }
+        root.addView(labeled(ctx, getString(R.string.groups_group_type), typeSpinner))
+
+        val urlInput = EditText(ctx).apply {
+            hint = getString(R.string.groups_url_test_url)
+            setText(existing?.urlTestUrl ?: ProxyGroup.DEFAULT_URL_TEST_URL)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        root.addView(TextInputLayout(ctx).apply { addView(urlInput) })
+
+        val intervalInput = EditText(ctx).apply {
+            hint = getString(R.string.groups_url_test_interval)
+            setText((existing?.urlTestIntervalSec ?: ProxyGroup.DEFAULT_URL_TEST_INTERVAL_SEC).toString())
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        root.addView(TextInputLayout(ctx).apply { addView(intervalInput) })
+
+        // Member picking: multi-choice dialog over the server list.
+        // The SELECT "terpilih" spinner below is rebuilt whenever
+        // the member set changes, so declare it first.
+        val chosen = (existing?.members ?: emptyList()).toMutableSet()
+        var selectedGuid: String? = existing?.selectedMemberGuid
+        var selectedRow: View? = null
+        fun rebuildSelectedSpinner() {
+            val picked = servers.filter { it.guid in chosen }
+            val labels = picked.map { it.displayName() }
+            val spinner = Spinner(ctx).apply {
+                adapter = ArrayAdapter(
+                    ctx, android.R.layout.simple_spinner_dropdown_item, labels,
+                )
+                val idx = picked.indexOfFirst { it.guid == selectedGuid }.takeIf { it >= 0 } ?: 0
+                if (labels.isNotEmpty()) setSelection(idx)
+                setOnItemSelectedListener(object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(
+                        parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long,
+                    ) {
+                        selectedGuid = picked.getOrNull(position)?.guid
+                    }
+
+                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                })
+            }
+            val row = labeled(ctx, getString(R.string.groups_selected), spinner)
+            val old = selectedRow
+            if (old != null) {
+                val idx = root.indexOfChild(old)
+                root.removeView(old)
+                root.addView(row, idx)
+            } else {
+                root.addView(row)
+            }
+            selectedRow = row
+        }
+
+        val membersButton = Button(ctx).apply {
+            text = membersButtonText(chosen.size)
+            setOnClickListener {
+                val names = servers.map { it.displayName() }.toTypedArray()
+                val checked = servers.map { it.guid in chosen }.toBooleanArray()
+                AlertDialog.Builder(ctx)
+                    .setTitle(R.string.groups_members)
+                    .setMultiChoiceItems(names, checked) { _, which, isChecked ->
+                        val guid = servers[which].guid
+                        if (isChecked) chosen += guid else chosen -= guid
+                    }
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        text = membersButtonText(chosen.size)
+                        rebuildSelectedSpinner()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+        }
+        root.addView(membersButton)
+        rebuildSelectedSpinner()
+
+        AlertDialog.Builder(ctx)
+            .setTitle(if (existing == null) R.string.groups_add_group else R.string.groups_edit)
+            .setView(root)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val name = nameInput.text.toString().trim()
+                if (name.isBlank()) {
+                    Toast.makeText(ctx, R.string.groups_name_required, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                if (chosen.isEmpty()) {
+                    Toast.makeText(ctx, R.string.groups_need_member, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val type = ProxyGroupType.values()[typeSpinner.selectedItemPosition]
+                val url = urlInput.text.toString().trim()
+                    .ifBlank { ProxyGroup.DEFAULT_URL_TEST_URL }
+                val interval = intervalInput.text.toString().toIntOrNull()
+                    ?: ProxyGroup.DEFAULT_URL_TEST_INTERVAL_SEC
+                val group = (existing ?: ProxyGroup()).copy(
+                    name = name,
+                    type = type,
+                    // Keep the server-list order for members.
+                    members = servers.filter { it.guid in chosen }.map { it.guid },
+                    selectedMemberGuid = if (type == ProxyGroupType.SELECT) {
+                        selectedGuid?.takeIf { it in chosen }
+                            ?: servers.firstOrNull { it.guid in chosen }?.guid
+                    } else {
+                        null
+                    },
+                    urlTestUrl = url,
+                    urlTestIntervalSec = interval,
+                )
+                if (existing == null) groupsStore.addGroup(group) else groupsStore.updateGroup(group)
+                refresh()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun membersButtonText(count: Int): String =
+        "${getString(R.string.groups_members)} ($count)"
+
+    private fun confirmDeleteGroup(group: ProxyGroup) {
+        AlertDialog.Builder(this)
+            .setMessage(getString(R.string.groups_delete_group, group.name))
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                groupsStore.removeGroup(group.id)
+                refresh()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    // ---- Rule dialog ----
+
+    private fun showRuleDialog(existing: RouteRule?) {
+        val ctx = this
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, pad / 2)
+        }
+        val typeSpinner = Spinner(ctx).apply {
+            adapter = ArrayAdapter(
+                ctx, android.R.layout.simple_spinner_dropdown_item,
+                RouteRuleType.values().map { it.name },
+            )
+            setSelection(existing?.type?.ordinal ?: 0)
+        }
+        root.addView(labeled(ctx, getString(R.string.groups_rule_type), typeSpinner))
+
+        val patternInput = EditText(ctx).apply {
+            hint = getString(R.string.groups_rule_pattern)
+            setText(existing?.pattern ?: "")
+        }
+        root.addView(TextInputLayout(ctx).apply { addView(patternInput) })
+
+        // Target: every group + DIRECT + REJECT.
+        val targetOptions = groupsStore.groups.map { it.name to it.id } +
+            listOf(
+                getString(R.string.groups_target_direct) to RouteRule.TARGET_DIRECT,
+                getString(R.string.groups_target_reject) to RouteRule.TARGET_REJECT,
+            )
+        val targetSpinner = Spinner(ctx).apply {
+            adapter = ArrayAdapter(
+                ctx, android.R.layout.simple_spinner_dropdown_item,
+                targetOptions.map { it.first },
+            )
+            val idx = targetOptions.indexOfFirst { it.second == existing?.target }
+                .takeIf { it >= 0 } ?: 0
+            setSelection(idx)
+        }
+        root.addView(labeled(ctx, getString(R.string.groups_rule_target), targetSpinner))
+
+        AlertDialog.Builder(ctx)
+            .setTitle(if (existing == null) R.string.groups_add_rule else R.string.groups_edit)
+            .setView(root)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val type = RouteRuleType.values()[typeSpinner.selectedItemPosition]
+                val pattern = patternInput.text.toString().trim()
+                if (type != RouteRuleType.FINAL && pattern.isEmpty()) {
+                    Toast.makeText(ctx, R.string.groups_pattern_required, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                if (type == RouteRuleType.IP_CIDR && !RouteRule.isValidCidr(pattern)) {
+                    Toast.makeText(ctx, R.string.groups_cidr_invalid, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val target = targetOptions[targetSpinner.selectedItemPosition].second
+                val rule = (existing ?: RouteRule()).copy(
+                    type = type,
+                    pattern = if (type == RouteRuleType.FINAL) "" else pattern,
+                    target = target,
+                )
+                if (existing == null) groupsStore.addRule(rule) else groupsStore.updateRule(rule)
+                refresh()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmDeleteRule(rule: RouteRule) {
+        AlertDialog.Builder(this)
+            .setMessage(R.string.groups_delete_rule)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                groupsStore.removeRule(rule.id)
+                refresh()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun labeled(ctx: Context, label: String, view: View): View =
+        LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (4 * resources.displayMetrics.density).toInt()
+            setPadding(0, pad, 0, pad)
+            addView(TextView(ctx).apply {
+                text = label
+                textAppearance = android.R.style.TextAppearance_Small
+            })
+            addView(view)
+        }
+
+    // ---- Adapters ----
+
+    private inner class GroupAdapter(
+        private val onEdit: (ProxyGroup) -> Unit,
+        private val onDelete: (ProxyGroup) -> Unit,
+    ) : RecyclerView.Adapter<GroupAdapter.Holder>() {
+        private var items: List<ProxyGroup> = emptyList()
+
+        fun submit(list: List<ProxyGroup>) {
+            items = list
+            notifyDataSetChanged()
+        }
+
+        inner class Holder(view: View) : RecyclerView.ViewHolder(view) {
+            val name: TextView = view.findViewById(R.id.group_name)
+            val type: TextView = view.findViewById(R.id.group_type)
+            val detail: TextView = view.findViewById(R.id.group_detail)
+            val edit: ImageButton = view.findViewById(R.id.group_edit)
+            val delete: ImageButton = view.findViewById(R.id.group_delete)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder =
+            Holder(LayoutInflater.from(parent.context).inflate(R.layout.item_proxy_group, parent, false))
+
+        override fun getItemCount(): Int = items.size
+
+        override fun onBindViewHolder(holder: Holder, position: Int) {
+            val group = items[position]
+            holder.name.text = group.name
+            holder.type.text = typeLabel(group.type)
+            val selectedName = group.effectiveSelectedMemberGuid()
+                ?.let { profileStore.find(it)?.displayName() }
+            holder.detail.text = buildString {
+                append(getString(R.string.groups_members_count, group.members.size))
+                if (group.type == ProxyGroupType.SELECT && selectedName != null) {
+                    append(" · ")
+                    append(getString(R.string.groups_selected_member, selectedName))
+                }
+                if (group.members.isEmpty()) {
+                    append(" · ")
+                    append(getString(R.string.groups_no_member))
+                }
+            }
+            holder.edit.setOnClickListener { onEdit(group) }
+            holder.delete.setOnClickListener { onDelete(group) }
+        }
+    }
+
+    private inner class RuleAdapter(
+        private val onEdit: (RouteRule) -> Unit,
+        private val onDelete: (RouteRule) -> Unit,
+    ) : RecyclerView.Adapter<RuleAdapter.Holder>() {
+        private var items: List<RouteRule> = emptyList()
+
+        fun submit(list: List<RouteRule>) {
+            items = list
+            notifyDataSetChanged()
+        }
+
+        inner class Holder(view: View) : RecyclerView.ViewHolder(view) {
+            val type: TextView = view.findViewById(R.id.rule_type)
+            val pattern: TextView = view.findViewById(R.id.rule_pattern)
+            val target: TextView = view.findViewById(R.id.rule_target)
+            val edit: ImageButton = view.findViewById(R.id.rule_edit)
+            val delete: ImageButton = view.findViewById(R.id.rule_delete)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder =
+            Holder(LayoutInflater.from(parent.context).inflate(R.layout.item_route_rule, parent, false))
+
+        override fun getItemCount(): Int = items.size
+
+        override fun onBindViewHolder(holder: Holder, position: Int) {
+            val rule = items[position]
+            holder.type.text = rule.type.name
+            holder.pattern.text = rule.pattern.ifBlank { "—" }
+            holder.target.text = when (rule.target) {
+                RouteRule.TARGET_DIRECT -> getString(R.string.groups_target_direct)
+                RouteRule.TARGET_REJECT -> getString(R.string.groups_target_reject)
+                else -> getString(
+                    R.string.groups_target_group,
+                    groupsStore.findGroup(rule.target)?.name ?: rule.target,
+                )
+            }
+            holder.edit.setOnClickListener { onEdit(rule) }
+            holder.delete.setOnClickListener { onDelete(rule) }
+        }
+    }
+
+    companion object {
+        /** Display label for a group type (URL_TEST shows as URL-TEST). */
+        fun typeLabel(type: ProxyGroupType): String = when (type) {
+            ProxyGroupType.SELECT -> "SELECT"
+            ProxyGroupType.URL_TEST -> "URL-TEST"
+            ProxyGroupType.FALLBACK -> "FALLBACK"
+        }
+    }
+}

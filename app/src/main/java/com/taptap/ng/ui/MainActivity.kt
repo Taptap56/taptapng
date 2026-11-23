@@ -49,6 +49,7 @@ import com.taptap.ng.data.ConfigType
 import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.data.SettingsStore
 import com.taptap.ng.service.TaptapVpnService
+import com.taptap.ng.ui.groups.GroupsActivity
 import com.taptap.ng.ui.log.LogActivity
 import com.taptap.ng.ui.main.GROUP_ALL_ID
 import com.taptap.ng.ui.main.MainViewModel
@@ -518,6 +519,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.more_test_all -> viewModel.testAll(false)
                 R.id.more_test_all_real -> viewModel.testAll(true)
                 R.id.more_prime_now -> primeNow()
+                R.id.more_groups_routes -> startActivity(Intent(this, GroupsActivity::class.java))
                 R.id.more_check_ip -> viewModel.checkIp()
                 R.id.more_update_sub -> Toast.makeText(
                     this, R.string.toast_not_available, Toast.LENGTH_SHORT

@@ -28,6 +28,9 @@
         android:id="@+id/more_test_all_real"
         android:title="@string/more_test_all_real" />
     <item
+        android:id="@+id/more_groups_routes"
+        android:title="@string/more_groups_routes" />
+    <item
         android:id="@+id/more_prime_now"
         android:title="@string/more_prime_now" />
     <item

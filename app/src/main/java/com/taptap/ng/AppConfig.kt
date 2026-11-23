@@ -7,6 +7,9 @@ object AppConfig {
     /** Profiles are stored as one JSON file in the app's private files dir. */
     const val PROFILES_FILE = "profiles.json"
 
+    /** M7: proxy groups + route rules, one JSON file (see GroupsStore). */
+    const val GROUPS_FILE = "groups.json"
+
     /** SSH defaults (proof-of-concept protocol, Phase 1). */
     const val SSH_DEFAULT_PORT = 22
     const val SSH_CONNECT_TIMEOUT_MS = 10_000

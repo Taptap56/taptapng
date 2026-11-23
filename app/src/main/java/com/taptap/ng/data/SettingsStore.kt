@@ -238,6 +238,23 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_LAN_SHARING, DEFAULT_LAN_SHARING)
         set(v) = prefs.edit().putBoolean(KEY_LAN_SHARING, v).apply()
 
+    // Clash API (M7, W3): local HTTP API for the yacd dashboard.
+    // Port 9091 — 9090 is taken by TaptapBox/TaptapClash, 10808 is
+    // the local SOCKS port, 18080/18081 the root forwarder.
+    var clashApiEnabled: Boolean
+        get() = prefs.getBoolean(KEY_CLASH_API_ENABLED, DEFAULT_CLASH_API_ENABLED)
+        set(v) = prefs.edit().putBoolean(KEY_CLASH_API_ENABLED, v).apply()
+    var clashApiPort: String
+        get() = prefs.getString(KEY_CLASH_API_PORT, DEFAULT_CLASH_API_PORT) ?: DEFAULT_CLASH_API_PORT
+        set(v) = prefs.edit().putString(KEY_CLASH_API_PORT, v).apply()
+    var clashApiSecret: String
+        get() = prefs.getString(KEY_CLASH_API_SECRET, DEFAULT_CLASH_API_SECRET)
+            ?: DEFAULT_CLASH_API_SECRET
+        set(v) = prefs.edit().putString(KEY_CLASH_API_SECRET, v).apply()
+    var clashApiAllowLan: Boolean
+        get() = prefs.getBoolean(KEY_CLASH_API_ALLOW_LAN, DEFAULT_CLASH_API_ALLOW_LAN)
+        set(v) = prefs.edit().putBoolean(KEY_CLASH_API_ALLOW_LAN, v).apply()
+
     // ---- Effective values (v2rayNG rules, pure logic on stored state) ----
 
     /** Local proxy is forced on while Hev TUN is on. */
@@ -317,6 +334,10 @@ class SettingsStore(context: Context) {
         const val KEY_MODE = "mode"
         const val KEY_ENABLE_ROOT_MODE = "enable_root_mode"
         const val KEY_LAN_SHARING = "lan_sharing"
+        const val KEY_CLASH_API_ENABLED = "clash_api_enabled"
+        const val KEY_CLASH_API_PORT = "clash_api_port"
+        const val KEY_CLASH_API_SECRET = "clash_api_secret"
+        const val KEY_CLASH_API_ALLOW_LAN = "clash_api_allow_lan"
 
         // Defaults — v2rayNG values, locked by SettingsDefaultsTest.
         const val DEFAULT_SPEED_ENABLED = false
@@ -388,6 +409,11 @@ class SettingsStore(context: Context) {
         const val DEFAULT_IP_API_URL = ""
         const val DEFAULT_ENABLE_ROOT_MODE = false
         const val DEFAULT_LAN_SHARING = false
+        // Clash API (M7): on by default; port 9091 (9090 = TB/TC).
+        const val DEFAULT_CLASH_API_ENABLED = true
+        const val DEFAULT_CLASH_API_PORT = "9091"
+        const val DEFAULT_CLASH_API_SECRET = ""
+        const val DEFAULT_CLASH_API_ALLOW_LAN = false
 
         /** The only mode M2 implements. */
         const val MODE_VPN = "VPN"
@@ -404,6 +430,11 @@ class SettingsStore(context: Context) {
         const val DISPLAY_DOMESTIC_DNS = "223.5.5.5"
         const val DISPLAY_DELAY_TEST_URL = "https://www.gstatic.com/generate_204"
         const val DISPLAY_IP_API_URL = "https://api.ip.sb/geoip"
+
+        /** Clash API port as an int; garbage / out-of-range falls back to the default. Pure. */
+        fun clashApiPortInt(port: String): Int =
+            port.toIntOrNull()?.takeIf { it in 1..65535 }
+                ?: DEFAULT_CLASH_API_PORT.toInt()
 
         /** Stored value, or the display default when blank. Pure — unit-testable. */
         fun displayOrDefault(stored: String, displayDefault: String): String =
