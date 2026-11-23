@@ -1,5 +1,6 @@
 package com.taptap.ng.core.proto
 
+import android.net.http.X509TrustManagerExtensions
 import com.taptap.ng.core.DialLog
 import com.taptap.ng.data.ProfileItem
 import java.io.ByteArrayInputStream
@@ -14,7 +15,6 @@ import java.util.Collections
 import java.util.Enumeration
 import java.util.Hashtable
 import javax.net.ssl.TrustManagerFactory
-import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
 import org.bouncycastle.tls.CertificateRequest
 import org.bouncycastle.tls.DefaultTlsClient
@@ -147,22 +147,50 @@ internal class OrderedExtensions : Hashtable<Int, ByteArray>() {
  * TrustManager with HOSTNAME-AWARE verification against [hostname]
  * (the SNI / real domain).
  *
- * v1.0.20 (regression fix): the platform TrustManager MUST be
- * called through the hostname-aware 3-arg overload
- * `checkServerTrusted(chain, authType, hostname)` of
- * [X509ExtendedTrustManager]. Since v1.0.19 the app ships a
+ * v1.0.20 (regression fix, reworked): the platform TrustManager
+ * MUST be called hostname-aware. Since v1.0.19 the app ships a
  * `<domain-config>` in network_security_config.xml, and Android's
  * NetworkSecurityTrustManager REFUSES the 2-arg call in that case
  * ("Domain specific configurations require that hostname aware
  * checkServerTrusted(X509Certificate[], String, String) is used") —
  * which broke every Onering entry in v1.0.19 (TLS gagal, 4x on the
  * phone log 2026-11-24 01:20). The plain SSLSocket path survived
- * because Conscrypt calls the 3-arg overload itself with the peer
- * host. For a TrustManager that is NOT an X509ExtendedTrustManager
- * (test doubles, trust-all wrappers) the 2-arg call is kept as a
- * fallback. A blank [hostname] also falls back to 2-arg — there is
- * nothing to verify against (cannot happen through [OneringTls.wrap],
- * which always falls back to the entry address).
+ * because Conscrypt calls the hostname-aware check itself with
+ * the peer host. The hostname-aware call goes through
+ * [android.net.http.X509TrustManagerExtensions] (public since
+ * API 17; minSdk is 24) — the Android API made exactly for the
+ * case where no SSLEngine/SSLSocket is available, which is this
+ * raw Bouncy Castle TLS path: "X509TrustManager wrapper exposing
+ * Android-added features. The checkServerTrusted methods allow
+ * callers to provide some additional context for the verification.
+ * This is particularly useful when an SSLEngine or SSLSocket is
+ * not available."
+ *
+ * KOREKSI PREMIS (v1.0.20 rework): the first v1.0.20 attempt
+ * called a 3-arg `checkServerTrusted(chain, authType, hostname)`
+ * on [javax.net.ssl.X509ExtendedTrustManager] — that overload
+ * DOES NOT EXIST. X509ExtendedTrustManager only has the
+ * Socket and SSLEngine 3-arg overloads, so the code did not
+ * compile (CI 45238965988, `:app:compileDebugKotlin`).
+ * X509TrustManagerExtensions is the correct API: its
+ * constructor takes the plain platform TrustManager and its
+ * `checkServerTrusted(chain, authType, host)` drives the
+ * platform TrustManager's hostname-aware path, including the
+ * per-domain-config enforcement.
+ *
+ * Fallbacks (both keep the 2-arg call, which is only refused
+ * by a platform TrustManager WITH a domain-config — a
+ * non-platform TrustManager has no domain-config to enforce,
+ * so 2-arg is safe for it):
+ * - [hostname] blank: nothing to verify against (cannot happen
+ *   through [OneringTls.wrap], which always falls back to the
+ *   entry address).
+ * - [X509TrustManagerExtensions] throws IllegalArgumentException
+ *   from its constructor: the TrustManager is not a platform
+ *   type the wrapper supports (test doubles, trust-all
+ *   wrappers), so the wrapper cannot be used at all.
+ * Any other failure (e.g. CertificateException: chain or
+ * hostname mismatch) propagates — the entry is rejected.
  *
  * Hostname verification against the SNI is CORRECT for Onering:
  * the SNI is the real domain and the edge certificate is issued
@@ -171,6 +199,27 @@ internal class OrderedExtensions : Hashtable<Int, ByteArray>() {
  * SNI is now rejected instead of connecting — that is the intended
  * behaviour, not a bug to work around.
  */
+
+/**
+ * Seam for the hostname-aware verification step (same `var`
+ * pattern as `Transport.protectUdpSocket`): production default
+ * drives the platform TrustManager through
+ * [X509TrustManagerExtensions]; tests replace it with a fake
+ * because `android.net.http.X509TrustManagerExtensions` does
+ * NOT exist on the JVM (android.jar is stubs only) and so cannot
+ * be exercised by a JVM unit test — runtime proof stays the
+ * phone log. Tests MUST restore the previous value in a finally
+ * block after replacing it.
+ */
+internal var hostnameAwareVerify: (
+    tm: X509TrustManager,
+    chain: Array<X509Certificate>,
+    authType: String,
+    hostname: String,
+) -> Unit = { tm, chain, authType, hostname ->
+    X509TrustManagerExtensions(tm).checkServerTrusted(chain, authType, hostname)
+}
+
 internal fun bcTlsAuthentication(
     insecure: Boolean,
     trustManager: X509TrustManager?,
@@ -195,14 +244,22 @@ internal fun bcTlsAuthentication(
                 else -> x509[0].publicKey.algorithm
             }
             val tm = trustManager ?: platformTrustManager()
-            // v1.0.20: hostname-aware 3-arg call — the 2-arg call is
+            // v1.0.20 (rework): hostname-aware verification via
+            // X509TrustManagerExtensions — the 2-arg call is
             // refused by NetworkSecurityTrustManager once a
-            // <domain-config> exists (v1.0.19 regression). Fall back
-            // to 2-arg only for a non-extended TrustManager or a
-            // blank hostname (nothing to verify against).
-            val extended = tm as? X509ExtendedTrustManager
-            if (hostname.isNotBlank() && extended != null) {
-                extended.checkServerTrusted(x509, authType, hostname)
+            // <domain-config> exists (v1.0.19 regression). The
+            // extensions wrapper throws IllegalArgumentException
+            // when the TrustManager is not a supported platform
+            // type; only then fall back to the 2-arg call, which
+            // is safe for a non-platform TrustManager (no
+            // domain-config to enforce). A blank hostname also
+            // falls back to 2-arg (nothing to verify against).
+            if (hostname.isNotBlank()) {
+                try {
+                    hostnameAwareVerify(tm, x509, authType, hostname)
+                } catch (e: IllegalArgumentException) {
+                    tm.checkServerTrusted(x509, authType)
+                }
             } else {
                 tm.checkServerTrusted(x509, authType)
             }
@@ -225,8 +282,9 @@ private fun platformTrustManager(): X509TrustManager {
  * ALPN = item.alpn, and the 0xff00 bug extension first. Certificate
  * validation mirrors TlsUtil: trust-all when insecure, otherwise the
  * platform default TrustManager with hostname verification against
- * the SNI (v1.0.20: hostname-aware 3-arg checkServerTrusted — the
- * 2-arg call is refused on Android once a <domain-config> exists).
+ * the SNI (v1.0.20: hostname-aware check via
+ * X509TrustManagerExtensions — the 2-arg call is refused on
+ * Android once a <domain-config> exists).
  */
 internal class OneringTlsClient(
     crypto: org.bouncycastle.tls.crypto.TlsCrypto,
