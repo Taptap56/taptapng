@@ -160,19 +160,36 @@ class GroupsActivity : AppCompatActivity() {
         }
         root.addView(labeled(ctx, getString(R.string.groups_group_type), typeSpinner))
 
+        // Label di ATAS nilai, pakai labeled() seperti spinner
+        // "Tipe grup" / "Anggota terpilih" di dialog ini. v1.0.24:
+        // label kedua field ini cuma EditText.hint di dalam
+        // TextInputLayout(ctx) polos (tanpa hint di layout, tanpa
+        // style OutlinedBox) — hint tidak mengambang ke atas, jadi
+        // saat nilai sudah terisi (default URL tes / interval) label
+        // menimpa nilai dan keduanya tidak terbaca. labeled() menaruh
+        // TextView label di atas field, jadi tumpukan itu tidak
+        // mungkin terjadi lagi; hint di EditText dihapus.
         val urlInput = EditText(ctx).apply {
-            hint = getString(R.string.groups_url_test_url)
             setText(existing?.urlTestUrl ?: ProxyGroup.DEFAULT_URL_TEST_URL)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
         }
-        root.addView(TextInputLayout(ctx).apply { addView(urlInput) })
+        root.addView(
+            labeled(
+                ctx, getString(R.string.groups_url_test_url),
+                TextInputLayout(ctx).apply { addView(urlInput) },
+            ),
+        )
 
         val intervalInput = EditText(ctx).apply {
-            hint = getString(R.string.groups_url_test_interval)
             setText((existing?.urlTestIntervalSec ?: ProxyGroup.DEFAULT_URL_TEST_INTERVAL_SEC).toString())
             inputType = InputType.TYPE_CLASS_NUMBER
         }
-        root.addView(TextInputLayout(ctx).apply { addView(intervalInput) })
+        root.addView(
+            labeled(
+                ctx, getString(R.string.groups_url_test_interval),
+                TextInputLayout(ctx).apply { addView(intervalInput) },
+            ),
+        )
 
         // Member picking: multi-choice dialog over the server list.
         // The SELECT "terpilih" spinner below is rebuilt whenever
