@@ -8,7 +8,7 @@ class ProxyGroupTest {
 
     @Test
     fun `defaults are select with generate 204 url and 300 second interval`() {
-        val group = ProxyGroup(name = "Proxy")
+        val group = ProxyGroup(name = "taptap")
         assertEquals(ProxyGroupType.SELECT, group.type)
         assertEquals("http://www.gstatic.com/generate_204", group.urlTestUrl)
         assertEquals(300, group.urlTestIntervalSec)

@@ -13,7 +13,7 @@ import java.net.InetAddress
 
 /**
  * Clash routing mode tests (M7, W3): "rule" (default) runs the
- * rule loop, "global" always uses the "Proxy" group (or the first
+ * rule loop, "global" always uses the "taptap" group (or the first
  * group), "direct" always dials direct. Pure [RouteEngine] logic —
  * the same function the forwarder's resolver and the API share.
  */
@@ -23,7 +23,7 @@ class ClashApiModeTest {
 
     private fun groups() = listOf(
         ProxyGroup(
-            id = "g-proxy", name = "Proxy", type = ProxyGroupType.SELECT,
+            id = "g-proxy", name = RouteEngine.FALLBACK_GROUP_NAME, type = ProxyGroupType.SELECT,
             members = listOf("guid-a", "guid-b"), selectedMemberGuid = "guid-b",
         ),
         ProxyGroup(
@@ -62,8 +62,8 @@ class ClashApiModeTest {
     }
 
     @Test
-    fun globalModeAlwaysUsesProxyGroupIgnoringRules() {
-        // Even a host whose rule says DIRECT goes through the Proxy group.
+    fun globalModeAlwaysUsesDefaultGroupIgnoringRules() {
+        // Even a host whose rule says DIRECT goes through the taptap group.
         val decision = RouteEngine.resolve(
             "example.com", ip, 443, groups(), rules(), emptyMap(),
             mode = RouteEngine.MODE_GLOBAL,
@@ -72,7 +72,7 @@ class ClashApiModeTest {
     }
 
     @Test
-    fun globalModeFallsBackToFirstGroupWhenNoProxyGroup() {
+    fun globalModeFallsBackToFirstGroupWhenNoDefaultGroup() {
         val onlyTest = listOf(
             ProxyGroup(
                 id = "g-test", name = "Cepat", type = ProxyGroupType.URL_TEST,
@@ -90,7 +90,7 @@ class ClashApiModeTest {
     @Test
     fun globalModeGoesDirectWhenNoGroupHasAMember() {
         val empty = listOf(
-            ProxyGroup(id = "g-proxy", name = "Proxy", type = ProxyGroupType.SELECT, members = emptyList()),
+            ProxyGroup(id = "g-proxy", name = RouteEngine.FALLBACK_GROUP_NAME, type = ProxyGroupType.SELECT, members = emptyList()),
         )
         val decision = RouteEngine.resolve(
             "example.com", ip, 443, empty, rules(), emptyMap(),

@@ -155,5 +155,5 @@
     <string name="set_clash_api_lan_title">Izinkan LAN</string>
     <string name="set_clash_api_lan_sub">Dengarkan di 0.0.0.0 — perangkat lain di jaringan bisa buka dashboard</string>
     <string name="set_clash_mode_title">Mode rute (Clash)</string>
-    <string name="set_clash_mode_sub">rule = ikut aturan; global = selalu grup Proxy; direct = tanpa proxy</string>
+    <string name="set_clash_mode_sub">rule = ikut aturan; global = selalu grup taptap; direct = tanpa proxy</string>
 </resources>

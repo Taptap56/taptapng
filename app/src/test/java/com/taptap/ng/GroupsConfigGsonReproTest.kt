@@ -124,12 +124,14 @@ class GroupsConfigGsonReproTest {
     }
 
     @Test
-    fun `load reads a v1_0_17 obfuscated-key groups json and keeps the group`() {
+    fun `load reads a v1_0_17 obfuscated-key groups json and renames the Proxy group to taptap`() {
         // v1.0.17 wrote groups.json with R8-obfuscated keys
         // ("a" = groups, "b" = rules — verified from the shipped
         // classes.dex, see GroupsConfig's KDoc) and no version key.
         // v1.0.18 must read that file back as-is (alternate keys),
-        // not fall back to the default and not throw.
+        // not fall back to the default and not throw — and v1.0.21
+        // renames its "Proxy" group to the new default name
+        // "taptap" (same id, so its FINAL rule still targets it).
         val dir = Files.createTempDirectory("groups-v1017-migration").toFile()
         val item = ProfileItem(
             remarks = "81", configType = ConfigType.VMESS,
@@ -154,7 +156,7 @@ class GroupsConfigGsonReproTest {
 
         assertEquals(1, store.groups.size)
         assertEquals("group-1", store.groups[0].id)
-        assertEquals("Proxy", store.groups[0].name)
+        assertEquals(GroupsStore.DEFAULT_GROUP_NAME, store.groups[0].name)
         assertEquals(listOf(item.guid), store.groups[0].members)
         assertEquals(item.guid, store.groups[0].selectedMemberGuid)
         assertEquals(1, store.rules.size)
@@ -162,10 +164,13 @@ class GroupsConfigGsonReproTest {
         assertEquals("group-1", store.rules[0].target)
 
         // A second load reads the same group back (no silent
-        // fallback to a rebuilt default with a new id).
+        // fallback to a rebuilt default with a new id, no second
+        // rename, no duplicate).
         val second = GroupsStore(File(dir, "groups.json"))
         second.load(listOf(item), item.guid)
         assertEquals("group-1", second.groups[0].id)
+        assertEquals(GroupsStore.DEFAULT_GROUP_NAME, second.groups[0].name)
+        assertEquals(1, second.groups.size)
     }
 
     @Test
