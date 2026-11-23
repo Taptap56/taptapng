@@ -153,4 +153,25 @@ class VpnConnection {
         runningEntry = null
         status = "Stopped"
     }
+
+    /**
+     * Live switch (v1.0.19, Issue 2): move the RUNNING tunnel to
+     * [label] WITHOUT a restart. The state stays RUNNING and only
+     * the entry label + "Connected:" status change — the tunnel,
+     * the forwarder and the route to existing connections are
+     * untouched (existing connections keep flowing through the
+     * old server until they close, like Clash). Returns false
+     * when the tunnel is not RUNNING (IDLE / STARTING / FAILED):
+     * a switch mid-start would race the start worker, whose
+     * reportConnected would overwrite the new label with the
+     * old entry's — the caller must not change the routing
+     * selection then either.
+     */
+    @Synchronized
+    fun switchEntry(label: String): Boolean {
+        if (state != State.RUNNING) return false
+        runningEntry = label
+        status = "Connected: ${connectedLabel(label)}"
+        return true
+    }
 }

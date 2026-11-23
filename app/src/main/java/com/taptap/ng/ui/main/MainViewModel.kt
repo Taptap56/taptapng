@@ -490,17 +490,6 @@ class StatusBarText {
 const val PING_STATUS_TEXT = "ping..."
 
 /**
- * Whether tapping [newGuid] must restart the running VPN with the
- * newly selected server — v2rayNG's MainActivity.setSelectServer:
- * a tap on a DIFFERENT server while the VPN runs restarts the
- * service with it; tapping the already-selected server, or tapping
- * while stopped, only changes the selection. Pure, so it is unit
- * testable without an Application (v1.0.10).
- */
-fun shouldRestartOnSelect(isRunning: Boolean, currentGuid: String?, newGuid: String): Boolean =
-    isRunning && newGuid != currentGuid
-
-/**
  * Sentinel "group" for the All tab (v1.0.5, group A — v2rayNG
  * "Show an All group tab"): selecting it shows every server
  * regardless of group. It is never a real ProfileItem.group (a

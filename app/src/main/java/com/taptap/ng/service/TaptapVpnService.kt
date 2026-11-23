@@ -72,6 +72,16 @@ class TaptapVpnService : VpnService() {
         const val ACTION_START = "com.taptap.ng.START"
         const val ACTION_STOP = "com.taptap.ng.STOP"
 
+        /**
+         * v1.0.19 (Issue 2): live switch — move the RUNNING tunnel
+         * to another server without stop/start. The guid travels in
+         * [EXTRA_GUID]. The UI only sends this while running and
+         * for a different server (see [decideLiveSwitch]); the
+         * service re-checks both, so a stale intent is harmless.
+         */
+        const val ACTION_SWITCH = "com.taptap.ng.SWITCH"
+        const val EXTRA_GUID = "guid"
+
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "taptapng-vpn"
 
@@ -314,8 +324,130 @@ class TaptapVpnService : VpnService() {
         when (intent?.action) {
             ACTION_START -> startTunnel()
             ACTION_STOP -> stopTunnel()
+            ACTION_SWITCH -> switchTunnel(intent.getStringExtra(EXTRA_GUID))
         }
         return START_STICKY
+    }
+
+    /**
+     * Live switch (v1.0.19, Issue 2): move the RUNNING tunnel to
+     * [newGuid] without tearing the TUN or the forwarder down.
+     * Order matters — every step that can fail runs BEFORE the
+     * routing selection moves, so a failed switch leaves the old
+     * server running, selected, and primed:
+     * 1. guard: tunnel must be running; entry must exist;
+     * 2. validate the new entry exactly like a start
+     *    ([prepareStart] — guard + client creation). Rejected =
+     *    keep the old selection (ProfileStore selection is
+     *    reverted to the old routed guid) + log, tunnel untouched.
+     *    The temporary client is closed at once — the forwarder
+     *    creates the routed client itself, on demand, per
+     *    connection (see [LiveSwitch]);
+     * 3. Root mode has no route engine (RootForwarder holds one
+     *    client) — it cannot switch live, so it restarts with the
+     *    new entry instead (old behaviour, logged);
+     * 4. [VpnConnection.switchEntry] moves the "Connected:" label
+     *    while staying RUNNING — false while STARTING (the start
+     *    worker would overwrite the label), so the switch is
+     *    cancelled and the selection reverted;
+     * 5. the shared [GroupsStore] selection moves (the step that
+     *    actually re-routes NEW connections — see [LiveSwitch]);
+     *    a save failure reverts the label to the old entry;
+     * 6. notification text follows the new entry, and the Pemicu
+     *    loop restarts on the new entry's target (M5 primes only
+     *    the connected entry; no target = the loop simply stops —
+     *    never a crash). The loop's first tick primes at once
+     *    (lastPrime is cleared by stop()), so the new entry's
+     *    window is primed in the background while routing has
+     *    already moved — the switch itself never blocks on a
+     *    prime dial.
+     *
+     * Runs on the main thread (onStartCommand) and does no
+     * network I/O itself: [prepareStart] only constructs the
+     * client (dial happens later, per connection).
+     */
+    private fun switchTunnel(newGuid: String?) {
+        if (newGuid.isNullOrBlank()) {
+            DialLog.log("SWITCH", "pindah live dibatalkan — guid kosong")
+            return
+        }
+        if (!connection.isRunning) {
+            DialLog.log("SWITCH", "pindah live dibatalkan — tunnel tidak jalan")
+            return
+        }
+        val store = ProfileStore(ProfileStore.defaultFile(filesDir))
+        store.load()
+        val item: ProfileItem = store.find(newGuid) ?: run {
+            DialLog.log("SWITCH", "pindah live dibatalkan — server tidak ditemukan")
+            return
+        }
+        val label = dialLabel(item)
+        // The routed entry before the switch — the selection to
+        // restore when any step below fails.
+        val groupsStore = ClashApiRuntime.refreshGroups(filesDir)
+        val oldGuid = groupsStore.groups
+            .firstOrNull { it.name == com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME }
+            ?.effectiveSelectedMemberGuid()
+            ?: store.selectedGuid
+        // Root mode cannot switch live (single-client forwarder,
+        // no route engine): restart with the new entry instead.
+        // The group selection moves first, so the restarted
+        // tunnel and the dashboard agree on the new entry.
+        if (rootHandle != null) {
+            DialLog.log(
+                "SWITCH",
+                "Root mode: pindah live tidak didukung — restart tunnel ke '${item.displayName()}'",
+            )
+            applyLiveSwitchSelection(groupsStore.groups, newGuid)?.let { updated ->
+                updated.firstOrNull { it.name == com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME }
+                    ?.let { groupsStore.updateGroup(it) }
+            }
+            stopTunnel()
+            startTunnel()
+            return
+        }
+        // Validate exactly like a start; a rejected entry must not
+        // kill the running tunnel or move the selection.
+        val muxConfig = MuxConfig.fromSettings(SettingsStore(this))
+        when (val prepared = prepareStart(item, muxConfig)) {
+            is PreparedStart.Rejected -> {
+                DialLog.log(
+                    "SWITCH",
+                    "pindah live ditolak (${prepared.message}): $label — tetap di entry lama",
+                )
+                store.setSelectedGuid(oldGuid)
+                return
+            }
+            is PreparedStart.Ready -> runCatching { prepared.client.close() }
+        }
+        val oldLabel = connection.runningEntry
+        if (!connection.switchEntry(label)) {
+            DialLog.log(
+                "SWITCH",
+                "pindah live dibatalkan — tunnel masih starting; ketuk lagi sesudah Connected",
+            )
+            store.setSelectedGuid(oldGuid)
+            return
+        }
+        try {
+            applyLiveSwitchSelection(groupsStore.groups, newGuid)?.let { updated ->
+                updated.firstOrNull { it.name == com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME }
+                    ?.let { groupsStore.updateGroup(it) }
+            }
+        } catch (e: Exception) {
+            DialLog.log("SWITCH", "pindah live gagal simpan grup (${e.javaClass.simpleName}) — kembali ke entry lama")
+            if (oldLabel != null) connection.switchEntry(oldLabel)
+            store.setSelectedGuid(oldGuid)
+            return
+        }
+        DialLog.log("SWITCH", "pindah live ke '${item.displayName()}' (tanpa restart tunnel)")
+        updateNotification("Connected: ${connectedLabel(label)}")
+        // M5 follows the connected entry: stop the old loop, start
+        // the new entry's target (none = loop stays stopped).
+        PemicuManager.stop()
+        PemicuManager.targetFromProfile(item)?.let { target ->
+            PemicuManager.start { listOf(target) }
+        }
     }
 
     private fun startTunnel() {
@@ -748,6 +880,16 @@ class TaptapVpnService : VpnService() {
         val profileStore = ProfileStore(ProfileStore.defaultFile(filesDir)).apply { load() }
         val groupsStore = ClashApiRuntime.ensureGroupsStore(filesDir)
         groupsStore.load(profileStore.profiles, profileStore.selectedGuid)
+        // v1.0.19 (live switch): samakan seleksi grup "Proxy"
+        // dengan entry yang dipilih — lihat [LiveSwitch]: tanpa
+        // ini route engine tetap merute koneksi baru ke anggota
+        // SELECT lama (seleksi grup tidak pernah disinkron dari
+        // ProfileStore sesudah grup default dibuat), jadi "pilih +
+        // start" pun tidak benar-benar pindah server.
+        applyLiveSwitchSelection(groupsStore.groups, item.guid)?.let { updated ->
+            updated.firstOrNull { it.name == com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME }
+                ?.let { groupsStore.updateGroup(it) }
+        }
         val urlCache = UrlTestCache().also { it.seedFromObservatory() }
         urlTestCache = urlCache
         ClashApiRuntime.urlTestCache = urlCache
