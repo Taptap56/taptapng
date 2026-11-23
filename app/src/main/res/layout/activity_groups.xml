@@ -28,86 +28,104 @@
             android:orientation="vertical"
             android:padding="16dp">
 
+            <!-- v1.0.22: one container per section so onCreate can
+                 GONE the irrelevant one (drawer Grup/Rute). -->
             <LinearLayout
+                android:id="@+id/groups_section"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/groups_section_groups"
+                        android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/add_group"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/groups_add_group" />
+                </LinearLayout>
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/groups_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:nestedScrollingEnabled="false" />
 
                 <TextView
-                    android:layout_width="0dp"
+                    android:id="@+id/empty_groups"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/groups_section_groups"
-                    android:textAppearance="?attr/textAppearanceTitleMedium" />
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:text="@string/groups_empty_groups"
+                    android:visibility="gone" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/add_group"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/groups_add_group" />
             </LinearLayout>
-
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/groups_list"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:nestedScrollingEnabled="false" />
-
-            <TextView
-                android:id="@+id/empty_groups"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp"
-                android:text="@string/groups_empty_groups"
-                android:visibility="gone" />
 
             <LinearLayout
-                android:id="@+id/rules_section_header"
+                android:id="@+id/rules_section"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:id="@+id/rules_section_header"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/groups_section_rules"
+                        android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/add_rule"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/groups_add_rule" />
+                </LinearLayout>
 
                 <TextView
-                    android:layout_width="0dp"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/groups_section_rules"
-                    android:textAppearance="?attr/textAppearanceTitleMedium" />
+                    android:paddingBottom="8dp"
+                    android:text="@string/groups_rules_hint"
+                    android:textAppearance="?attr/textAppearanceBodySmall" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/add_rule"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rules_list"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="@string/groups_add_rule" />
+                    android:nestedScrollingEnabled="false" />
+
+                <TextView
+                    android:id="@+id/empty_rules"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:text="@string/groups_empty_rules"
+                    android:visibility="gone" />
+
             </LinearLayout>
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="8dp"
-                android:text="@string/groups_rules_hint"
-                android:textAppearance="?attr/textAppearanceBodySmall" />
-
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/rules_list"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:nestedScrollingEnabled="false" />
-
-            <TextView
-                android:id="@+id/empty_rules"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp"
-                android:text="@string/groups_empty_rules"
-                android:visibility="gone" />
 
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>
