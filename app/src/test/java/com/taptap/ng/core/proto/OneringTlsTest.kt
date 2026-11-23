@@ -9,7 +9,6 @@ import java.io.OutputStream
 import java.security.KeyStore
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
-import javax.naming.ldap.LdapName
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
@@ -266,7 +265,7 @@ class OneringTlsTest {
     }
 
     /** Replace the [hostnameAwareVerify] seam for [block], restoring it afterwards. */
-    private inline fun <T> withHostnameAwareVerify(
+    private fun <T> withHostnameAwareVerify(
         verify: (X509TrustManager, Array<X509Certificate>, String, String) -> Unit,
         block: () -> T,
     ): T {
@@ -277,28 +276,6 @@ class OneringTlsTest {
         } finally {
             hostnameAwareVerify = previous
         }
-    }
-
-    /** True when [hostname] matches a DNS SAN or the CN of [cert] (single-label `*.` wildcard). */
-    private fun certificateMatchesHostname(cert: X509Certificate, hostname: String): Boolean {
-        val candidates = mutableListOf<String>()
-        runCatching { cert.subjectAlternativeNames }.getOrNull()?.forEach { entry ->
-            if ((entry[0] as? Int) == 7) (entry[1] as? String)?.let { candidates += it }
-        }
-        runCatching {
-            LdapName(cert.subjectX500Principal.name).rdns.forEach { rdn ->
-                if (rdn.type.equals("CN", ignoreCase = true)) candidates += rdn.value.toString()
-            }
-        }
-        return candidates.any { hostnameMatchesPattern(it, hostname) }
-    }
-
-    private fun hostnameMatchesPattern(pattern: String, hostname: String): Boolean {
-        if (!pattern.startsWith("*.")) return pattern.equals(hostname, ignoreCase = true)
-        val suffix = pattern.substring(1) // ".example.com"
-        if (!hostname.endsWith(suffix, ignoreCase = true)) return false
-        val prefix = hostname.dropLast(suffix.length)
-        return prefix.isNotEmpty() && '.' !in prefix
     }
 
     /**
@@ -482,4 +459,52 @@ class OneringTlsTest {
             }
         }
     }
+}
+
+/**
+ * Top-level (v1.0.20 test fix): the hostname matchers used to live
+ * as private members of OneringTlsTest, which the nested (non-inner)
+ * ValidatingHostnameAwareVerify class cannot call ("Outer class of
+ * non-inner class cannot be used as receiver", CI 45240483113).
+ * They are pure functions, so they live here now.
+ *
+ * True when [hostname] matches a DNS SAN or the CN of [cert]
+ * (single-label `*.` wildcard). The CN is parsed from the RFC 2253
+ * DN string by hand — `javax.naming.ldap.LdapName` does not resolve
+ * on the Android unit-test compile classpath (same CI failure).
+ */
+private fun certificateMatchesHostname(cert: X509Certificate, hostname: String): Boolean {
+    val candidates = mutableListOf<String>()
+    runCatching { cert.subjectAlternativeNames }.getOrNull()?.forEach { entry ->
+        if ((entry[0] as? Int) == 7) (entry[1] as? String)?.let { candidates += it }
+    }
+    candidates += commonNamesFromDn(cert.subjectX500Principal.name)
+    return candidates.any { hostnameMatchesPattern(it, hostname) }
+}
+
+/** CN values from an RFC 2253 DN string (e.g. "CN=localhost, O=..."). */
+private fun commonNamesFromDn(dn: String): List<String> {
+    val parts = mutableListOf<String>()
+    val current = StringBuilder()
+    var i = 0
+    while (i < dn.length) {
+        val c = dn[i]
+        when {
+            c == '\\' && i + 1 < dn.length -> { current.append(dn[i + 1]); i += 2 }
+            c == ',' -> { parts += current.toString(); current.clear(); i++ }
+            else -> { current.append(c); i++ }
+        }
+    }
+    parts += current.toString()
+    return parts.map { it.trim() }
+        .filter { it.startsWith("CN=", ignoreCase = true) }
+        .map { it.substring(3).trim().removeSurrounding("\"") }
+}
+
+private fun hostnameMatchesPattern(pattern: String, hostname: String): Boolean {
+    if (!pattern.startsWith("*.")) return pattern.equals(hostname, ignoreCase = true)
+    val suffix = pattern.substring(1) // ".example.com"
+    if (!hostname.endsWith(suffix, ignoreCase = true)) return false
+    val prefix = hostname.dropLast(suffix.length)
+    return prefix.isNotEmpty() && '.' !in prefix
 }
