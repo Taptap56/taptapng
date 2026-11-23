@@ -219,7 +219,7 @@ class MainActivity : AppCompatActivity() {
                 // v1.0.19 (Issue 2): Clash-style live switch — ketuk
                 // server lain saat VPN jalan PINDAH TANPA restart
                 // (tunnel + forwarder tetap hidup; hanya seleksi
-                // grup "Proxy" yang pindah — lihat LiveSwitch).
+                // grup "taptap" yang pindah — lihat LiveSwitch).
                 // Ketuk server yang sama = no-op; saat VPN mati
                 // ketuk tetap pilih saja, start berikutnya memakai
                 // entry itu (perilaku lama, tidak berubah).
