@@ -19,6 +19,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputLayout
 import com.taptap.ng.R
 import com.taptap.ng.TaptapNGApp
@@ -410,6 +411,7 @@ class GroupsActivity : AppCompatActivity() {
             val type: TextView = view.findViewById(R.id.rule_type)
             val pattern: TextView = view.findViewById(R.id.rule_pattern)
             val target: TextView = view.findViewById(R.id.rule_target)
+            val enabled: SwitchMaterial = view.findViewById(R.id.rule_enabled)
             val edit: ImageButton = view.findViewById(R.id.rule_edit)
             val delete: ImageButton = view.findViewById(R.id.rule_delete)
         }
@@ -431,7 +433,30 @@ class GroupsActivity : AppCompatActivity() {
                     groupsStore.findGroup(rule.target)?.name ?: rule.target,
                 )
             }
-            holder.edit.setOnClickListener { onEdit(rule) }
+            // v1.0.23: per-rule on/off toggle, persisted via
+            // updateRule. FINAL ("Rute akhir") has no toggle — it
+            // is always active, like TaptapBox/TaptapClash.
+            // Clear the listener before setting the state, or
+            // recycling a row would fire a stale toggle.
+            holder.enabled.setOnCheckedChangeListener(null)
+            if (rule.type == RouteRuleType.FINAL) {
+                holder.enabled.visibility = View.GONE
+            } else {
+                holder.enabled.visibility = View.VISIBLE
+                holder.enabled.isChecked = rule.isEnabled
+                holder.enabled.setOnCheckedChangeListener { _, checked ->
+                    val updated = rule.copy(enabled = checked)
+                    groupsStore.updateRule(updated)
+                    items = items.map { if (it.id == rule.id) updated else it }
+                }
+            }
+            // Edit reads the CURRENT row object, not the one
+            // captured at bind time: a toggle updates `items`
+            // in place, and editing a stale copy would write
+            // the old `enabled` value back over it.
+            holder.edit.setOnClickListener {
+                onEdit(items.firstOrNull { it.id == rule.id } ?: rule)
+            }
             holder.delete.setOnClickListener { onDelete(rule) }
         }
     }

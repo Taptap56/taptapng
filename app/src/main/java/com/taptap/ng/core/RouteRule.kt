@@ -22,6 +22,20 @@ enum class RouteRuleType {
  * [normalizedPattern], never in an init block. JSON field names are
  * stable (see [SerializedName]); never rename them without a
  * migration + regression test.
+ *
+ * v1.0.23: [enabled] is nullable on purpose (see the field doc).
+ * A plain `Boolean = true` default would be safe ONLY while
+ * Gson instantiates this class through its no-arg constructor
+ * (kotlinc emits one while every parameter has a default); if
+ * the class ever loses that constructor, Gson falls back to
+ * Unsafe allocation and the field would read the JVM default
+ * `false` — every old rule silently switched off. `null`
+ * (missing key) means active on EITHER path, so read the flag
+ * only through [isEnabled]. Verified 2026-11-24: Gson 2.13.1
+ * on the no-arg constructor applies the declared defaults
+ * (a `{"type":"FINAL"}` document reads back with a fresh UUID
+ * id, empty pattern and DIRECT target), and the old-file test
+ * in RouteRuleEnabledTest pins the active-by-default behaviour.
  */
 data class RouteRule(
     @SerializedName("id")
@@ -32,7 +46,29 @@ data class RouteRule(
     val pattern: String = "",
     @SerializedName("target")
     val target: String = TARGET_DIRECT,
+    /**
+     * Stored on/off flag (v1.0.23). Nullable on purpose: a file
+     * written before v1.0.23 has no "enabled" key, and the field
+     * reads `null` on either Gson instantiation path (no-arg
+     * constructor, or Unsafe allocation if this class ever loses
+     * it) — `null` means the rule is active. Never read this field
+     * directly; use [isEnabled]. Gson omits nulls when writing, so
+     * a rule that was never toggled stays key-less on disk,
+     * exactly like a v1.0.22 file.
+     */
+    @SerializedName("enabled")
+    val enabled: Boolean? = null,
 ) {
+    /**
+     * Whether this rule takes part in matching. Missing (null) =
+     * active, so every rule written by v1.0.17–v1.0.22 keeps
+     * working after the update. FINAL has no UI toggle; a FINAL
+     * rule is always evaluated by the engine regardless of this
+     * flag (see [RouteEngine]).
+     */
+    val isEnabled: Boolean
+        get() = enabled ?: true
+
     /** Pattern trimmed + lowercased; empty for FINAL. */
     val normalizedPattern: String
         get() = pattern.trim().lowercase()
