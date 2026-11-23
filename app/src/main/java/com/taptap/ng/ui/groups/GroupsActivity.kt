@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
+import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -232,11 +233,12 @@ class GroupsActivity : AppCompatActivity() {
         // header Grup/Rute (Widget.TaptapNG.Button.FilledAccent).
         // Sebelumnya `Button(ctx)` polos — style isi default M2 yang
         // latarnya `colorPrimary` (hitam di tema terang), jadi tombol
-        // ini hitam seperti ketiganya. MaterialButton 4-argumen dengan
-        // style sebagai defStyleRes; teks 15sp seperti ketiganya.
-        // Teks, klik (dialog multi-pilih server), dan posisi tidak
-        // berubah.
-        val membersButton = MaterialButton(ctx, null, 0, R.style.Widget_TaptapNG_Button_FilledAccent).apply {
+        // ini hitam seperti ketiganya. MaterialButton TIDAK punya
+        // konstruktor 4-argumen (ctx, attrs, defStyleAttr, defStyleRes)
+        // — style diterapkan lewat ContextThemeWrapper; teks 15sp
+        // seperti ketiganya. Teks, klik (dialog multi-pilih server),
+        // dan posisi tidak berubah.
+        val membersButton = MaterialButton(ContextThemeWrapper(ctx, R.style.Widget_TaptapNG_Button_FilledAccent)).apply {
             text = membersButtonText(chosen.size)
             textSize = 15f
             setOnClickListener {

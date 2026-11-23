@@ -139,17 +139,23 @@ class GroupsHeaderButtonsTest {
     fun `members button in the add-group dialog uses the same green filled style`() {
         // Plain Button(ctx) filled with black colorPrimary before
         // v1.0.25; now a MaterialButton with the FilledAccent style
-        // as defStyleRes, 15sp like the three header buttons.
+        // via ContextThemeWrapper (MaterialButton has no 4-arg
+        // constructor), 15sp like the three header buttons.
         val src = read("app/src/main/java/com/taptap/ng/ui/groups/GroupsActivity.kt")
         assertTrue(
             src.contains(
-                "MaterialButton(ctx, null, 0, R.style.Widget_TaptapNG_Button_FilledAccent)",
+                "MaterialButton(ContextThemeWrapper(ctx, R.style.Widget_TaptapNG_Button_FilledAccent))",
             ),
             "membersButton must be a MaterialButton with the FilledAccent style",
         )
         assertTrue(
             src.contains("import com.google.android.material.button.MaterialButton"),
             "GroupsActivity must import MaterialButton",
+        )
+        assertTrue(
+            src.contains("import android.view.ContextThemeWrapper"),
+            "GroupsActivity must import ContextThemeWrapper " +
+                "(MaterialButton has no 4-arg constructor)",
         )
         assertFalse(
             src.contains("import android.widget.Button"),
