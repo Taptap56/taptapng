@@ -10,6 +10,7 @@ import com.taptap.ng.core.DialLog
 import com.taptap.ng.core.proto.FragmentConfig
 import com.taptap.ng.core.proto.Transport
 import com.taptap.ng.data.SettingsStore
+import com.taptap.ng.service.ClashApiServer
 import java.util.Locale
 
 class TaptapNGApp : Application() {
@@ -47,6 +48,11 @@ class TaptapNGApp : Application() {
         if (settings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             DynamicColors.applyToActivitiesIfAvailable(this)
         }
+        // M7 (W3): API Clash + dashboard yacd hidup mengikuti
+        // PROSES aplikasi, bukan tunnel — dashboard bisa dibuka
+        // sebelum VPN konek. Gagal bind (port dipakai) hanya
+        // dicatat, aplikasi tidak crash (lihat ClashApiServer).
+        ClashApiServer.start(this)
     }
 
     companion object {

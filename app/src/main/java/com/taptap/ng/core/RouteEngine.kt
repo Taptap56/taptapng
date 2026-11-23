@@ -57,6 +57,15 @@ sealed interface RouteDecision {
  *
  * [port] is part of the signature for future port-based rules; the
  * current rule types ignore it.
+ *
+ * Clash mode (M7, W3 — [SettingsStore.clashMode], PATCH /configs):
+ * - "rule" (default) = the rule loop below.
+ * - "global" = always the selected/effective member of the group
+ *   named [FALLBACK_GROUP_NAME] ("Proxy"), or the first group when
+ *   there is no such group; an unusable group falls back to
+ *   [RouteDecision.Direct] (fail-open).
+ * - "direct" = always [RouteDecision.Direct].
+ * An unknown mode value behaves like "rule".
  */
 object RouteEngine {
 
@@ -67,6 +76,11 @@ object RouteEngine {
      */
     const val FALLBACK_GROUP_NAME = "Proxy"
 
+    /** Clash modes (see class doc). Stored in SettingsStore.clashMode. */
+    const val MODE_RULE = "rule"
+    const val MODE_GLOBAL = "global"
+    const val MODE_DIRECT = "direct"
+
     fun resolve(
         host: String?,
         ip: InetAddress,
@@ -75,7 +89,20 @@ object RouteEngine {
         rules: List<RouteRule>,
         /** guid -> last-known delay ms; null = unknown / failed. */
         delays: Map<String, Long?>,
+        /** Clash mode: "rule" (default), "global", or "direct". */
+        mode: String = MODE_RULE,
     ): RouteDecision {
+        when (mode.trim().lowercase()) {
+            MODE_DIRECT -> return RouteDecision.Direct
+            MODE_GLOBAL -> {
+                val group = groups.firstOrNull { it.name == FALLBACK_GROUP_NAME }
+                    ?: groups.firstOrNull()
+                if (group != null) {
+                    selectMember(group, delays)?.let { return RouteDecision.Proxy(it) }
+                }
+                return RouteDecision.Direct
+            }
+        }
         for (rule in rules) {
             if (!rule.matches(host, ip)) continue
             when (rule.target) {

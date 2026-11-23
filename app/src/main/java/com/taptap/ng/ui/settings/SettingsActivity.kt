@@ -20,6 +20,7 @@ import com.taptap.ng.R
 import com.taptap.ng.TaptapNGApp
 import com.taptap.ng.core.DialLog
 import com.taptap.ng.data.SettingsStore
+import com.taptap.ng.service.ClashApiServer
 
 /**
  * Settings screen (v1.0.5), Views only: a RecyclerView of collapsible
@@ -608,6 +609,59 @@ class SettingsActivity : AppCompatActivity() {
                         "lan_sharing", R.string.set_lan_sharing_title, R.string.set_lan_sharing_sub,
                         isOn = { store.lanSharing },
                         onToggle = { store.lanSharing = it },
+                    ),
+                ),
+            ),
+            Section(
+                "clash_api", R.string.set_section_clash_api,
+                listOf(
+                    switchItem(
+                        "clash_api_enabled", R.string.set_clash_api_enabled_title, R.string.set_clash_api_enabled_sub,
+                        isOn = { store.clashApiEnabled },
+                        onToggle = {
+                            store.clashApiEnabled = it
+                            ClashApiServer.restart(this)
+                        },
+                    ),
+                    textItem(
+                        "clash_api_port", R.string.set_clash_api_port_title, R.string.set_clash_api_port_sub,
+                        inputType = InputType.TYPE_CLASS_NUMBER,
+                        rawValue = { store.clashApiPort },
+                        displayValue = { store.clashApiPort },
+                        hint = SettingsStore.DEFAULT_CLASH_API_PORT,
+                        onSave = {
+                            store.clashApiPort = it
+                            ClashApiServer.restart(this)
+                        },
+                    ),
+                    textItem(
+                        "clash_api_secret", R.string.set_clash_api_secret_title, R.string.set_clash_api_secret_sub,
+                        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
+                        rawValue = { store.clashApiSecret },
+                        displayValue = {
+                            if (store.clashApiSecret.isBlank()) getString(R.string.set_not_set) else "••••••"
+                        },
+                        onSave = {
+                            store.clashApiSecret = it
+                            ClashApiServer.restart(this)
+                        },
+                    ),
+                    switchItem(
+                        "clash_api_allow_lan", R.string.set_clash_api_lan_title, R.string.set_clash_api_lan_sub,
+                        isOn = { store.clashApiAllowLan },
+                        onToggle = {
+                            store.clashApiAllowLan = it
+                            ClashApiServer.restart(this)
+                        },
+                    ),
+                    listItem(
+                        "clash_mode", R.string.set_clash_mode_title, R.string.set_clash_mode_sub,
+                        entries = arrayOf("rule", "global", "direct"),
+                        values = arrayOf("rule", "global", "direct"),
+                        current = { store.clashMode },
+                        // Mode dibaca live tiap koneksi oleh resolver —
+                        // tidak butuh restart server maupun VPN.
+                        onSave = { store.clashMode = it },
                     ),
                 ),
             ),

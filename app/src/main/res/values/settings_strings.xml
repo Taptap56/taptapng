@@ -143,4 +143,17 @@
     <string name="set_root_mode_sub">Eksperimental (v1.0.15): tanpa izin VPN, pakai iptables + root (Magisk). Tethering ikut lewat VPN. Risiko: aturan nyangkut saat crash = internet mati — lihat README v1.0.15</string>
     <string name="set_lan_sharing_title">Share VPN with LAN / tethered devices</string>
     <string name="set_lan_sharing_sub">Let tethered devices use this VPN</string>
+
+    <!-- Clash API (M7) -->
+    <string name="set_section_clash_api">Clash API settings</string>
+    <string name="set_clash_api_enabled_title">Clash API (dashboard yacd)</string>
+    <string name="set_clash_api_enabled_sub">API HTTP lokal untuk dashboard yacd — buka 127.0.0.1:9091/ui/ dari browser</string>
+    <string name="set_clash_api_port_title">Port API</string>
+    <string name="set_clash_api_port_sub">Port HTTP API Clash (default 9091 — 9090 dipakai TaptapBox/TaptapClash)</string>
+    <string name="set_clash_api_secret_title">Secret API</string>
+    <string name="set_clash_api_secret_sub">Kosong = tanpa auth; bila diisi, dashboard dibuka dengan ?secret=… (Bearer)</string>
+    <string name="set_clash_api_lan_title">Izinkan LAN</string>
+    <string name="set_clash_api_lan_sub">Dengarkan di 0.0.0.0 — perangkat lain di jaringan bisa buka dashboard</string>
+    <string name="set_clash_mode_title">Mode rute (Clash)</string>
+    <string name="set_clash_mode_sub">rule = ikut aturan; global = selalu grup Proxy; direct = tanpa proxy</string>
 </resources>

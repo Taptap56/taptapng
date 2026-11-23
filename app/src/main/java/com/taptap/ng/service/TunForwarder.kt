@@ -278,6 +278,15 @@ class TunForwarder(
          * map was unbounded, so a SYN flood grew it forever. */
         const val MAX_SESSIONS = 96
 
+        /** Stable id for one connection (Clash API /connections, M7 W3). */
+        fun connectionId(
+            network: String,
+            srcIp: TcpPacket.IpAddr,
+            srcPort: Int,
+            dstIp: TcpPacket.IpAddr,
+            dstPort: Int,
+        ): String = "$network:$srcIp:$srcPort>$dstIp:$dstPort"
+
         /**
          * v1.0.6 (M6): max sesi UDP lewat proxy (XVEON memakai
          * batas yang sama dengan TCP; UDP tanpa balasan tidak boleh
@@ -422,6 +431,92 @@ class TunForwarder(
 
     /** UDP sessions currently tracked (tests, v1.0.6). */
     fun udpSessionCount(): Int = udpSessions.size
+
+    // ---- Clash API (M7, W3): live traffic + connection snapshot ----
+
+    /**
+     * Bytes of sessions that already closed (accumulated once per
+     * session in [logSpeedSummary]); live sessions add their
+     * current counters in [trafficTotals].
+     */
+    private val closedUpBytes = java.util.concurrent.atomic.AtomicLong(0)
+    private val closedDownBytes = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * Total bytes through the tunnel since start: closed sessions
+     * + live sessions' current counters. (0, 0) when nothing has
+     * flowed yet — the Clash API reports it as /traffic.
+     */
+    fun trafficTotals(): Pair<Long, Long> {
+        var up = closedUpBytes.get()
+        var down = closedDownBytes.get()
+        for (s in sessions.values) {
+            val snap = s.speedStats?.snapshot() ?: continue
+            up += snap.upBytes
+            down += snap.downBytes
+        }
+        return up to down
+    }
+
+    /** One live connection, in the shape the Clash API returns. */
+    fun activeConnections(): List<ConnectionInfo> {
+        val out = ArrayList<ConnectionInfo>()
+        for (s in sessions.values) {
+            if (s.closed.get()) continue
+            val snap = s.speedStats?.snapshot()
+            val host = hostFor(s.key.dstIp)
+            out += ConnectionInfo(
+                id = connectionId("tcp", s.key.srcIp, s.key.srcPort, s.key.dstIp, s.key.dstPort),
+                network = "tcp",
+                host = host,
+                destinationIp = s.key.dstIp.toString(),
+                destinationPort = s.key.dstPort,
+                sourceIp = s.key.srcIp.toString(),
+                sourcePort = s.key.srcPort,
+                upload = snap?.upBytes ?: 0L,
+                download = snap?.downBytes ?: 0L,
+                startMs = s.speedStartMs.takeIf { it > 0 } ?: s.lastActivityMs,
+            )
+        }
+        for (s in udpSessions.values) {
+            if (s.closed.get()) continue
+            out += ConnectionInfo(
+                id = connectionId("udp", s.key.srcIp, s.key.srcPort, s.key.dstIp, s.key.dstPort),
+                network = "udp",
+                host = hostFor(s.key.dstIp),
+                destinationIp = s.key.dstIp.toString(),
+                destinationPort = s.key.dstPort,
+                sourceIp = s.key.srcIp.toString(),
+                sourcePort = s.key.srcPort,
+                upload = 0L,
+                download = 0L,
+                startMs = s.lastActivityMs,
+            )
+        }
+        return out
+    }
+
+    /** Close one live connection by [ConnectionInfo.id]; false when unknown. */
+    fun closeConnection(id: String): Boolean {
+        for (s in sessions.values) {
+            if (connectionId("tcp", s.key.srcIp, s.key.srcPort, s.key.dstIp, s.key.dstPort) == id) {
+                closeSession(s)
+                return true
+            }
+        }
+        for (s in udpSessions.values) {
+            if (connectionId("udp", s.key.srcIp, s.key.srcPort, s.key.dstIp, s.key.dstPort) == id) {
+                closeUdpSession(s)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun hostFor(dstIp: TcpPacket.IpAddr): String? =
+        if (dstIp.isV4) knownHosts[dstIp.toInt()]
+        else knownHosts6[dstIp.toString()]
+
 
     /** Known destinations (tests): dst IP int → hostname. */
     fun knownHostsSnapshot(): Map<Int, String> = knownHosts.toMap()
@@ -1314,6 +1409,10 @@ class TunForwarder(
         val stats = session.speedStats ?: return
         if (!session.speedLogged.compareAndSet(false, true)) return
         val snap = stats.snapshot()
+        // M7 (W3): closed-session bytes feed the Clash /traffic
+        // totals (live sessions add their counters in trafficTotals).
+        closedUpBytes.addAndGet(snap.upBytes)
+        closedDownBytes.addAndGet(snap.downBytes)
         if (snap.downBytes == 0L && snap.upBytes == 0L) return
         val wallMs = System.currentTimeMillis() - session.speedStartMs
         val dst = "${session.key.dstIp}:${session.key.dstPort}"

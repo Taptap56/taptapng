@@ -36,7 +36,6 @@ import com.taptap.ng.core.proto.ProxyClient
 import com.taptap.ng.core.proto.ProxyClientFactory
 import com.taptap.ng.core.proto.Transport
 import com.taptap.ng.data.ConfigType
-import com.taptap.ng.data.GroupsStore
 import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.data.ProfileStore
 import com.taptap.ng.data.SettingsStore
@@ -740,13 +739,18 @@ class TaptapVpnService : VpnService() {
         // Client entry terpilih = client tunnel ini sendiri, jadi
         // keputusan default (FINAL -> Proxy -> entry terpilih)
         // memakai client yang sama persis seperti sebelum M7.
-        // Grup/aturan dibaca sekali saat tunnel naik — edit di
-        // editor berlaku mulai start berikutnya.
+        // LIVE RELOAD (W3): resolver membaca grup/aturan dari
+        // GroupsStore BERSAMA (ClashApiRuntime — dipakai juga oleh
+        // API Clash, jadi PUT select dari dashboard langsung
+        // berlaku untuk koneksi baru tanpa restart VPN) dan mode
+        // Clash dari SettingsStore tiap koneksi; grup/aturan TIDAK
+        // lagi dibaca sekali saat tunnel naik.
         val profileStore = ProfileStore(ProfileStore.defaultFile(filesDir)).apply { load() }
-        val groupsStore = GroupsStore(GroupsStore.defaultFile(filesDir))
+        val groupsStore = ClashApiRuntime.ensureGroupsStore(filesDir)
         groupsStore.load(profileStore.profiles, profileStore.selectedGuid)
         val urlCache = UrlTestCache().also { it.seedFromObservatory() }
         urlTestCache = urlCache
+        ClashApiRuntime.urlTestCache = urlCache
         routeClientCache[item.guid] = client
         val muxForRoutes = MuxConfig.fromSettings(settings)
         val clientForGuid: (String) -> ProxyClient? = { guid ->
@@ -794,18 +798,21 @@ class TaptapVpnService : VpnService() {
                 sniffingEnabled = settings.sniffingEnabled,
                 routeOnlyEnabled = settings.routeOnlyEnabled,
                 // M7: routing per koneksi (grup + aturan + delay
-                // cache). Resolver membaca grup/aturan yang
-                // dimuat saat tunnel naik; client per guid
-                // diambil dari cache (dibuat sekali per guid).
+                // cache). Resolver membaca grup/aturan/mode LIVE
+                // tiap koneksi (lihat atas) — PUT select dari
+                // dashboard berlaku tanpa restart VPN. Client per
+                // guid diambil dari cache (dibuat sekali per guid).
                 routeResolver = { host, ip, port ->
                     RouteEngine.resolve(
                         host, ip, port,
                         groupsStore.groups, groupsStore.rules, urlCache.delays(),
+                        mode = SettingsStore(this).clashMode,
                     )
                 },
                 clientProvider = clientForGuid,
             )
             forwarder = fwd
+            ClashApiRuntime.forwarder = fwd
             fwd.start()
             // v1.0.5 (B): local SOCKS proxy — hidup mengikuti tunnel.
             // Gagal bind (port sudah dipakai) TIDAK boleh membunuh
@@ -867,6 +874,8 @@ class TaptapVpnService : VpnService() {
             runCatching { urlTestLoop?.stop() }
             urlTestLoop = null
             urlTestCache = null
+            ClashApiRuntime.urlTestCache = null
+            ClashApiRuntime.forwarder = null
             routeClientCache.values.filter { it !== client }
                 .forEach { runCatching { it.close() } }
             routeClientCache.clear()
@@ -969,6 +978,8 @@ class TaptapVpnService : VpnService() {
         runCatching { urlTestLoop?.stop() }
         urlTestLoop = null
         urlTestCache = null
+        ClashApiRuntime.urlTestCache = null
+        ClashApiRuntime.forwarder = null
         routeClientCache.values.filter { it !== currentClient }
             .forEach { runCatching { it.close() } }
         routeClientCache.clear()

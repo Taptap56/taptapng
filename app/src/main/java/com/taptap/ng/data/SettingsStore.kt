@@ -254,6 +254,10 @@ class SettingsStore(context: Context) {
     var clashApiAllowLan: Boolean
         get() = prefs.getBoolean(KEY_CLASH_API_ALLOW_LAN, DEFAULT_CLASH_API_ALLOW_LAN)
         set(v) = prefs.edit().putBoolean(KEY_CLASH_API_ALLOW_LAN, v).apply()
+    /** Clash routing mode: "rule" (default), "global", or "direct" (M7, W3). */
+    var clashMode: String
+        get() = prefs.getString(KEY_CLASH_MODE, DEFAULT_CLASH_MODE) ?: DEFAULT_CLASH_MODE
+        set(v) = prefs.edit().putString(KEY_CLASH_MODE, v).apply()
 
     // ---- Effective values (v2rayNG rules, pure logic on stored state) ----
 
@@ -338,6 +342,7 @@ class SettingsStore(context: Context) {
         const val KEY_CLASH_API_PORT = "clash_api_port"
         const val KEY_CLASH_API_SECRET = "clash_api_secret"
         const val KEY_CLASH_API_ALLOW_LAN = "clash_api_allow_lan"
+        const val KEY_CLASH_MODE = "clash_mode"
 
         // Defaults — v2rayNG values, locked by SettingsDefaultsTest.
         const val DEFAULT_SPEED_ENABLED = false
@@ -414,6 +419,7 @@ class SettingsStore(context: Context) {
         const val DEFAULT_CLASH_API_PORT = "9091"
         const val DEFAULT_CLASH_API_SECRET = ""
         const val DEFAULT_CLASH_API_ALLOW_LAN = false
+        const val DEFAULT_CLASH_MODE = "rule"
 
         /** The only mode M2 implements. */
         const val MODE_VPN = "VPN"
