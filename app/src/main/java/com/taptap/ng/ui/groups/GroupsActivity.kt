@@ -328,7 +328,7 @@ class GroupsActivity : AppCompatActivity() {
             setPadding(0, pad, 0, pad)
             addView(TextView(ctx).apply {
                 text = label
-                textAppearance = android.R.style.TextAppearance_Small
+                setTextAppearance(android.R.style.TextAppearance_Small)
             })
             addView(view)
         }

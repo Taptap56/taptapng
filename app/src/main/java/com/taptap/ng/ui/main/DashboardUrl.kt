@@ -11,7 +11,7 @@ import java.net.URLEncoder
  * WebSocket traffic behave like a normal HTTP origin. The WebView
  * opens straight at the proxies page (`#/proxies`); when a secret
  * is set, it is passed as `?secret=` (URL-encoded) exactly like
- * yacd expects — `/ui/*` itself is served without auth.
+ * yacd expects — the `/ui/` path itself is served without auth.
  *
  * Pure functions only, so this is unit-testable on the JVM. The
  * full URL (which may contain the secret) must NEVER be logged.
