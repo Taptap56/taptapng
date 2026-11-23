@@ -33,12 +33,14 @@ import org.junit.jupiter.api.Test
  * removed because it doubled/overlapped with the label, and its
  * fields put `android:hint` on an OutlinedBox TextInputLayout.
  *
- * v1.0.25 fix: label both fields with the same `labeled()`
- * helper the spinners in this very dialog already use — a real
- * TextView label ABOVE the field in a vertical LinearLayout, so
- * overlapping is structurally impossible — and drop the
- * `EditText.hint` on both fields. Same strings, same pre-filled
- * defaults, same input types; nothing else in the dialog moves.
+ * v1.0.26 fix (same defect, third field): "Nama grup" used the
+ * identical hint-only pattern. It looked fine when adding a group
+ * (field empty, hint shows alone as a placeholder) but overlapped
+ * the value when EDITING a group — screenshot 2026-11-24 05:04,
+ * dialog "Ubah" grup "taptap", label "Nama grup" on top of the
+ * value "taptap". Same fix: labeled() above the field, hint dropped.
+ * One dialog code path serves both add and edit, so one fix covers
+ * both.
  *
  * Source assertions only: visual readability cannot be tested on
  * the JVM (no Robolectric in this tree) — the deciding proof is
@@ -68,6 +70,42 @@ class GroupDialogLabelsTest {
     /** The block of one dialog field, from its `val` to the next field. */
     private fun fieldBlock(source: String, from: String, until: String): String =
         source.substringAfter(from).substringBefore(until)
+
+    @Test
+    fun `name field is labeled above the field, not by EditText hint`() {
+        // v1.0.26: the same hint-only defect as URL/Interval, on the
+        // third field. Fails on the old code (hint set + plain
+        // TextInputLayout row, no labeled()).
+        val source = src()
+        val nameBlock = fieldBlock(source, "val nameInput", "val typeSpinner")
+        assertFalse(
+            nameBlock.contains("hint = getString(R.string.groups_group_name)"),
+            "nameInput must not set EditText.hint to the Nama-grup label " +
+                "(hint + filled value overlap in the same text area when editing)",
+        )
+        assertFalse(
+            source.contains("hint = getString(R.string.groups_group_name)"),
+            "no code in this dialog may set EditText.hint to the Nama-grup label",
+        )
+        assertTrue(
+            nameBlock.contains("labeled(") &&
+                nameBlock.contains("getString(R.string.groups_group_name)") &&
+                nameBlock.contains("TextInputLayout(ctx).apply { addView(nameInput) }"),
+            "nameInput must be wrapped in labeled() with the Nama-grup string " +
+                "and its TextInputLayout as the labeled view",
+        )
+        assertTrue(
+            nameBlock.indexOf("labeled(") < nameBlock.indexOf("TextInputLayout(ctx)"),
+            "the labeled() call must wrap the nameInput TextInputLayout",
+        )
+        // The value is still pre-filled from the edited group (or
+        // empty when adding); only the label mechanism changed.
+        assertTrue(
+            nameBlock.contains("setText(existing?.name ?: \"\")"),
+            "nameInput must still be pre-filled with the edited group name " +
+                "or empty when adding",
+        )
+    }
 
     @Test
     fun `url test and interval fields are labeled above the field, not by EditText hint`() {
@@ -164,19 +202,13 @@ class GroupDialogLabelsTest {
 
     @Test
     fun `untouched dialog rows keep their shape`() {
-        // Surgical scope: only the two URL-tes/interval fields
-        // change. Nama grup, Tipe grup, Anggota terpilih, the
-        // ANGGOTA button and the OK/Cancel wiring stay as they were.
+        // Surgical scope: only the Nama-grup field changes in
+        // v1.0.26 (URL tes / Interval tes already fixed in v1.0.25).
+        // Tipe grup, Anggota terpilih, the ANGGOTA button and the
+        // OK/Cancel wiring stay as they were. The Nama-grup field
+        // itself is covered by the `name field is labeled above`
+        // test — it must NOT keep its old hint-only row anymore.
         val source = src()
-        val nameBlock = fieldBlock(source, "val nameInput", "val typeSpinner")
-        assertTrue(
-            nameBlock.contains("hint = getString(R.string.groups_group_name)"),
-            "nameInput must keep its hint (empty for a new group, no overlap)",
-        )
-        assertTrue(
-            nameBlock.contains("root.addView(TextInputLayout(ctx).apply { addView(nameInput) })"),
-            "nameInput must stay a plain TextInputLayout row (not wrapped in labeled)",
-        )
         assertTrue(
             source.contains(
                 "root.addView(labeled(ctx, getString(R.string.groups_group_type), typeSpinner))",
@@ -201,6 +233,10 @@ class GroupDialogLabelsTest {
         )
         // The label strings themselves are unchanged.
         val strings = read("app/src/main/res/values/strings.xml")
+        assertTrue(
+            strings.contains("<string name=\"groups_group_name\">Nama grup</string>"),
+            "groups_group_name string must stay unchanged",
+        )
         assertTrue(
             strings.contains("<string name=\"groups_url_test_url\">URL tes (URL-TEST)</string>"),
             "groups_url_test_url string must stay unchanged",

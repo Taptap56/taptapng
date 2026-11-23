@@ -146,11 +146,23 @@ class GroupsActivity : AppCompatActivity() {
             val pad = (16 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad / 2, pad, pad / 2)
         }
+        // v1.0.26: label "Nama grup" pakai labeled() seperti URL tes /
+        // Interval tes (v1.0.25) — pola hint yang SAMA: saat Ubah grup
+        // field terisi ("taptap") sehingga hint menimpa nilai, persis
+        // seperti URL/Interval di v1.0.24 (screenshot 2026-11-24 05:04,
+        // dilingkari merah). Saat Tambah grup field kosong, hint tampil
+        // sendiri jadi rusaknya tidak kelihatan. Hint di EditText
+        // dihapus; TextView label nyata di atas field, berlaku untuk
+        // tambah maupun ubah (satu kode dialog untuk keduanya).
         val nameInput = EditText(ctx).apply {
-            hint = getString(R.string.groups_group_name)
             setText(existing?.name ?: "")
         }
-        root.addView(TextInputLayout(ctx).apply { addView(nameInput) })
+        root.addView(
+            labeled(
+                ctx, getString(R.string.groups_group_name),
+                TextInputLayout(ctx).apply { addView(nameInput) },
+            ),
+        )
 
         val typeSpinner = Spinner(ctx).apply {
             adapter = ArrayAdapter(
