@@ -178,7 +178,10 @@ class ClashApiHandlerTest {
         val serverB = proxies.getAsJsonObject("Server B")
         assertEquals("vless", serverB.get("type").asString)
         assertEquals(0, serverB.getAsJsonArray("history").size())
-        assertTrue(proxies.has("GLOBAL"))
+        // v1.0.21: no "GLOBAL" pseudo-group — only real groups +
+        // individual proxies (2 groups + 2 servers).
+        assertFalse(proxies.has("GLOBAL"))
+        assertEquals(4, proxies.size())
     }
 
     @Test
@@ -209,6 +212,92 @@ class ClashApiHandlerTest {
             ApiRequest("PUT", "/proxies/Proxy", emptyMap(), emptyMap(), "{\"name\":\"Nope\"}"),
         ) as ApiResponse.Immediate
         assertEquals(404, bad.status)
+    }
+
+    @Test
+    fun putGlobalAliasSelectsFallbackGroup() {
+        // v1.0.21: "GLOBAL" is never listed, but PUT to it is accepted
+        // as an alias for the fallback group (stale dashboard tab /
+        // external client). The fixture group is named through
+        // RouteEngine.FALLBACK_GROUP_NAME, so this follows its rename.
+        val deps = FakeDeps()
+        deps.groups += ProxyGroup(
+            id = "g-fb", name = RouteEngine.FALLBACK_GROUP_NAME,
+            type = ProxyGroupType.SELECT,
+            members = listOf("guid-a", "guid-b"), selectedMemberGuid = "guid-a",
+        )
+        val handler = ClashApiHandler(deps)
+        val ok = handler.handle(
+            ApiRequest("PUT", "/proxies/GLOBAL", emptyMap(), emptyMap(), "{\"name\":\"Server B\"}"),
+        ) as ApiResponse.Immediate
+        assertEquals(204, ok.status)
+        assertEquals(
+            "guid-b",
+            deps.groups.first { it.name == RouteEngine.FALLBACK_GROUP_NAME }.selectedMemberGuid,
+        )
+        // Path form (Clash) works too.
+        val ok2 = handler.handle(
+            ApiRequest("PUT", "/proxies/GLOBAL/Server A", emptyMap(), emptyMap(), ""),
+        ) as ApiResponse.Immediate
+        assertEquals(204, ok2.status)
+        assertEquals(
+            "guid-a",
+            deps.groups.first { it.name == RouteEngine.FALLBACK_GROUP_NAME }.selectedMemberGuid,
+        )
+    }
+
+    @Test
+    fun putGlobalAliasIs404WithoutFallbackGroup() {
+        // No fallback group at all -> the alias has nothing to select.
+        val deps = FakeDeps()
+        deps.groups += ProxyGroup(
+            id = "g-test", name = "Cepat", type = ProxyGroupType.URL_TEST,
+            members = listOf("guid-a", "guid-b"),
+        )
+        val res = ClashApiHandler(deps).handle(
+            ApiRequest("PUT", "/proxies/GLOBAL", emptyMap(), emptyMap(), "{\"name\":\"Server B\"}"),
+        ) as ApiResponse.Immediate
+        assertEquals(404, res.status)
+    }
+
+    @Test
+    fun putGlobalSelectsRealGroupNamedGlobalOverAlias() {
+        // A real SELECT group literally named "GLOBAL" wins over the alias.
+        val deps = FakeDeps()
+        deps.groups += ProxyGroup(
+            id = "g-global", name = "GLOBAL", type = ProxyGroupType.SELECT,
+            members = listOf("guid-a", "guid-b"), selectedMemberGuid = "guid-a",
+        )
+        deps.groups += ProxyGroup(
+            id = "g-fb", name = RouteEngine.FALLBACK_GROUP_NAME,
+            type = ProxyGroupType.SELECT,
+            members = listOf("guid-a", "guid-b"), selectedMemberGuid = "guid-a",
+        )
+        val res = ClashApiHandler(deps).handle(
+            ApiRequest("PUT", "/proxies/GLOBAL", emptyMap(), emptyMap(), "{\"name\":\"Server B\"}"),
+        ) as ApiResponse.Immediate
+        assertEquals(204, res.status)
+        assertEquals("guid-b", deps.groups.first { it.name == "GLOBAL" }.selectedMemberGuid)
+        assertEquals(
+            "guid-a",
+            deps.groups.first { it.name == RouteEngine.FALLBACK_GROUP_NAME }.selectedMemberGuid,
+        )
+    }
+
+    @Test
+    fun globalIsUnknownForReads() {
+        // v1.0.21: GLOBAL is not a group anymore — reads answer 404
+        // like any unknown name (only PUT keeps the alias).
+        val getOne = get(defaultDeps(), "/proxies/GLOBAL") as ApiResponse.Immediate
+        assertEquals(404, getOne.status)
+        val delay = get(
+            defaultDeps(), "/proxies/GLOBAL/delay?url=http://example.com",
+        ) as ApiResponse.Immediate
+        assertEquals(404, delay.status)
+        val groupDelay = get(
+            defaultDeps(), "/group/GLOBAL/delay?url=http://example.com",
+        ) as ApiResponse.Immediate
+        assertEquals(404, groupDelay.status)
     }
 
     @Test
