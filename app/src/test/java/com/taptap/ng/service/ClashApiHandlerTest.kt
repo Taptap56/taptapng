@@ -341,7 +341,15 @@ class ClashApiHandlerTest {
 
     @Test
     fun rulesUseClashTypeNamesAndGroupNames() {
-        val arr = JsonParser.parseString(bodyText(get(defaultDeps(), "/rules"))).asJsonArray
+        // v1.0.27: GET /rules returns an OBJECT `{"rules": [...]}`,
+        // not a bare array — the bundled yacd's rules normalizer
+        // (K$ in index-*.js) asserts `e.rules && e.rules.length >= 0`
+        // and throws its invariant on a bare array, which put the
+        // whole Rules page on yacd's error screen in v1.0.26.
+        // Same shape as the real Clash/mihomo GET /rules.
+        val json = bodyJson(get(defaultDeps(), "/rules"))
+        assertTrue(json.has("rules"))
+        val arr = json.getAsJsonArray("rules")
         assertEquals(2, arr.size())
         val first = arr[0].asJsonObject
         assertEquals("DOMAIN-SUFFIX", first.get("type").asString)
@@ -349,7 +357,43 @@ class ClashApiHandlerTest {
         assertEquals("taptap", first.get("proxy").asString)
         val final = arr[1].asJsonObject
         assertEquals("FINAL", final.get("type").asString)
+        // FINAL has no pattern: payload must be the empty STRING
+        // (never null) — yacd calls payload.toLowerCase() in its
+        // search filter and payload.startsWith("(") in its row
+        // renderer, both of which throw on null.
+        assertTrue(final.get("payload").isJsonPrimitive)
+        assertEquals("", final.get("payload").asString)
         assertEquals("taptap", final.get("proxy").asString)
+    }
+
+    @Test
+    fun rulesEmptyListStillReturnsRulesObject() {
+        // Zero stored rules must still answer `{"rules": []}`:
+        // yacd renders its empty state from that, while a bare
+        // `[]` (or a missing key) trips the same K$ invariant.
+        val deps = FakeDeps()
+        val json = bodyJson(get(deps, "/rules"))
+        assertTrue(json.has("rules"))
+        assertEquals(0, json.getAsJsonArray("rules").size())
+    }
+
+    @Test
+    fun providersRulesDefaultHasUpdatedAtAndRuleCount() {
+        // yacd's provider row (v6) renders
+        // `formatDistance(new Date(updatedAt))` and the rule
+        // count — a missing updatedAt is an Invalid Date and
+        // throws when the Providers tab opens, so both fields
+        // must be present and well-formed.
+        val json = bodyJson(get(defaultDeps(), "/providers/rules"))
+        val provider = json.getAsJsonObject("providers").getAsJsonObject("default")
+        assertEquals("default", provider.get("name").asString)
+        assertEquals("Rule", provider.get("type").asString)
+        assertEquals("HTTP", provider.get("vehicleType").asString)
+        assertEquals(2, provider.get("ruleCount").asInt)
+        assertEquals(2, provider.getAsJsonArray("rules").size())
+        // ISO-8601 UTC, parseable — Instant.parse rejects anything
+        // that is not a valid timestamp.
+        java.time.Instant.parse(provider.get("updatedAt").asString)
     }
 
     // ---- /connections + streams ----

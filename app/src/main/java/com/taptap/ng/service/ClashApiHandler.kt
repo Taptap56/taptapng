@@ -126,7 +126,14 @@ interface ClashApiDeps {
  *   GET /providers/proxies/{name}/healthcheck,
  *   GET /providers/proxies/{provider}/{proxy}/healthcheck,
  *   GET /providers/rules, PUT /providers/rules/{name}
- * - GET /rules, PATCH /rules/disable
+ * - GET /rules, PATCH /rules/disable — GET returns
+ *   `{"rules": [...]}` (an OBJECT wrapping the array), exactly
+ *   like the real Clash/mihomo API: the bundled yacd's rules
+ *   normalizer (`index-*.js`, `K$`) asserts
+ *   `e.rules && e.rules.length >= 0` and throws
+ *   "there is no valid rules list in the rules API response"
+ *   otherwise, which lands the whole Rules page on yacd's
+ *   error screen. A bare top-level array does NOT work.
  * - GET /connections (+DELETE), GET /traffic, GET /logs, GET /memory
  *   — all four stream: WebSocket when the client upgrades (what
  *   yacd does), HTTP chunked lines otherwise (yacd's fetch fallback).
@@ -291,9 +298,6 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
     private fun obj(init: JsonObject.() -> Unit): JsonObject = JsonObject().apply(init)
 
     private fun json(status: Int, body: JsonObject): ApiResponse.Immediate =
-        ApiResponse.Immediate(status, gson.toJson(body))
-
-    private fun jsonArray(status: Int, body: JsonArray): ApiResponse.Immediate =
         ApiResponse.Immediate(status, gson.toJson(body))
 
     private fun redirect(): ApiResponse.Immediate = ApiResponse.Immediate(
@@ -589,13 +593,22 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
         return when (req.method) {
             "GET" -> {
                 if (rest.isNotEmpty()) return json(404, obj { addProperty("message", "not found") })
+                val rules = rulesArray()
                 json(200, obj {
                     add("providers", obj {
                         add("default", obj {
                             addProperty("name", "default")
                             addProperty("type", "Rule")
                             addProperty("vehicleType", "HTTP")
-                            add("rules", rulesArray())
+                            // yacd's provider row (v6) renders
+                            // `formatDistance(new Date(updatedAt))` and
+                            // the rule count — both must be present or
+                            // the Providers tab throws on open. There
+                            // is no real provider file, so "updated"
+                            // is now and the count is the rule list.
+                            addProperty("updatedAt", isoTime(System.currentTimeMillis()))
+                            addProperty("ruleCount", rules.size())
+                            add("rules", rules)
                         })
                     })
                 })
@@ -634,7 +647,14 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
 
     private fun handleRules(req: ApiRequest): ApiResponse {
         return when (req.method) {
-            "GET" -> jsonArray(200, rulesArray())
+            // Object wrapper, NOT a bare array: yacd's rules
+            // normalizer (K$ in index-*.js) requires the response
+            // to be `{"rules": [...]}` and throws its invariant
+            // ("there is no valid rules list in the rules API
+            // response") on a bare array — that throw is what put
+            // the Rules page on yacd's error screen (v1.0.26).
+            // Same shape as the real Clash/mihomo GET /rules.
+            "GET" -> json(200, obj { add("rules", rulesArray()) })
             "PATCH" -> {
                 // yacd "disable rules": no per-rule enable flag exists — accept, no-op.
                 ApiResponse.Immediate(204, "text/plain", ByteArray(0))
