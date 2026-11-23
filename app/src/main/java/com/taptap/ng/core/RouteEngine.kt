@@ -62,6 +62,18 @@ sealed interface RouteDecision {
  *   known the first member is used (better to try the first entry
  *   than to drop the connection).
  *
+ * Nested groups (v1.0.27): a group's member may be another group
+ * ([ProxyGroup.nestedGroupIds] — in practice only the main group
+ * nests others). [selectMemberRef] picks the member the same way
+ * as [selectMember] but across server members AND nested groups;
+ * [resolveToServer] follows a nested member down to a real server
+ * guid, and [groupDelay] is that server's delay. A cycle (A nests
+ * B, B nests A — only possible in a hand-edited file, the store
+ * never writes one) is cut by a visited set: the cyclic member is
+ * skipped, the event is logged, and resolution returns null
+ * instead of looping — never a crash, never a hang. Plain
+ * server-only groups resolve exactly as before.
+ *
  * [port] is part of the signature for future port-based rules; the
  * current rule types ignore it.
  *
@@ -130,7 +142,7 @@ object RouteEngine {
                 val group = mainGroup(groups, mainGroupId)
                     ?: groups.firstOrNull()
                 if (group != null) {
-                    selectMember(group, delays)?.let { return RouteDecision.Proxy(it) }
+                    resolveToServer(group, groups, delays)?.let { return RouteDecision.Proxy(it) }
                 }
                 return RouteDecision.Direct
             }
@@ -146,7 +158,7 @@ object RouteEngine {
                 else -> {
                     val group = groups.firstOrNull { it.id == rule.target }
                         ?: continue // Stale target: fall through.
-                    val member = selectMember(group, delays)
+                    val member = resolveToServer(group, groups, delays)
                         ?: continue // Empty group: fall through.
                     return RouteDecision.Proxy(member)
                 }
@@ -155,7 +167,7 @@ object RouteEngine {
         // No rule matched: fall back to the main group, else Direct.
         val fallback = mainGroup(groups, mainGroupId)
         if (fallback != null) {
-            selectMember(fallback, delays)?.let { return RouteDecision.Proxy(it) }
+            resolveToServer(fallback, groups, delays)?.let { return RouteDecision.Proxy(it) }
         }
         return RouteDecision.Direct
     }
@@ -180,6 +192,151 @@ object RouteEngine {
                 group.members.firstOrNull { delays[it] != null }
                     ?: group.members.firstOrNull()
             }
+        }
+    }
+
+    /**
+     * v1.0.27: the member [group] would use — a server guid OR a
+     * nested group id — picked the same way [selectMember] picks
+     * a server, but across server members AND nested groups:
+     * SELECT → the stored selection (server or nested group),
+     * else the first server member, else the first nested group;
+     * URL_TEST → the member with the lowest effective delay (a
+     * nested group's delay is its own [groupDelay]; unknown =
+     * infinite; ties keep member order, servers before nested
+     * groups); FALLBACK → the first member with a known delay.
+     * Null when the group has no member at all. A group with only
+     * server members returns exactly what [selectMember] returns.
+     *
+     * The [visited] set is the cycle guard shared with
+     * [resolveToServer] / [groupDelay]: it holds the groups on
+     * the current resolution path. Delay probes of nested groups
+     * ([probeDelay]) snapshot and restore it, so probing never
+     * pollutes the path — without that, a probed group would look
+     * like a cycle when the walk reaches it for real.
+     */
+    fun selectMemberRef(
+        group: ProxyGroup,
+        groups: List<ProxyGroup>,
+        delays: Map<String, Long?>,
+    ): String? = selectMemberRef(group, groups, delays, HashSet())
+
+    private fun selectMemberRef(
+        group: ProxyGroup,
+        groups: List<ProxyGroup>,
+        delays: Map<String, Long?>,
+        visited: MutableSet<String>,
+    ): String? {
+        if (group.members.isEmpty() && group.nestedGroupIds.isEmpty()) return null
+        return when (group.type) {
+            ProxyGroupType.SELECT -> group.effectiveSelectedMemberRef()
+            ProxyGroupType.URL_TEST -> {
+                val serverBest = group.members.minByOrNull { delays[it] ?: Long.MAX_VALUE }
+                val nestedBest = group.nestedGroupIds
+                    .mapNotNull { id -> groups.firstOrNull { it.id == id } }
+                    .map { it to probeDelay(it, groups, delays, visited) }
+                    .minByOrNull { it.second ?: Long.MAX_VALUE }
+                val serverDelay = serverBest?.let { delays[it] } ?: Long.MAX_VALUE
+                val nestedDelay = nestedBest?.second ?: Long.MAX_VALUE
+                // Ties keep member order: servers come first, so a
+                // server wins a tie against a nested group.
+                if (serverDelay <= nestedDelay) serverBest ?: nestedBest?.first?.id
+                else nestedBest?.first?.id
+            }
+            ProxyGroupType.FALLBACK -> {
+                group.members.firstOrNull { delays[it] != null }
+                    ?: group.nestedGroupIds
+                        .mapNotNull { id -> groups.firstOrNull { it.id == id } }
+                        .firstOrNull { probeDelay(it, groups, delays, visited) != null }?.id
+                    ?: group.members.firstOrNull()
+                    ?: group.nestedGroupIds.firstOrNull()
+            }
+        }
+    }
+
+    /**
+     * v1.0.27: the real server guid [group] would use for a
+     * connection, following nested groups down. A member that is
+     * a group id resolves through that group's own selection
+     * (SELECT) or best member (URL_TEST / FALLBACK). The walk is
+     * guarded by a visited set: a group already on the path — a
+     * cycle, or a group nesting itself — is skipped, the event is
+     * logged, and null is returned instead of looping. Null also
+     * when the group (or every group on the path) has no member.
+     */
+    fun resolveToServer(
+        group: ProxyGroup,
+        groups: List<ProxyGroup>,
+        delays: Map<String, Long?>,
+    ): String? = resolveToServer(group, groups, delays, HashSet())
+
+    private fun resolveToServer(
+        group: ProxyGroup,
+        groups: List<ProxyGroup>,
+        delays: Map<String, Long?>,
+        visited: MutableSet<String>,
+    ): String? {
+        var current: ProxyGroup? = group
+        while (current != null) {
+            if (!visited.add(current.id)) {
+                DialLog.log(
+                    "ROUTE",
+                    "grup bersarang siklus di '${current.name}' — dilewati",
+                )
+                return null
+            }
+            val ref = selectMemberRef(current, groups, delays, visited) ?: return null
+            val nested = groups.firstOrNull { it.id == ref }
+            if (nested == null) return ref // A server guid.
+            current = nested
+        }
+        return null
+    }
+
+    /**
+     * v1.0.27: the effective delay of [group] — the last-known
+     * delay of the server its selection resolves to (following
+     * nested groups, cycle-guarded, see [resolveToServer]).
+     * Null when nothing resolves or the resolved server was
+     * never probed. This is the delay the Clash API shows for a
+     * nested group node, and the delay [selectMemberRef] compares
+     * for URL_TEST groups that nest other groups.
+     */
+    fun groupDelay(
+        group: ProxyGroup,
+        groups: List<ProxyGroup>,
+        delays: Map<String, Long?>,
+    ): Long? = groupDelay(group, groups, delays, HashSet())
+
+    private fun groupDelay(
+        group: ProxyGroup,
+        groups: List<ProxyGroup>,
+        delays: Map<String, Long?>,
+        visited: MutableSet<String>,
+    ): Long? {
+        val guid = resolveToServer(group, groups, delays, visited) ?: return null
+        return delays[guid]
+    }
+
+    /**
+     * Delay probe of a nested group while comparing members: the
+     * probe shares the caller's [visited] path set (so a cycle
+     * through the probed group is still cut), but whatever the
+     * probe added is restored afterwards — the probe is not part
+     * of the resolution path, and a probed group must not look
+     * like a cycle when the walk reaches it for real.
+     */
+    private fun probeDelay(
+        group: ProxyGroup,
+        groups: List<ProxyGroup>,
+        delays: Map<String, Long?>,
+        visited: MutableSet<String>,
+    ): Long? {
+        val snapshot = visited.toSet()
+        try {
+            return groupDelay(group, groups, delays, visited)
+        } finally {
+            visited.retainAll(snapshot)
         }
     }
 }

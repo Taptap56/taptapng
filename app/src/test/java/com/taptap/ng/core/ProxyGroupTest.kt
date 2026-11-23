@@ -62,4 +62,55 @@ class ProxyGroupTest {
         assertEquals(60, ProxyGroup(urlTestIntervalSec = 60).effectiveUrlTestIntervalSec)
         assertEquals(3600, ProxyGroup(urlTestIntervalSec = 3600).effectiveUrlTestIntervalSec)
     }
+
+    // ---- Nested groups (v1.0.27) ----
+
+    @Test
+    fun `no nested groups by default and a missing key reads as none`() {
+        val group = ProxyGroup(name = "taptap")
+        assertEquals(emptyList<String>(), group.nestedGroupIds)
+        assertNull(group.groupMembers)
+    }
+
+    @Test
+    fun `effective selected accepts a nested group id`() {
+        val group = ProxyGroup(
+            members = listOf("a", "b"),
+            selectedMemberGuid = "g-tes",
+            groupMembers = listOf("g-tes"),
+        )
+        assertEquals("g-tes", group.effectiveSelectedMemberRef())
+    }
+
+    @Test
+    fun `effective selected falls back to first server member before nested groups`() {
+        val group = ProxyGroup(
+            members = listOf("a", "b"),
+            selectedMemberGuid = "gone",
+            groupMembers = listOf("g-tes"),
+        )
+        assertEquals("a", group.effectiveSelectedMemberRef())
+    }
+
+    @Test
+    fun `effective selected falls back to first nested group when there are no servers`() {
+        val group = ProxyGroup(
+            members = emptyList(),
+            groupMembers = listOf("g-tes", "g-lain"),
+        )
+        assertEquals("g-tes", group.effectiveSelectedMemberRef())
+    }
+
+    @Test
+    fun `effective selected guid still ignores a nested group id`() {
+        // The server-only accessor keeps its old meaning: a
+        // selection naming a nested group is not a server, so it
+        // falls back to the first server member.
+        val group = ProxyGroup(
+            members = listOf("a", "b"),
+            selectedMemberGuid = "g-tes",
+            groupMembers = listOf("g-tes"),
+        )
+        assertEquals("a", group.effectiveSelectedMemberGuid())
+    }
 }

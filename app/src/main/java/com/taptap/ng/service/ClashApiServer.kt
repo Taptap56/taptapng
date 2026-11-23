@@ -5,7 +5,6 @@ import android.util.Log
 import com.taptap.ng.BuildConfig
 import com.taptap.ng.core.DialLog
 import com.taptap.ng.core.ProxyGroup
-import com.taptap.ng.core.ProxyGroupType
 import com.taptap.ng.core.RouteRule
 import com.taptap.ng.core.ServerTester
 import com.taptap.ng.data.GroupsStore
@@ -500,8 +499,6 @@ object ClashApiServer {
         override fun selectProxy(groupName: String, proxyName: String): Boolean {
             val store = ClashApiRuntime.refreshGroups(appContext.filesDir)
             val group = store.groups.firstOrNull { it.name == groupName } ?: return false
-            if (group.type != ProxyGroupType.SELECT) return false
-            val names = profiles().associateBy({ it.guid }, { it.displayName() })
             // Display names are de-duplicated in the handler ("name #2");
             // match the same way here.
             val seen = HashMap<String, Int>()
@@ -512,10 +509,15 @@ object ClashApiServer {
                 seen[base] = n
                 unique[p.guid] = if (n == 1) base else "$base #$n"
             }
-            val guid = unique.entries.firstOrNull { it.value == proxyName }?.key ?: return false
-            if (guid !in group.members) return false
-            store.updateGroup(group.copy(selectedMemberGuid = guid))
-            DialLog.log("CLASH", "pilih grup '$groupName' -> '${names[guid]}'")
+            // v1.0.27: the name may be a nested group node ("tes"
+            // inside "taptap") — the shared rule resolves it to
+            // the nested group's id, a plain server name to its
+            // guid, anything else to null (see ClashApiHandler).
+            val ref = ClashApiHandler.selectMemberRef(store.groups, unique, groupName, proxyName)
+                ?: return false
+            store.updateGroup(group.copy(selectedMemberGuid = ref))
+            val names = profiles().associateBy({ it.guid }, { it.displayName() })
+            DialLog.log("CLASH", "pilih grup '$groupName' -> '${names[ref] ?: proxyName}'")
             return true
         }
 

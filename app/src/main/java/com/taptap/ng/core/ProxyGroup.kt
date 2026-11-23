@@ -28,6 +28,15 @@ enum class ProxyGroupType {
  * `selectedMemberGuid` is only meaningful for SELECT (null = first
  * member). `urlTestUrl` / `urlTestIntervalSec` are only meaningful
  * for URL_TEST, but are always stored so a type change keeps them.
+ *
+ * v1.0.27: a group can also contain other groups ([groupMembers]
+ * are [ProxyGroup.id] values). Only the main group nests others —
+ * [com.taptap.ng.data.GroupsStore] keeps every non-main group as
+ * a nested member of the main group, and never lets the main
+ * group be a member of another group. A stored selection
+ * ([selectedMemberGuid]) may name a nested group id, not only a
+ * server guid; [RouteEngine.resolveToServer] follows it down to
+ * a real server.
  */
 data class ProxyGroup(
     @SerializedName("id")
@@ -44,7 +53,28 @@ data class ProxyGroup(
     val urlTestUrl: String = DEFAULT_URL_TEST_URL,
     @SerializedName("urlTestIntervalSec")
     val urlTestIntervalSec: Int = DEFAULT_URL_TEST_INTERVAL_SEC,
+    /**
+     * Ids of nested groups (v1.0.27). Nullable on purpose, same
+     * reason as [RouteRule.enabled]: a file written before
+     * v1.0.27 has no "groupMembers" key, and the field reads
+     * `null` on either Gson instantiation path (no-arg
+     * constructor, or Unsafe allocation if this class ever loses
+     * it) — `null` means no nested groups. Never read this field
+     * directly; use [nestedGroupIds]. Gson omits nulls when
+     * writing, so a group with no nested members stays key-less
+     * on disk, exactly like a v1.0.26 file.
+     */
+    @SerializedName("groupMembers")
+    val groupMembers: List<String>? = null,
 ) {
+    /**
+     * Ids of the groups nested in this one. Empty for every group
+     * except the main group (see the class doc) — and for every
+     * group in a file written before v1.0.27.
+     */
+    val nestedGroupIds: List<String>
+        get() = groupMembers ?: emptyList()
+
     /**
      * The member a SELECT group actually uses: the stored selection
      * when it is still a member, otherwise the first member (or
@@ -54,6 +84,20 @@ data class ProxyGroup(
      */
     fun effectiveSelectedMemberGuid(): String? =
         selectedMemberGuid?.takeIf { it in members } ?: members.firstOrNull()
+
+    /**
+     * v1.0.27: like [effectiveSelectedMemberGuid], but the stored
+     * selection may also name a nested group ([nestedGroupIds]) —
+     * the dashboard can select a nested group node, and the
+     * engine resolves it to a server. Falls back to the first
+     * server member, then the first nested group, then null.
+     * Server members win the fallback so a stale selection never
+     * changes which server a plain SELECT group uses.
+     */
+    fun effectiveSelectedMemberRef(): String? =
+        selectedMemberGuid?.takeIf { it in members || it in nestedGroupIds }
+            ?: members.firstOrNull()
+            ?: nestedGroupIds.firstOrNull()
 
     /** Stored interval clamped to [MIN_URL_TEST_INTERVAL_SEC]..[MAX_URL_TEST_INTERVAL_SEC]. */
     val effectiveUrlTestIntervalSec: Int
