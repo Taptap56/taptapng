@@ -959,6 +959,30 @@ class TaptapVpnService : VpnService() {
                         mainGroupId = groupsStore.mainGroupId,
                     )
                 },
+                // v1.0.29 (merge): same decision as routeResolver,
+                // plus the record (rule + chain) for GET
+                // /connections. The forwarder prefers this when
+                // installed. serverNames is rebuilt per connection
+                // from the profile store (de-duplicated exactly
+                // like ClashApiHandler.displayNames) so a rename
+                // is picked up without restarting the tunnel.
+                routeRecordResolver = { host, ip, port ->
+                    val names = LinkedHashMap<String, String>()
+                    val seen = HashMap<String, Int>()
+                    for (p in profileStore.profiles) {
+                        val base = p.displayName()
+                        val n = (seen[base] ?: 0) + 1
+                        seen[base] = n
+                        names[p.guid] = if (n == 1) base else "$base #$n"
+                    }
+                    RouteEngine.resolveDetailed(
+                        host, ip, port,
+                        groupsStore.groups, groupsStore.rules, urlCache.delays(),
+                        mode = SettingsStore(this).clashMode,
+                        mainGroupId = groupsStore.mainGroupId,
+                        serverNames = names,
+                    )
+                },
                 clientProvider = clientForGuid,
             )
             forwarder = fwd

@@ -525,6 +525,11 @@ class TunForwarder(
                 upload = snap?.upBytes ?: 0L,
                 download = snap?.downBytes ?: 0L,
                 startMs = s.speedStartMs.takeIf { it > 0 } ?: s.lastActivityMs,
+                // v1.0.29 (merge): carry the session's routing
+                // record — GET /connections reads it from here.
+                rule = s.rule,
+                rulePayload = s.rulePayload,
+                chains = s.chains,
             )
         }
         for (s in udpSessions.values) {
@@ -540,6 +545,10 @@ class TunForwarder(
                 upload = 0L,
                 download = 0L,
                 startMs = s.lastActivityMs,
+                // v1.0.29 (merge): same as TCP above.
+                rule = s.rule,
+                rulePayload = s.rulePayload,
+                chains = s.chains,
             )
         }
         return out

@@ -353,4 +353,56 @@ class TunForwarderRouteRecordTest {
             h.stop()
         }
     }
+
+    /**
+     * v1.0.29 (merge): the wiring [activeConnections] does —
+     * the session record must also ride the [ConnectionInfo]
+     * that GET /connections serialises, not only
+     * [TunForwarder.connectionRoutes]. Fails on the pre-merge
+     * code (fields default to "" / "" / []).
+     */
+    @Test
+    fun tcpFinalToProxyActiveConnectionCarriesRuleAndChain() {
+        val groups = listOf(group("g1", "taptap", selected = "guid-81"))
+        val rules = listOf(rule(RouteRuleType.FINAL, target = "g1"))
+        val h = Harness(routeRecordResolver = finalResolver(groups, rules))
+        try {
+            h.fwd.start()
+            h.sendSyn()
+            assertTrue(
+                h.waitFor { h.statuses.contains("Connected") },
+                "expected Connected, got ${h.statuses}",
+            )
+            val conn = h.fwd.activeConnections().first { it.network == "tcp" }
+            assertEquals("FINAL", conn.rule)
+            assertEquals("", conn.rulePayload)
+            assertEquals(listOf("81"), conn.chains)
+        } finally {
+            h.stop()
+        }
+    }
+
+    @Test
+    fun tcpNestedSelectionActiveConnectionCarriesFullChain() {
+        val main = group("main", "taptap", members = emptyList(), selected = "tes", nested = listOf("tes"))
+        val nested = group("tes", "tes", type = ProxyGroupType.URL_TEST)
+        val groups = listOf(main, nested)
+        val rules = listOf(rule(RouteRuleType.FINAL, target = "main"))
+        val delays = mapOf<String, Long?>("guid-81" to 312L)
+        val h = Harness(routeRecordResolver = finalResolver(groups, rules, delays))
+        try {
+            h.fwd.start()
+            h.sendSyn()
+            assertTrue(
+                h.waitFor { h.statuses.contains("Connected") },
+                "expected Connected, got ${h.statuses}",
+            )
+            val conn = h.fwd.activeConnections().first { it.network == "tcp" }
+            assertEquals("FINAL", conn.rule)
+            assertEquals("", conn.rulePayload)
+            assertEquals(listOf("taptap", "tes", "81"), conn.chains)
+        } finally {
+            h.stop()
+        }
+    }
 }
