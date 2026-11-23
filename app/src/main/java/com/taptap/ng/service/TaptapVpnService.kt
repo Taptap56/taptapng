@@ -22,10 +22,13 @@ import com.taptap.ng.core.OutboundResolveMethod
 import com.taptap.ng.core.PemicuManager
 import com.taptap.ng.core.RootIptables
 import com.taptap.ng.core.RootTunnelController
+import com.taptap.ng.core.RouteEngine
 import com.taptap.ng.core.ServerTester
 import com.taptap.ng.core.Sniffer
 import com.taptap.ng.core.SuExecutor
 import com.taptap.ng.core.TunnelState
+import com.taptap.ng.core.UrlTestCache
+import com.taptap.ng.core.UrlTestLoop
 import com.taptap.ng.core.proto.DialWatchdog
 import com.taptap.ng.core.proto.MuxConfig
 import com.taptap.ng.core.proto.ProbeBody
@@ -33,11 +36,13 @@ import com.taptap.ng.core.proto.ProxyClient
 import com.taptap.ng.core.proto.ProxyClientFactory
 import com.taptap.ng.core.proto.Transport
 import com.taptap.ng.data.ConfigType
+import com.taptap.ng.data.GroupsStore
 import com.taptap.ng.data.ProfileItem
 import com.taptap.ng.data.ProfileStore
 import com.taptap.ng.data.SettingsStore
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
 /**
@@ -280,6 +285,20 @@ class TaptapVpnService : VpnService() {
      * Dihentikan + aturan dibersihkan di [teardownTunnel].
      */
     private var rootHandle: RootModeHandle? = null
+    /**
+     * M7: cache delay url-test + loop prober-nya (hidup mengikuti
+     * tunnel — start di [establishTunnel], stop di [teardownTunnel]).
+     */
+    private var urlTestCache: UrlTestCache? = null
+    private var urlTestLoop: UrlTestLoop? = null
+    /**
+     * M7: client per guid anggota grup (dibuat sekali per guid
+     * lewat [ProxyClientFactory], dipakai ulang tiap koneksi yang
+     * diputuskan ke guid itu). Client entry terpilih diisi dulu
+     * dengan client tunnel ([currentClient]) supaya konfigurasi
+     * default memakai client yang sama persis seperti sebelum M7.
+     */
+    private val routeClientCache = ConcurrentHashMap<String, ProxyClient>()
     private val tunnelLock = Any()
 
     /**
@@ -713,6 +732,37 @@ class TaptapVpnService : VpnService() {
         TunnelState.appBypass = disallowed
         tunFd = fd
         currentClient = client
+        // M7: routing — grup + aturan dari GroupsStore (default:
+        // grup "Proxy" SELECT berisi semua profil + FINAL -> Proxy,
+        // jadi perilaku sama seperti sebelum M7), cache delay
+        // url-test (diisi loop berkala, di-seed sekali dari
+        // Observatory), dan cache client per guid anggota grup.
+        // Client entry terpilih = client tunnel ini sendiri, jadi
+        // keputusan default (FINAL -> Proxy -> entry terpilih)
+        // memakai client yang sama persis seperti sebelum M7.
+        // Grup/aturan dibaca sekali saat tunnel naik — edit di
+        // editor berlaku mulai start berikutnya.
+        val profileStore = ProfileStore(ProfileStore.defaultFile(filesDir)).apply { load() }
+        val groupsStore = GroupsStore(GroupsStore.defaultFile(filesDir))
+        groupsStore.load(profileStore.profiles, profileStore.selectedGuid)
+        val urlCache = UrlTestCache().also { it.seedFromObservatory() }
+        urlTestCache = urlCache
+        routeClientCache[item.guid] = client
+        val muxForRoutes = MuxConfig.fromSettings(settings)
+        val clientForGuid: (String) -> ProxyClient? = { guid ->
+            routeClientCache[guid] ?: run {
+                val p = profileStore.find(guid) ?: return@run null
+                runCatching { ProxyClientFactory.create(p, muxForRoutes) }
+                    .getOrNull()?.also { routeClientCache[guid] = it }
+            }
+        }
+        val testLoop = UrlTestLoop(
+            cache = urlCache,
+            groupsProvider = { groupsStore.groups.toList() },
+            profilesProvider = { profileStore.profiles.toList() },
+        )
+        urlTestLoop = testLoop
+        testLoop.start()
         try {
             val tunIn = FileInputStream(fd.fileDescriptor)
             val tunOut = FileOutputStream(fd.fileDescriptor)
@@ -743,6 +793,17 @@ class TaptapVpnService : VpnService() {
                 // v1.0.5 (kelompok F): sniffing + route-only dari Settings.
                 sniffingEnabled = settings.sniffingEnabled,
                 routeOnlyEnabled = settings.routeOnlyEnabled,
+                // M7: routing per koneksi (grup + aturan + delay
+                // cache). Resolver membaca grup/aturan yang
+                // dimuat saat tunnel naik; client per guid
+                // diambil dari cache (dibuat sekali per guid).
+                routeResolver = { host, ip, port ->
+                    RouteEngine.resolve(
+                        host, ip, port,
+                        groupsStore.groups, groupsStore.rules, urlCache.delays(),
+                    )
+                },
+                clientProvider = clientForGuid,
             )
             forwarder = fwd
             fwd.start()
@@ -800,6 +861,15 @@ class TaptapVpnService : VpnService() {
         } catch (e: Exception) {
             runCatching { fd.close() }
             tunFd = null
+            // M7: establish gagal — hentikan loop url-test yang
+            // baru dibuat (teardownTunnel belum tentu dipanggil
+            // untuk start basi); client tunnel ditutup pemanggil.
+            runCatching { urlTestLoop?.stop() }
+            urlTestLoop = null
+            urlTestCache = null
+            routeClientCache.values.filter { it !== client }
+                .forEach { runCatching { it.close() } }
+            routeClientCache.clear()
             throw e
         }
     }
@@ -893,6 +963,15 @@ class TaptapVpnService : VpnService() {
         // butuh tunnel yang hidup.
         runCatching { observatoryRunner?.stop() }
         observatoryRunner = null
+        // M7: hentikan loop url-test + tutup client anggota grup
+        // yang ter-cache (kecuali client tunnel — ditutup di bawah
+        // bersama currentClient).
+        runCatching { urlTestLoop?.stop() }
+        urlTestLoop = null
+        urlTestCache = null
+        routeClientCache.values.filter { it !== currentClient }
+            .forEach { runCatching { it.close() } }
+        routeClientCache.clear()
         probeWatchdog?.cancel()
         probeWatchdog = null
         synchronized(tunnelLock) {

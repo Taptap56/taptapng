@@ -6,12 +6,15 @@ import com.taptap.ng.core.DnsRelayPolicy
 import com.taptap.ng.core.DnsResolver
 import com.taptap.ng.core.DnsRoute
 import com.taptap.ng.core.FakeDns
+import com.taptap.ng.core.RouteDecision
 import com.taptap.ng.core.RouteOnlyGate
 import com.taptap.ng.core.Sniffer
 import com.taptap.ng.core.TunnelState
 import com.taptap.ng.core.proto.DialWatchdog
 import com.taptap.ng.core.proto.ProxyClient
 import com.taptap.ng.core.proto.ProxyStream
+import com.taptap.ng.core.proto.ProxyUdpSession
+import com.taptap.ng.core.proto.SocketProxyStream
 import com.taptap.ng.core.proto.SpeedStats
 import com.taptap.ng.core.proto.Transport
 import java.io.ByteArrayOutputStream
@@ -20,6 +23,8 @@ import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
@@ -113,6 +118,30 @@ class TunForwarder(
      * Kunci = [TcpPacket.IpAddr.toString] (bentuk Java).
      */
     private val knownHosts6: MutableMap<String, String> = ConcurrentHashMap(),
+    /**
+     * M7: routing per koneksi — null = perilaku lama (semua dial
+     * lewat [proxy] yang tunggal). Bila diisi, tiap koneksi TCP
+     * baru (dan tiap sesi UDP baru) diputuskan lewat resolver ini
+     * (service memasang [com.taptap.ng.core.RouteEngine.resolve]
+     * dengan grup + aturan + delay cache yang hidup); lihat
+     * [dial] / [handleProxyUdp].
+     */
+    private val routeResolver: ((host: String?, ip: InetAddress, port: Int) -> RouteDecision)? = null,
+    /**
+     * M7: guid anggota grup -> [ProxyClient]-nya (cache per guid
+     * di service; factory membuat client baru bila belum ada).
+     * Null = keputusan Proxy selalu memakai [proxy]. Bila guid
+     * tidak dikenal (terhapus sesudah aturan ditulis), dial
+     * jatuh kembali ke [proxy] — fail-open ke entry terpilih.
+     */
+    private val clientProvider: ((guid: String) -> ProxyClient?)? = null,
+    /**
+     * M7: dial direct untuk keputusan [RouteDecision.Direct].
+     * Null = [defaultDirectDial] (socket TCP ter-protect ke
+     * target). Di-inject tes supaya jalur Direct bisa diuji tanpa
+     * socket nyata.
+     */
+    private val directDial: ((host: String, port: Int, stats: SpeedStats?) -> ProxyStream)? = null,
 ) {
 
     private enum class State { DIALING, SYN_SENT, ESTABLISHED, CLOSED }
@@ -267,6 +296,12 @@ class TunForwarder(
 
         /** Interval penyapu sesi UDP idle. */
         const val UDP_SWEEP_MS = 30_000L
+
+        /**
+         * M7: timeout connect untuk dial direct ([defaultDirectDial]).
+         * Sama seperti timeout TCP test (10 s di ServerTester).
+         */
+        const val DIRECT_DIAL_TIMEOUT_MS = 10_000
 
         /** Max queued app-data chunks per connection (XVEON: 48). */
         const val MAX_QUEUE_CHUNKS = 48
@@ -890,29 +925,67 @@ class TunForwarder(
         // A proxy that ignores it (test fakes) still gets its
         // forwarder-side stages timed (relay read / build / TUN).
         val speed = SpeedStats()
+        // M7: host untuk routing — FakeDNS reverse dulu (log sama
+        // seperti sebelum M7), lalu map known-hosts (jawaban DNS +
+        // sniffing), lalu null (koneksi IP-only tanpa domain).
+        // Host dial = hostname itu bila dikenal, else IP literal.
+        // IP fake tidak ada artinya di luar TUN ini, jadi yang
+        // dikirim ke proxy selalu hostname aslinya (server proxy
+        // yang me-resolve-nya); FakeDNS hanya IPv4 (pool
+        // 198.18.0.0/15) — tujuan IPv6 tidak pernah fake.
+        val fakeHost = if (key.dstIp.isV4) {
+            dnsPolicy.fakeDns?.lookupHost(key.dstIp.toInt())?.also {
+                DialLog.log("DNS", "fake $dst -> $it")
+            }
+        } else {
+            null
+        }
+        val routedHost = fakeHost
+            ?: if (key.dstIp.isV4) knownHosts[key.dstIp.toInt()]
+            else knownHosts6[key.dstIp.toString()]
+        val dialHost = routedHost ?: key.dstIp.toString()
+        // M7: putuskan rute koneksi ini. Resolver null = perilaku
+        // lama (dial selalu lewat [proxy] yang tunggal). REJECT
+        // dijawab di sini, sebelum dial apa pun — tanpa sesi dan
+        // tanpa stream; status tidak dilaporkan sebagai "Konek
+        // gagal" (penolakan aturan bukan kegagalan dial).
+        val decision = routeResolver?.invoke(
+            routedHost,
+            InetAddress.getByAddress(key.dstIp.bytes),
+            key.dstPort,
+        )
+        if (decision == RouteDecision.Reject) {
+            sessions.remove(key)
+            DialLog.log(
+                "ROUTE",
+                "tolak $dst" + (routedHost?.let { " ($it)" } ?: ""),
+            )
+            val rst = buildTcpPacket(
+                key.dstIp, key.srcIp, key.dstPort, key.srcPort,
+                0, session.clientSeq,
+                TcpPacket.FLAG_RST or TcpPacket.FLAG_ACK, ByteArray(0),
+            )
+            writePacket(rst)
+            return
+        }
+        if (decision != null) {
+            DialLog.log("ROUTE", "$dst -> $decision")
+        }
         try {
             watchdog.start()
-            // v1.0.5 (DNS C, FakeDNS): tujuan IP fake dipetakan balik
-            // ke hostname aslinya SEBELUM dial — server proxy yang
-            // me-resolve hostname itu (ProxyClient tidak pernah
-            // resolve lokal). Bukan IP fake yang dikirim: IP fake
-            // tidak ada artinya di luar TUN ini. Satu baris ini saja
-            // yang menyentuh jalur TCP; state machine / relay paket
-            // tidak berubah.
-            // FakeDNS hanya IPv4 (pool 198.18.0.0/15) — tujuan
-            // IPv6 tidak pernah fake, langsung alamatnya.
-            val dialHost = if (key.dstIp.isV4) {
-                dnsPolicy.fakeDns?.lookupHost(key.dstIp.toInt())?.also {
-                    DialLog.log("DNS", "fake $dst -> $it")
-                } ?: key.dstIp.toString()
-            } else {
-                key.dstIp.toString()
+            stream = when (decision) {
+                null -> proxy.dial(dialHost, key.dstPort, stats = speed)
+                RouteDecision.Direct -> directDial?.invoke(dialHost, key.dstPort, speed)
+                    ?: defaultDirectDial(dialHost, key.dstPort)
+                is RouteDecision.Proxy -> {
+                    // Guid tidak dikenal (terhapus sesudah aturan
+                    // ditulis) jatuh kembali ke [proxy] — fail-open
+                    // ke entry terpilih, bukan putus koneksi.
+                    val client = clientProvider?.invoke(decision.profileGuid) ?: proxy
+                    client.dial(dialHost, key.dstPort, stats = speed)
+                }
+                RouteDecision.Reject -> error("unreachable: Reject ditangani di atas")
             }
-            stream = proxy.dial(
-                dialHost,
-                key.dstPort,
-                stats = speed,
-            )
         } catch (e: Exception) {
             sessions.remove(key)
             DialLog.failure("DIAL $dst", e)
@@ -951,6 +1024,40 @@ class TunForwarder(
             onStatus("Connected")
         }
         thread(name = "tun-relay-${key.dstPort}", isDaemon = true) { relay(session) }
+    }
+
+    /**
+     * M7: dial direct untuk keputusan [RouteDecision.Direct] — socket
+     * TCP polos ter-protect ke target, tanpa proxy. Host di-resolve
+     * lewat [DnsResolver.resolveWithSystemFallback] (operator-first,
+     * bypass TUN) kecuali sudah berupa IP literal; socket
+     * di-protect seperti dial proxy ([Transport.protectSocket] +
+     * aturan appBypass — lihat [Transport.open]). TLS aplikasi
+     * jalan di atas stream ini, jadi tidak ada urusan SNI di sini.
+     */
+    private fun defaultDirectDial(host: String, port: Int): ProxyStream {
+        val target = DnsResolver.resolveWithSystemFallback(host, port)
+        val socket = Socket()
+        try {
+            val protect = Transport.protectSocket
+            if (protect != null && TunnelState.up && !protect(socket)) {
+                if (!TunnelState.appBypass) {
+                    throw IllegalStateException(
+                        "protect() gagal — dial direct tidak bisa bypass VPN",
+                    )
+                }
+                DialLog.log(
+                    "PROTECT",
+                    "protect() gagal — dial direct lanjut via disallow aplikasi",
+                )
+            }
+            socket.connect(InetSocketAddress(target, port), DIRECT_DIAL_TIMEOUT_MS)
+            socket.soTimeout = 0
+            return SocketProxyStream(socket, socket.getInputStream(), socket.getOutputStream())
+        } catch (e: Exception) {
+            runCatching { socket.close() }
+            throw e
+        }
     }
 
     /** First failure at once, then at most once per 10 s (see fields). */
@@ -1323,6 +1430,65 @@ class TunForwarder(
     }
 
     /**
+     * M7: satu sesi UDP direct untuk target [RouteDecision.Direct] —
+     * [DatagramSocket] ter-protect yang terhubung ke tujuan, jadi
+     * balasan kembali lewat socket yang sama. Timeout receive hanya
+     * mengulang (sesi hidup sampai penyapu idle atau [close]);
+     * [close] menutup socket, yang membangunkan receive yang sedang
+     * menunggu. Dibangun di thread pembaca TUN, seperti
+     * [ProxyClient.dialUdp] yang digantikannya.
+     */
+    private class DirectUdpSession(host: String, port: Int) : ProxyUdpSession {
+        private val socket: DatagramSocket
+        private val closed = AtomicBoolean(false)
+
+        init {
+            val target = DnsResolver.resolveWithSystemFallback(host, port)
+            val s = DatagramSocket()
+            try {
+                val protect = Transport.protectUdpSocket
+                if (protect != null && TunnelState.up && !protect(s)) {
+                    if (!TunnelState.appBypass) {
+                        throw IllegalStateException(
+                            "protect() gagal — UDP direct tidak bisa bypass VPN",
+                        )
+                    }
+                }
+                s.connect(InetSocketAddress(target, port))
+            } catch (e: Exception) {
+                runCatching { s.close() }
+                throw e
+            }
+            socket = s
+        }
+
+        override fun send(datagram: ByteArray) {
+            socket.send(DatagramPacket(datagram, datagram.size))
+        }
+
+        override fun receive(timeoutMs: Long): ByteArray? {
+            while (!closed.get()) {
+                try {
+                    socket.soTimeout = timeoutMs.toInt().coerceAtLeast(1)
+                    val buf = ByteArray(65535)
+                    val pkt = DatagramPacket(buf, buf.size)
+                    socket.receive(pkt)
+                    return pkt.data.copyOf(pkt.length)
+                } catch (_: java.net.SocketTimeoutException) {
+                    // Belum ada datagram: tunggu lagi sampai close().
+                } catch (_: Exception) {
+                    return null
+                }
+            }
+            return null
+        }
+
+        override fun close() {
+            if (closed.compareAndSet(false, true)) runCatching { socket.close() }
+        }
+    }
+
+    /**
      * v1.0.6 (M6): UDP non-DNS lewat proxy. Satu sesi per 4-tuple
      * (dibuat saat datagram pertama, ditutup penyapu bila idle);
      * datagram dikirim apa adanya lewat [ProxyClient.dialUdp],
@@ -1345,18 +1511,44 @@ class TunForwarder(
                 udpSessions.values.minByOrNull { it.lastActivityMs }
                     ?.let { closeUdpSession(it) }
             }
-            // FakeDNS (v1.0.5): tujuan IP fake dipetakan balik ke
-            // hostname aslinya SEBELUM dial — sama seperti TCP.
-            // FakeDNS hanya IPv4; tujuan IPv6 langsung alamatnya.
-            val dialHost = if (dstIp.isV4) {
+            // M7: host untuk routing — sama seperti TCP (FakeDNS
+            // reverse dulu, lalu known-hosts, lalu IP literal).
+            val fakeHost = if (dstIp.isV4) {
                 dnsPolicy.fakeDns?.lookupHost(dstIp.toInt())?.also {
                     DialLog.log("DNS", "fake $dstIp:$dstPort -> $it")
-                } ?: dstIp.toString()
+                }
             } else {
-                dstIp.toString()
+                null
+            }
+            val routedHost = fakeHost
+                ?: if (dstIp.isV4) knownHosts[dstIp.toInt()]
+                else knownHosts6[dstIp.toString()]
+            val dialHost = routedHost ?: dstIp.toString()
+            // M7: keputusan yang sama seperti TCP. REJECT membuang
+            // datagram tanpa balasan (drop diam-diam untuk UDP);
+            // Direct membuka socket ter-protect ke target.
+            val decision = routeResolver?.invoke(
+                routedHost,
+                InetAddress.getByAddress(dstIp.bytes),
+                dstPort,
+            )
+            if (decision == RouteDecision.Reject) {
+                DialLog.log("ROUTE", "tolak UDP $dstIp:$dstPort")
+                return
+            }
+            if (decision != null) {
+                DialLog.log("ROUTE", "UDP $dstIp:$dstPort -> $decision")
             }
             val proxySession = try {
-                proxy.dialUdp(dialHost, dstPort)
+                when (decision) {
+                    null -> proxy.dialUdp(dialHost, dstPort)
+                    RouteDecision.Direct -> DirectUdpSession(dialHost, dstPort)
+                    is RouteDecision.Proxy -> {
+                        val client = clientProvider?.invoke(decision.profileGuid) ?: proxy
+                        client.dialUdp(dialHost, dstPort)
+                    }
+                    RouteDecision.Reject -> error("unreachable: Reject ditangani di atas")
+                }
             } catch (e: Exception) {
                 DialLog.failure("UDP $dstIp:$dstPort", e)
                 return
