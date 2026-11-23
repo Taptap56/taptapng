@@ -1,6 +1,7 @@
 package com.taptap.ng.ui.groups
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
 import android.view.LayoutInflater
@@ -16,6 +17,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.NestedScrollView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.TextInputLayout
@@ -57,7 +59,11 @@ class GroupsActivity : AppCompatActivity() {
         groupsStore.load(profileStore.profiles, profileStore.selectedGuid)
 
         val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
-        toolbar.title = getString(R.string.groups_title)
+        // v1.0.21: drawer "Grup"/"Rute" opens this same activity
+        // straight at the requested section (title follows the
+        // section); no extra = the old full title (overflow menu).
+        val section = resolveSection(intent.getStringExtra(EXTRA_SECTION))
+        toolbar.title = getString(sectionTitleRes(section))
         setSupportActionBar(toolbar)
         toolbar.setNavigationOnClickListener { finish() }
 
@@ -80,6 +86,14 @@ class GroupsActivity : AppCompatActivity() {
         findViewById<View>(R.id.add_group).setOnClickListener { showGroupDialog(null) }
         findViewById<View>(R.id.add_rule).setOnClickListener { showRuleDialog(null) }
         refresh()
+        // v1.0.21: "Rute" opens scrolled to the rules section (the
+        // groups section is already at the top, so it needs no
+        // scroll). Posted so the layout pass has run first.
+        if (section == SECTION_ROUTES) {
+            val scrollView = findViewById<NestedScrollView>(R.id.groups_scroll)
+            val rulesHeader = findViewById<View>(R.id.rules_section_header)
+            scrollView.post { scrollView.scrollTo(0, rulesHeader.top) }
+        }
     }
 
     private fun refresh() {
@@ -423,6 +437,40 @@ class GroupsActivity : AppCompatActivity() {
     }
 
     companion object {
+        /** Intent extra selecting which section to show on open. */
+        const val EXTRA_SECTION = "com.taptap.ng.ui.groups.EXTRA_SECTION"
+
+        /** Full view, old title ("Grup proxy & rute") — overflow menu. */
+        const val SECTION_DEFAULT = "default"
+
+        /** Proxy-groups section (drawer "Grup"). */
+        const val SECTION_GROUPS = "groups"
+
+        /** Route-rules section (drawer "Rute"). */
+        const val SECTION_ROUTES = "routes"
+
+        fun newIntent(context: Context, section: String): Intent =
+            Intent(context, GroupsActivity::class.java)
+                .putExtra(EXTRA_SECTION, section)
+
+        /**
+         * Resolve a raw extra value to a section. Unknown or missing
+         * values fall back to the full view — never crash on a bad
+         * extra. Pure, JVM-tested.
+         */
+        fun resolveSection(extra: String?): String = when (extra) {
+            SECTION_GROUPS -> SECTION_GROUPS
+            SECTION_ROUTES -> SECTION_ROUTES
+            else -> SECTION_DEFAULT
+        }
+
+        /** Toolbar title for a resolved section. */
+        fun sectionTitleRes(section: String): Int = when (section) {
+            SECTION_GROUPS -> R.string.drawer_groups
+            SECTION_ROUTES -> R.string.drawer_routes
+            else -> R.string.groups_title
+        }
+
         /** Display label for a group type (URL_TEST shows as URL-TEST). */
         fun typeLabel(type: ProxyGroupType): String = when (type) {
             ProxyGroupType.SELECT -> "SELECT"

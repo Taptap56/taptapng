@@ -808,6 +808,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun onDrawerItem(itemId: Int) {
         when (itemId) {
+            R.id.nav_groups -> startActivity(
+                GroupsActivity.newIntent(this, GroupsActivity.SECTION_GROUPS)
+            )
+            R.id.nav_routes -> startActivity(
+                GroupsActivity.newIntent(this, GroupsActivity.SECTION_ROUTES)
+            )
             R.id.nav_settings -> startActivity(Intent(this, SettingsActivity::class.java))
             R.id.nav_logcat -> startActivity(Intent(this, LogActivity::class.java))
             R.id.nav_about -> AlertDialog.Builder(this)

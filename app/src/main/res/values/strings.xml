@@ -59,8 +59,8 @@
 
     <!-- Drawer (v2rayNG labels). -->
     <string name="drawer_subscriptions">Subscription settings</string>
-    <string name="drawer_per_app_proxy">Per-App Proxy</string>
-    <string name="drawer_routing">Routing settings</string>
+    <string name="drawer_groups">Grup</string>
+    <string name="drawer_routes">Rute</string>
     <string name="drawer_user_assets">User assets</string>
     <string name="drawer_promotion">Promotion</string>
     <string name="drawer_check_update">Check for update</string>
