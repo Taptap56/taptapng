@@ -6,8 +6,10 @@ import com.taptap.ng.core.DnsRelayPolicy
 import com.taptap.ng.core.DnsResolver
 import com.taptap.ng.core.DnsRoute
 import com.taptap.ng.core.FakeDns
+import com.taptap.ng.core.ResolvedRoute
 import com.taptap.ng.core.RouteDecision
 import com.taptap.ng.core.RouteOnlyGate
+import com.taptap.ng.core.RouteRecord
 import com.taptap.ng.core.Sniffer
 import com.taptap.ng.core.TunnelState
 import com.taptap.ng.core.proto.DialWatchdog
@@ -128,6 +130,18 @@ class TunForwarder(
      */
     private val routeResolver: ((host: String?, ip: InetAddress, port: Int) -> RouteDecision)? = null,
     /**
+     * v1.0.29: routing per koneksi DENGAN rekaman (aturan +
+     * rantai) — [com.taptap.ng.core.RouteEngine.resolveDetailed].
+     * Bila diisi, ini yang dipakai (bukan [routeResolver]); tiap
+     * sesi TCP/UDP menyimpan [RouteRecord]-nya untuk
+     * GET /connections. Bila null, rekaman disintesis dari
+     * [routeResolver] (rule="FINAL", chains=[guid] untuk Proxy —
+     * nama server tidak dikenal tanpa serverNames; service yang
+     * memasang resolver ini menyertakan displayNames supaya
+     * chains berisi nama, bukan guid).
+     */
+    private val routeRecordResolver: ((host: String?, ip: InetAddress, port: Int) -> ResolvedRoute)? = null,
+    /**
      * M7: guid anggota grup -> [ProxyClient]-nya (cache per guid
      * di service; factory membuat client baru bila belum ada).
      * Null = keputusan Proxy selalu memakai [proxy]. Bila guid
@@ -161,7 +175,19 @@ class TunForwarder(
      */
     private data class UdpKey(val srcIp: TcpPacket.IpAddr, val srcPort: Int, val dstIp: TcpPacket.IpAddr, val dstPort: Int)
 
-    private class UdpSession(val key: UdpKey, val udp: com.taptap.ng.core.proto.ProxyUdpSession) {
+    private class UdpSession(
+        val key: UdpKey,
+        val udp: com.taptap.ng.core.proto.ProxyUdpSession,
+        /**
+         * v1.0.29: rekaman routing sesi ini (GET /connections) —
+         * diisi saat sesi dibuat ([handleProxyUdp]); default aman
+         * bila tidak ada resolver. UDP tetap 0 byte (sudah
+         * didokumentasikan), tapi rule/chains-nya nyata.
+         */
+        var rule: String = "FINAL",
+        var rulePayload: String = "",
+        var chains: List<String> = emptyList(),
+    ) {
         @Volatile var lastActivityMs: Long = System.currentTimeMillis()
         val closed = AtomicBoolean(false)
         @Volatile var replyThread: Thread? = null
@@ -217,6 +243,15 @@ class TunForwarder(
         @Volatile var speedStartMs: Long = 0L
         /** v1.0.16: the TUTUP summary was logged (single-shot). */
         val speedLogged = AtomicBoolean(false)
+        /**
+         * v1.0.29: rekaman routing sesi ini (GET /connections) —
+         * diisi [dial] begitu keputusan diketahui; default aman
+         * sebelum itu (sesi yang masih DIALING melapor
+         * rule="FINAL" + chains kosong sampai dial berjalan).
+         */
+        @Volatile var rule: String = "FINAL"
+        @Volatile var rulePayload: String = ""
+        @Volatile var chains: List<String> = emptyList()
     }
 
     private val sessions = ConcurrentHashMap<Key, TcpSession>()
@@ -424,6 +459,20 @@ class TunForwarder(
             is java.net.ConnectException -> "TCP gagal"
             else -> e.message?.take(40)?.ifBlank { null } ?: "gagal"
         }
+
+        /**
+         * v1.0.29: record synthesised from a plain [RouteDecision]
+         * when no [TunForwarder.routeRecordResolver] is installed
+         * — the rule that matched is unknown, so the safe default
+         * (rule="FINAL", empty payload); the chain is the decision
+         * itself (the server guid for Proxy — the display name is
+         * only known to a record resolver with serverNames).
+         */
+        fun synthesizeRecord(decision: RouteDecision): RouteRecord = when (decision) {
+            is RouteDecision.Proxy -> RouteRecord("FINAL", "", listOf(decision.profileGuid))
+            RouteDecision.Direct -> RouteRecord("FINAL", "", listOf("DIRECT"))
+            RouteDecision.Reject -> RouteRecord("FINAL", "", listOf("REJECT"))
+        }
     }
 
     /** Sessions currently tracked (tests). */
@@ -492,6 +541,30 @@ class TunForwarder(
                 download = 0L,
                 startMs = s.lastActivityMs,
             )
+        }
+        return out
+    }
+
+    /**
+     * v1.0.29: routing record per live session (TCP + UDP),
+     * keyed by [ConnectionInfo.id] — the handoff for
+     * GET /connections (the API reads these alongside
+     * [activeConnections] and serialises rule / rulePayload /
+     * chains per connection). A session still DIALING reports
+     * the safe default (rule="FINAL", empty chains) until
+     * [dial] / [handleProxyUdp] fills the real record in.
+     */
+    fun connectionRoutes(): Map<String, RouteRecord> {
+        val out = HashMap<String, RouteRecord>()
+        for (s in sessions.values) {
+            if (s.closed.get()) continue
+            out[connectionId("tcp", s.key.srcIp, s.key.srcPort, s.key.dstIp, s.key.dstPort)] =
+                RouteRecord(s.rule, s.rulePayload, s.chains)
+        }
+        for (s in udpSessions.values) {
+            if (s.closed.get()) continue
+            out[connectionId("udp", s.key.srcIp, s.key.srcPort, s.key.dstIp, s.key.dstPort)] =
+                RouteRecord(s.rule, s.rulePayload, s.chains)
         }
         return out
     }
@@ -1053,11 +1126,30 @@ class TunForwarder(
         // dijawab di sini, sebelum dial apa pun — tanpa sesi dan
         // tanpa stream; status tidak dilaporkan sebagai "Konek
         // gagal" (penolakan aturan bukan kegagalan dial).
-        val decision = routeResolver?.invoke(
+        // v1.0.29: resolver rekaman (bila dipasang) yang dipakai
+        // dulu — keputusannya sama, tapi membawa rule + chains.
+        val resolved = routeRecordResolver?.invoke(
             routedHost,
             InetAddress.getByAddress(key.dstIp.bytes),
             key.dstPort,
         )
+        val decision = resolved?.decision ?: routeResolver?.invoke(
+            routedHost,
+            InetAddress.getByAddress(key.dstIp.bytes),
+            key.dstPort,
+        )
+        // v1.0.29: record the routing decision on the session
+        // (GET /connections) as soon as it is known — before any
+        // dial, so a live session always carries its rule even
+        // while DIALING. No record resolver = synthesise from the
+        // plain decision (rule="FINAL", chains=[guid]); no
+        // resolver at all = the safe defaults on the session.
+        val record = resolved?.record ?: decision?.let { synthesizeRecord(it) }
+        if (record != null) {
+            session.rule = record.rule
+            session.rulePayload = record.rulePayload
+            session.chains = record.chains
+        }
         if (decision == RouteDecision.Reject) {
             sessions.remove(key)
             DialLog.log(
@@ -1635,7 +1727,13 @@ class TunForwarder(
             // M7: keputusan yang sama seperti TCP. REJECT membuang
             // datagram tanpa balasan (drop diam-diam untuk UDP);
             // Direct membuka socket ter-protect ke target.
-            val decision = routeResolver?.invoke(
+            // v1.0.29: resolver rekaman dulu, seperti [dial].
+            val resolved = routeRecordResolver?.invoke(
+                routedHost,
+                InetAddress.getByAddress(dstIp.bytes),
+                dstPort,
+            )
+            val decision = resolved?.decision ?: routeResolver?.invoke(
                 routedHost,
                 InetAddress.getByAddress(dstIp.bytes),
                 dstPort,
@@ -1661,7 +1759,16 @@ class TunForwarder(
                 DialLog.failure("UDP $dstIp:$dstPort", e)
                 return
             }
-            val created = UdpSession(key, proxySession)
+            // v1.0.29: same record as TCP (see [dial]) — a UDP
+            // session reports 0 bytes, but its rule/chains are
+            // real; no resolver at all = the safe defaults.
+            val record = resolved?.record ?: decision?.let { synthesizeRecord(it) }
+            val created = UdpSession(
+                key, proxySession,
+                rule = record?.rule ?: "FINAL",
+                rulePayload = record?.rulePayload ?: "",
+                chains = record?.chains ?: emptyList(),
+            )
             val raced = udpSessions.putIfAbsent(key, created)
             if (raced != null && !raced.closed.get()) {
                 runCatching { proxySession.close() }

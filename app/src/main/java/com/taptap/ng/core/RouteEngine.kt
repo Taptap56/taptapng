@@ -85,7 +85,41 @@ sealed interface RouteDecision {
  *   [RouteDecision.Direct] (fail-open).
  * - "direct" = always [RouteDecision.Direct].
  * An unknown mode value behaves like "rule".
+ *
+ * v1.0.29: [RouteEngine.resolveDetailed] returns the same decision as
+ * [RouteEngine.resolve] plus the [RouteRecord] the forwarder stores per
+ * session (rule / rulePayload / chains) for GET /connections —
+ * [RouteEngine.resolve] delegates to it, so the matching/selection logic
+ * lives in exactly one place and cannot drift between the two.
  */
+data class RouteRecord(
+    val rule: String,
+    val rulePayload: String,
+    val chains: List<String>,
+)
+
+/**
+ * A [RouteEngine] decision WITH its record (v1.0.29): the dial
+ * target ([decision]) plus the [RouteRecord] the session stores.
+ * [RouteRecord] on its own is what a live session carries:
+ *
+ * - [RouteRecord.rule]: the matched rule's type name ("FINAL",
+ *   "DOMAIN-SUFFIX", ...); "GLOBAL" / "DIRECT" for those Clash
+ *   modes; "FINAL" for the no-rule fallback (see
+ *   [RouteEngine.resolveDetailed]).
+ * - [RouteRecord.rulePayload]: the matched rule's pattern
+ *   ("" for FINAL).
+ * - [RouteRecord.chains]: the proxy chain as display names —
+ *   the nested group names on the path plus the final server
+ *   name (["taptap", "tes", "81"]); just the server name
+ *   (["81"]) when the server is a direct member; ["DIRECT"]
+ *   for a bypass, ["REJECT"] for a block.
+ */
+data class ResolvedRoute(
+    val decision: RouteDecision,
+    val record: RouteRecord,
+)
+
 object RouteEngine {
 
     /**
@@ -135,16 +169,87 @@ object RouteEngine {
          * tests).
          */
         mainGroupId: String? = null,
-    ): RouteDecision {
+    ): RouteDecision = resolveDetailed(
+        host, ip, port, groups, rules, delays, mode, mainGroupId,
+    ).decision
+
+    /**
+     * v1.0.29: [resolve] WITH its record — the same decision,
+     * plus the rule that matched and the proxy chain it resolves
+     * to, for the per-connection record (GET /connections).
+     * The matching/selection logic is identical to [resolve]
+     * (which delegates here); only the returned metadata is new.
+     *
+     * Record rules:
+     * - A matched rule reports its type name ([RouteRuleType])
+     *   and its normalised pattern ("" for FINAL).
+     * - A matched group reports its chain ([resolveChainNames]):
+     *   nested group names + the server display name, or just
+     *   the server name for a direct member.
+     * - DIRECT / REJECT targets report chains ["DIRECT"] /
+     *   ["REJECT"].
+     * - Clash modes report rule "GLOBAL" / "DIRECT" (the
+     *   mode itself decided, no rule matched).
+     * - No rule matched at all: the safe default — rule "FINAL",
+     *   payload "", chains [server] when the main group
+     *   resolves, ["DIRECT"] when nothing does. Never null,
+     *   never a crash.
+     */
+    fun resolveDetailed(
+        host: String?,
+        ip: InetAddress,
+        port: Int,
+        groups: List<ProxyGroup>,
+        rules: List<RouteRule>,
+        /** guid -> last-known delay ms; null = unknown / failed. */
+        delays: Map<String, Long?>,
+        /** Clash mode: "rule" (default), "global", or "direct". */
+        mode: String = MODE_RULE,
+        /**
+         * v1.0.23: id of the main group (from
+         * [com.taptap.ng.data.GroupsStore.mainGroupId]) — the
+         * fallback / global group is picked BY THIS ID, not by
+         * name, so it follows the group through a rename. Null
+         * keeps the legacy name lookup (hand-built callers, old
+         * tests).
+         */
+        mainGroupId: String? = null,
+        /**
+         * v1.0.29: server guid -> display name
+         * ([com.taptap.ng.data.ProfileItem.displayName],
+         * de-duplicated by the caller, as in
+         * [com.taptap.ng.service.ClashApiHandler.displayNames]).
+         * Only the chain names read it — the decision never
+         * does. A guid missing here falls back to the guid
+         * itself, never null.
+         */
+        serverNames: Map<String, String> = emptyMap(),
+    ): ResolvedRoute {
         when (mode.trim().lowercase()) {
-            MODE_DIRECT -> return RouteDecision.Direct
+            MODE_DIRECT -> return ResolvedRoute(
+                RouteDecision.Direct,
+                RouteRecord("DIRECT", "", listOf("DIRECT")),
+            )
             MODE_GLOBAL -> {
                 val group = mainGroup(groups, mainGroupId)
                     ?: groups.firstOrNull()
                 if (group != null) {
-                    resolveToServer(group, groups, delays)?.let { return RouteDecision.Proxy(it) }
+                    val guid = resolveToServer(group, groups, delays)
+                    if (guid != null) {
+                        return ResolvedRoute(
+                            RouteDecision.Proxy(guid),
+                            RouteRecord(
+                                "GLOBAL", "",
+                                resolveChainNames(group, groups, delays, serverNames)
+                                    ?: listOf(serverNames[guid] ?: guid),
+                            ),
+                        )
+                    }
                 }
-                return RouteDecision.Direct
+                return ResolvedRoute(
+                    RouteDecision.Direct,
+                    RouteRecord("GLOBAL", "", listOf("DIRECT")),
+                )
             }
         }
         for (rule in rules) {
@@ -152,24 +257,98 @@ object RouteEngine {
             // toggle and is always evaluated.
             if (rule.type != RouteRuleType.FINAL && !rule.isEnabled) continue
             if (!rule.matches(host, ip)) continue
+            val payload = rule.normalizedPattern
             when (rule.target) {
-                RouteRule.TARGET_DIRECT -> return RouteDecision.Direct
-                RouteRule.TARGET_REJECT -> return RouteDecision.Reject
+                RouteRule.TARGET_DIRECT -> return ResolvedRoute(
+                    RouteDecision.Direct,
+                    RouteRecord(rule.type.name, payload, listOf("DIRECT")),
+                )
+                RouteRule.TARGET_REJECT -> return ResolvedRoute(
+                    RouteDecision.Reject,
+                    RouteRecord(rule.type.name, payload, listOf("REJECT")),
+                )
                 else -> {
                     val group = groups.firstOrNull { it.id == rule.target }
                         ?: continue // Stale target: fall through.
                     val member = resolveToServer(group, groups, delays)
                         ?: continue // Empty group: fall through.
-                    return RouteDecision.Proxy(member)
+                    return ResolvedRoute(
+                        RouteDecision.Proxy(member),
+                        RouteRecord(
+                            rule.type.name, payload,
+                            resolveChainNames(group, groups, delays, serverNames)
+                                ?: listOf(serverNames[member] ?: member),
+                        ),
+                    )
                 }
             }
         }
         // No rule matched: fall back to the main group, else Direct.
         val fallback = mainGroup(groups, mainGroupId)
         if (fallback != null) {
-            resolveToServer(fallback, groups, delays)?.let { return RouteDecision.Proxy(it) }
+            val guid = resolveToServer(fallback, groups, delays)
+            if (guid != null) {
+                return ResolvedRoute(
+                    RouteDecision.Proxy(guid),
+                    RouteRecord(
+                        "FINAL", "",
+                        resolveChainNames(fallback, groups, delays, serverNames)
+                            ?: listOf(serverNames[guid] ?: guid),
+                    ),
+                )
+            }
         }
-        return RouteDecision.Direct
+        return ResolvedRoute(
+            RouteDecision.Direct,
+            RouteRecord("FINAL", "", listOf("DIRECT")),
+        )
+    }
+
+    /**
+     * v1.0.29: the proxy chain a connection through [group]
+     * takes, as display names — the nested group names on the
+     * path plus the final server's display name, e.g.
+     * ["taptap", "tes", "81"] when the main group selects nested
+     * group "tes" which selects server "81". When the server is
+     * a DIRECT member of [group] (no nesting on the path) the
+     * chain is just the server name, e.g. ["81"] — the group
+     * itself is implied, like the Clash API's `now` for a plain
+     * selection. Null when nothing resolves (empty group, or a
+     * cycle — the same guard as [resolveToServer]). The walk
+     * mirrors [resolveToServer] exactly (same
+     * [selectMemberRef] + visited set), so a chain never
+     * disagrees with the decision it annotates. [serverNames]
+     * maps server guid -> display name; an unknown guid falls
+     * back to the guid itself, never null.
+     */
+    fun resolveChainNames(
+        group: ProxyGroup,
+        groups: List<ProxyGroup>,
+        delays: Map<String, Long?>,
+        serverNames: Map<String, String> = emptyMap(),
+    ): List<String>? {
+        val visited = HashSet<String>()
+        val path = ArrayList<String>()
+        var current: ProxyGroup? = group
+        while (current != null) {
+            if (!visited.add(current.id)) {
+                DialLog.log(
+                    "ROUTE",
+                    "grup bersarang siklus di '${current.name}' — dilewati",
+                )
+                return null
+            }
+            val ref = selectMemberRef(current, groups, delays, visited) ?: return null
+            val nested = groups.firstOrNull { it.id == ref }
+            if (nested == null) {
+                // A server guid: the chain ends here.
+                val server = serverNames[ref] ?: ref
+                return if (path.isEmpty()) listOf(server) else path + server
+            }
+            path.add(current.name.ifBlank { current.id })
+            current = nested
+        }
+        return null
     }
 
     /**
