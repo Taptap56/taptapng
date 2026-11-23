@@ -370,18 +370,13 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
         val groups = deps.groups()
         val out = obj {}
         val proxies = JsonObject()
-        // "GLOBAL" pseudo-group (Clash shape): every proxy, now = selected entry.
-        val allNames = JsonArray().apply { names.values.forEach { add(it) } }
-        val selectedGuid = groups.firstOrNull { it.name == RouteEngine.FALLBACK_GROUP_NAME }
-            ?.effectiveSelectedMemberGuid()
-            ?: groups.firstOrNull()?.effectiveSelectedMemberGuid()
-        proxies.add("GLOBAL", obj {
-            addProperty("name", "GLOBAL")
-            addProperty("type", "Selector")
-            addProperty("now", names[selectedGuid] ?: "")
-            add("all", allNames)
-            add("history", JsonArray())
-        })
+        // No "GLOBAL" pseudo-group (v1.0.21): /proxies lists only real
+        // groups + individual proxies. yacd renders the real groups
+        // from this object; its GLOBAL special-case (ordering groups
+        // by GLOBAL's `all`) simply does not trigger, and groups stay
+        // in config order. PUT /proxies/GLOBAL is still accepted as an
+        // alias for the fallback group (see handleProxies) so a stale
+        // dashboard tab keeps working — but GLOBAL is never emitted.
         for (g in groups) {
             val nowGuid = RouteEngine.selectMember(g, delays)
             val all = JsonArray().apply {
@@ -441,11 +436,22 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
                 // Also accept the Clash path form PUT /proxies/{selector}/{proxy}.
                 val selector = segments.getOrNull(0)
                     ?: return json(400, obj { addProperty("message", "missing selector") })
+                // "GLOBAL" is never listed (see proxiesObject), but a stale
+                // dashboard tab — or an external client — may still PUT a
+                // selection to it. Accept it as an alias for the fallback
+                // group: GLOBAL always meant "the selected entry of the
+                // fallback group". A real group literally named GLOBAL wins
+                // over the alias. The alias resolves through
+                // RouteEngine.FALLBACK_GROUP_NAME, never a literal name,
+                // so it follows the fallback group's rename.
+                val effectiveSelector = if (selector == "GLOBAL" &&
+                    deps.groups().none { it.name == "GLOBAL" }
+                ) RouteEngine.FALLBACK_GROUP_NAME else selector
                 val proxyName = segments.getOrNull(1) ?: run {
                     runCatching { JsonParser.parseString(req.body).asJsonObject }
                         .getOrNull()?.get("name")?.takeIf { it.isJsonPrimitive }?.asString
                 } ?: return json(400, obj { addProperty("message", "missing proxy name") })
-                if (!deps.selectProxy(selector, proxyName)) {
+                if (!deps.selectProxy(effectiveSelector, proxyName)) {
                     return json(404, obj { addProperty("message", "group or proxy not found") })
                 }
                 ApiResponse.Immediate(204, "text/plain", ByteArray(0))
@@ -466,8 +472,10 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
         val group = deps.groups().firstOrNull { it.name == name }
         val guid = when {
             group != null -> RouteEngine.selectMember(group, deps.delays())
-            name == "GLOBAL" -> deps.groups().firstOrNull { it.name == RouteEngine.FALLBACK_GROUP_NAME }
-                ?.effectiveSelectedMemberGuid()
+            // No "GLOBAL" branch (v1.0.21): it is not a group anymore,
+            // so /proxies/GLOBAL/delay and /group/GLOBAL/delay answer
+            // 404 like any unknown name. Only PUT keeps the GLOBAL
+            // alias (see handleProxies).
             else -> names.entries.firstOrNull { it.value == name }?.key
         } ?: return json(404, obj { addProperty("message", "proxy not found") })
         val delay = deps.delayTest(guid, url, timeoutMs)
