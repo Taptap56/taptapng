@@ -36,13 +36,15 @@ sealed interface RouteDecision {
  * - [RouteRule.TARGET_DIRECT] / [RouteRule.TARGET_REJECT] decide
  *   immediately when their rule matches.
  * - When NO rule matches at all (e.g. the list has no FINAL rule),
- *   the engine falls back to the group named [FALLBACK_GROUP_NAME]
- *   ("taptap" — the default group [com.taptap.ng.data.GroupsStore]
- *   creates) when it exists and has a usable member; otherwise
- *   [RouteDecision.Direct] — fail-open, so traffic still flows
- *   rather than being silently dropped. A default configuration
- *   always has FINAL → taptap, so this path only runs for a
- *   hand-edited config without FINAL.
+ *   the engine falls back to the main group (see [RouteEngine.mainGroup]):
+ *   the stored main-group id first, then the group named
+ *   [FALLBACK_GROUP_NAME] ("taptap" — the default group
+ *   [com.taptap.ng.data.GroupsStore] creates) for configs that
+ *   predate the stored id, when it exists and has a usable member;
+ *   otherwise [RouteDecision.Direct] — fail-open, so traffic still
+ *   flows rather than being silently dropped. A default
+ *   configuration always has FINAL → main group, so this path only
+ *   runs for a hand-edited config without FINAL.
  *
  * Member selection ([selectMember]):
  * - SELECT → the group's [ProxyGroup.effectiveSelectedMemberGuid].
@@ -60,9 +62,9 @@ sealed interface RouteDecision {
  *
  * Clash mode (M7, W3 — [SettingsStore.clashMode], PATCH /configs):
  * - "rule" (default) = the rule loop below.
- * - "global" = always the selected/effective member of the group
- *   named [FALLBACK_GROUP_NAME] ("taptap"), or the first group when
- *   there is no such group; an unusable group falls back to
+ * - "global" = always the selected/effective member of the main
+ *   group (see [RouteEngine.mainGroup]), or the first group when there is
+ *   no main group; an unusable group falls back to
  *   [RouteDecision.Direct] (fail-open).
  * - "direct" = always [RouteDecision.Direct].
  * An unknown mode value behaves like "rule".
@@ -70,8 +72,12 @@ sealed interface RouteDecision {
 object RouteEngine {
 
     /**
-     * Name of the fallback group used when no rule matches. Must
-     * stay equal to
+     * Name of the fallback group used when no rule matches. Kept
+     * for configs that predate the stored main-group id (see
+     * [mainGroup]): [com.taptap.ng.data.GroupsStore] still
+     * creates the default group under this name, and the name is
+     * the fallback when no stored id is available. Must stay
+     * equal to
      * [com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME].
      */
     const val FALLBACK_GROUP_NAME = "taptap"
@@ -80,6 +86,18 @@ object RouteEngine {
     const val MODE_RULE = "rule"
     const val MODE_GLOBAL = "global"
     const val MODE_DIRECT = "direct"
+
+    /**
+     * The main group for [groups]: the group with id
+     * [mainGroupId] first (v1.0.23 — the id
+     * [com.taptap.ng.data.GroupsStore] persists, so a rename
+     * never moves it), then the group named [FALLBACK_GROUP_NAME]
+     * for callers / configs without a stored id. Null when
+     * neither exists.
+     */
+    fun mainGroup(groups: List<ProxyGroup>, mainGroupId: String?): ProxyGroup? =
+        mainGroupId?.let { id -> groups.firstOrNull { it.id == id } }
+            ?: groups.firstOrNull { it.name == FALLBACK_GROUP_NAME }
 
     fun resolve(
         host: String?,
@@ -91,11 +109,20 @@ object RouteEngine {
         delays: Map<String, Long?>,
         /** Clash mode: "rule" (default), "global", or "direct". */
         mode: String = MODE_RULE,
+        /**
+         * v1.0.23: id of the main group (from
+         * [com.taptap.ng.data.GroupsStore.mainGroupId]) — the
+         * fallback / global group is picked BY THIS ID, not by
+         * name, so it follows the group through a rename. Null
+         * keeps the legacy name lookup (hand-built callers, old
+         * tests).
+         */
+        mainGroupId: String? = null,
     ): RouteDecision {
         when (mode.trim().lowercase()) {
             MODE_DIRECT -> return RouteDecision.Direct
             MODE_GLOBAL -> {
-                val group = groups.firstOrNull { it.name == FALLBACK_GROUP_NAME }
+                val group = mainGroup(groups, mainGroupId)
                     ?: groups.firstOrNull()
                 if (group != null) {
                     selectMember(group, delays)?.let { return RouteDecision.Proxy(it) }
@@ -117,8 +144,8 @@ object RouteEngine {
                 }
             }
         }
-        // No rule matched: fall back to the "taptap" group, else Direct.
-        val fallback = groups.firstOrNull { it.name == FALLBACK_GROUP_NAME }
+        // No rule matched: fall back to the main group, else Direct.
+        val fallback = mainGroup(groups, mainGroupId)
         if (fallback != null) {
             selectMember(fallback, delays)?.let { return RouteDecision.Proxy(it) }
         }

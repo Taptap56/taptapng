@@ -31,6 +31,16 @@ internal data class GroupsConfig(
     val groups: List<ProxyGroup> = emptyList(),
     @SerializedName(value = "rules", alternate = ["b"])
     val rules: List<RouteRule> = emptyList(),
+    /**
+     * v1.0.23: id of the main group. Null in files written by
+     * older builds — [GroupsStore.load] migrates it (see
+     * [GroupsStore.migrateMainGroupId]) and persists the result.
+     * The main group is identified BY THIS ID, never by name, so
+     * renaming it never breaks the route engine, the live switch,
+     * or the Clash API's GLOBAL alias.
+     */
+    @SerializedName("mainGroupId")
+    val mainGroupId: String? = null,
 )
 
 /**
@@ -67,6 +77,17 @@ class GroupsStore(private val file: File) {
 
     @Volatile
     var rules: MutableList<RouteRule> = mutableListOf()
+        private set
+
+    /**
+     * v1.0.23: id of the main group (persisted as
+     * [GroupsConfig.mainGroupId]). Null while the file has no
+     * groups at all; [load] (and [removeGroup]) always resolve it
+     * to an existing group when one exists, so callers can rely
+     * on [mainGroup] instead of matching the group by name.
+     */
+    @Volatile
+    var mainGroupId: String? = null
         private set
 
     /**
@@ -108,6 +129,7 @@ class GroupsStore(private val file: File) {
             }
             groups = cfg.groups.toMutableList()
             rules = cfg.rules.toMutableList()
+            mainGroupId = cfg.mainGroupId
         }.onFailure {
             corrupt = true
         }
@@ -122,7 +144,12 @@ class GroupsStore(private val file: File) {
         // "taptap" — migrate a file written by an older build (see
         // [migrateDefaultGroupName]) before pruning, and persist
         // the migration so the next load is a no-op.
-        if (migrateDefaultGroupName()) save()
+        // v1.0.23: resolve the main-group id AFTER that rename, so
+        // a pre-v1.0.23 file (no mainGroupId) picks up the renamed
+        // group, not the stale "Proxy" name.
+        val renamed = migrateDefaultGroupName()
+        val mainResolved = migrateMainGroupId()
+        if (renamed || mainResolved) save()
         if (profiles != null) {
             pruneMissingProfiles(profiles.map { it.guid }.toSet())
         }
@@ -131,9 +158,9 @@ class GroupsStore(private val file: File) {
     fun save() {
         file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(gson.toJson(GroupsConfig(CURRENT_VERSION, groups, rules)))
+        tmp.writeText(gson.toJson(GroupsConfig(CURRENT_VERSION, groups, rules, mainGroupId)))
         if (!tmp.renameTo(file)) {
-            file.writeText(gson.toJson(GroupsConfig(CURRENT_VERSION, groups, rules)))
+            file.writeText(gson.toJson(GroupsConfig(CURRENT_VERSION, groups, rules, mainGroupId)))
         }
     }
 
@@ -150,6 +177,7 @@ class GroupsStore(private val file: File) {
         rules = mutableListOf(
             RouteRule(type = RouteRuleType.FINAL, target = group.id),
         )
+        mainGroupId = group.id
     }
 
     /**
@@ -250,6 +278,81 @@ class GroupsStore(private val file: File) {
         return changed
     }
 
+    /**
+     * v1.0.23: the main group, resolved BY ID — never by name.
+     * Resolution order (the stored id wins when it still exists):
+     * stored [mainGroupId] → the group the FINAL rule targets →
+     * the group named [DEFAULT_GROUP_NAME] → the first group →
+     * null (no groups at all). The FINAL-target step is why the
+     * v1.0.21 migration order matters: a pre-v1.0.23 file whose
+     * default group was already renamed by hand still resolves
+     * through its FINAL rule. The FINAL target is NOT the
+     * identity itself — the user can re-point or delete the FINAL
+     * rule, so the stored id is what survives a rename; the
+     * fallbacks only cover files / states that have no stored id
+     * (or a stale one, e.g. the main group was just deleted).
+     */
+    fun mainGroup(): ProxyGroup? {
+        mainGroupId?.let { id -> findGroup(id)?.let { return it } }
+        rules.firstOrNull { it.type == RouteRuleType.FINAL }
+            ?.target?.let { target -> findGroup(target)?.let { return it } }
+        groups.firstOrNull { it.name == DEFAULT_GROUP_NAME }?.let { return it }
+        return groups.firstOrNull()
+    }
+
+    /**
+     * v1.0.23: persist the main-group id when the loaded file has
+     * none (pre-v1.0.23) or a stale one (the group is gone).
+     * Runs AFTER [migrateDefaultGroupName], so the "taptap"
+     * group it finds is the already-renamed one. Returns true
+     * when the stored id changed (the caller persists it).
+     */
+    private fun migrateMainGroupId(): Boolean {
+        val stored = mainGroupId
+        if (stored != null && groups.any { it.id == stored }) return false
+        val resolved = mainGroup()
+        if (resolved?.id == stored) return false
+        mainGroupId = resolved?.id
+        return true
+    }
+
+    /** Outcome of [renameMainGroup] — the card shows the message. */
+    sealed interface RenameMainGroupResult {
+        /** Renamed (and saved); [group] is the renamed group. */
+        data class Renamed(val group: ProxyGroup) : RenameMainGroupResult
+
+        /** The new name was blank. */
+        object Blank : RenameMainGroupResult
+
+        /** Another group already uses the name. */
+        object Duplicate : RenameMainGroupResult
+
+        /** There is no group to rename (empty group list). */
+        object NoMainGroup : RenameMainGroupResult
+    }
+
+    /**
+     * v1.0.23: rename the main group (the "Grup utama" card).
+     * Identity is the stored [mainGroupId], so the rename only
+     * changes the name — rules, the route engine, the live
+     * switch and the Clash API keep working untouched. The name
+     * is trimmed; blank and duplicate names are rejected (the
+     * store is left unchanged). Same validation as the group
+     * edit dialog's blank check, plus the duplicate check the
+     * dialog lacks.
+     */
+    fun renameMainGroup(newName: String): RenameMainGroupResult {
+        val name = newName.trim()
+        if (name.isBlank()) return RenameMainGroupResult.Blank
+        val main = mainGroup() ?: return RenameMainGroupResult.NoMainGroup
+        if (groups.any { it.id != main.id && it.name == name }) {
+            return RenameMainGroupResult.Duplicate
+        }
+        val renamed = main.copy(name = name)
+        updateGroup(renamed)
+        return RenameMainGroupResult.Renamed(renamed)
+    }
+
     fun findGroup(id: String): ProxyGroup? = groups.firstOrNull { it.id == id }
 
     fun findRule(id: String): RouteRule? = rules.firstOrNull { it.id == id }
@@ -268,7 +371,16 @@ class GroupsStore(private val file: File) {
     }
 
     fun removeGroup(id: String) {
+        val wasMain = id == mainGroupId
         groups.removeAll { it.id == id }
+        if (wasMain) {
+            // The main group is gone: re-resolve (FINAL target /
+            // first group) so mainGroupId never points at a deleted
+            // group. The FINAL rule itself keeps its stale target —
+            // the engine already skips stale targets.
+            mainGroupId = null
+            migrateMainGroupId()
+        }
         save()
     }
 

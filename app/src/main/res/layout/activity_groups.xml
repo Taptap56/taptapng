@@ -36,6 +36,52 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
+                <!-- v1.0.23: kartu "Grup utama" — rename grup utama
+                     (tersimpan by id di GroupsStore.mainGroupId).
+                     Di dalam groups_section supaya ikut tersembunyi
+                     di halaman Rute (v1.0.22). -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="16dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/groups_main_group"
+                        android:textAppearance="?attr/textAppearanceTitleSmall" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/main_group_name"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:hint="@string/groups_main_group"
+                            android:inputType="text"
+                            android:maxLines="1" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/save_main_group"
+                            style="@style/Widget.Material3.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/groups_main_group_save" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/groups_main_group_hint"
+                        android:textAppearance="?attr/textAppearanceBodySmall" />
+                </LinearLayout>
+
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

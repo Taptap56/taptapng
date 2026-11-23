@@ -385,8 +385,9 @@ class TaptapVpnService : VpnService() {
         // The routed entry before the switch — the selection to
         // restore when any step below fails.
         val groupsStore = ClashApiRuntime.refreshGroups(filesDir)
-        val oldGuid = groupsStore.groups
-            .firstOrNull { it.name == com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME }
+        // v1.0.23: the main group BY ID — a renamed main group
+        // still yields the routed entry here.
+        val oldGuid = groupsStore.mainGroup()
             ?.effectiveSelectedMemberGuid()
             ?: store.selectedGuid
         // Root mode cannot switch live (single-client forwarder,
@@ -398,8 +399,8 @@ class TaptapVpnService : VpnService() {
                 "SWITCH",
                 "Root mode: pindah live tidak didukung — restart tunnel ke '${item.displayName()}'",
             )
-            applyLiveSwitchSelection(groupsStore.groups, newGuid)?.let { updated ->
-                updated.firstOrNull { it.name == com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME }
+            applyLiveSwitchSelection(groupsStore.groups, newGuid, groupsStore.mainGroupId)?.let { updated ->
+                updated.firstOrNull { it.id == groupsStore.mainGroup()?.id }
                     ?.let { groupsStore.updateGroup(it) }
             }
             stopTunnel()
@@ -430,8 +431,8 @@ class TaptapVpnService : VpnService() {
             return
         }
         try {
-            applyLiveSwitchSelection(groupsStore.groups, newGuid)?.let { updated ->
-                updated.firstOrNull { it.name == com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME }
+            applyLiveSwitchSelection(groupsStore.groups, newGuid, groupsStore.mainGroupId)?.let { updated ->
+                updated.firstOrNull { it.id == groupsStore.mainGroup()?.id }
                     ?.let { groupsStore.updateGroup(it) }
             }
         } catch (e: Exception) {
@@ -886,8 +887,10 @@ class TaptapVpnService : VpnService() {
         // SELECT lama (seleksi grup tidak pernah disinkron dari
         // ProfileStore sesudah grup default dibuat), jadi "pilih +
         // start" pun tidak benar-benar pindah server.
-        applyLiveSwitchSelection(groupsStore.groups, item.guid)?.let { updated ->
-            updated.firstOrNull { it.name == com.taptap.ng.data.GroupsStore.DEFAULT_GROUP_NAME }
+        // v1.0.23: by main-group id — a renamed main group still
+        // syncs here.
+        applyLiveSwitchSelection(groupsStore.groups, item.guid, groupsStore.mainGroupId)?.let { updated ->
+            updated.firstOrNull { it.id == groupsStore.mainGroup()?.id }
                 ?.let { groupsStore.updateGroup(it) }
         }
         val urlCache = UrlTestCache().also { it.seedFromObservatory() }
@@ -949,6 +952,10 @@ class TaptapVpnService : VpnService() {
                         host, ip, port,
                         groupsStore.groups, groupsStore.rules, urlCache.delays(),
                         mode = SettingsStore(this).clashMode,
+                        // v1.0.23: the engine's fallback / global
+                        // group follows the main group by id, so a
+                        // rename never moves the fallback.
+                        mainGroupId = groupsStore.mainGroupId,
                     )
                 },
                 clientProvider = clientForGuid,
