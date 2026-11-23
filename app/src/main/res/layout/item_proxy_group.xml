@@ -20,17 +20,33 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal">
 
+            <!-- v1.0.26 (bug 1 of 3): the name used the undefined
+                 ?attr/textAppearanceTitleSmall — assigned nowhere
+                 in the shipped APK (aapt2 dump resources on
+                 v1.0.25), so it resolved to ID 0 and rendered tiny
+                 and dim next to the full-size type ("taptap SELECT",
+                 05:03 screenshot). BodyLarge is the defined 16sp
+                 onSurface style (v1.0.25 section labels, server-row
+                 name). The name is also bounded 0dp + weight 1 +
+                 ellipsize + maxLines 1 (the remarks pattern in
+                 item_server.xml): the NAME yields, never the type —
+                 before, both were unbounded wrap_content, so a long
+                 name shoved the type out of the row. -->
             <TextView
                 android:id="@+id/group_name"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceTitleSmall" />
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAppearance="?attr/textAppearanceBodyLarge" />
 
             <TextView
                 android:id="@+id/group_type"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
+                android:maxLines="1"
                 android:textColor="?attr/colorPrimary"
                 android:textAppearance="?attr/textAppearanceBodySmall" />
         </LinearLayout>

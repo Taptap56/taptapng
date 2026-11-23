@@ -26,15 +26,27 @@
                 android:id="@+id/rule_type"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:maxLines="1"
                 android:textColor="?attr/colorPrimary"
                 android:textAppearance="?attr/textAppearanceBodySmall" />
 
+            <!-- v1.0.26 (bug 1 of 3): same defect as group_name —
+                 the pattern used the undefined
+                 ?attr/textAppearanceTitleSmall (ID 0 fallback, tiny
+                 and dim) and was unbounded. BodyLarge (defined 16sp
+                 onSurface) + 0dp/weight/ellipsize/maxLines 1, the
+                 same fix; the rule row has even less room (toggle +
+                 4 x 48dp buttons). The type keeps its defined
+                 BodySmall and gains maxLines 1. -->
             <TextView
                 android:id="@+id/rule_pattern"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
                 android:layout_marginStart="8dp"
-                android:textAppearance="?attr/textAppearanceTitleSmall" />
+                android:textAppearance="?attr/textAppearanceBodyLarge" />
         </LinearLayout>
 
         <TextView
