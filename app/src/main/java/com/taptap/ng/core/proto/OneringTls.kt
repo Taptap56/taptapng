@@ -13,7 +13,9 @@ import java.security.cert.X509Certificate
 import java.util.Collections
 import java.util.Enumeration
 import java.util.Hashtable
+import javax.net.ssl.SSLEngine
 import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
 import org.bouncycastle.tls.CertificateRequest
 import org.bouncycastle.tls.DefaultTlsClient
@@ -143,13 +145,37 @@ internal class OrderedExtensions : Hashtable<Int, ByteArray>() {
 /**
  * Shared Bouncy Castle certificate validation (Onering, v1.0.23):
  * trust-all when insecure, otherwise the platform default
- * TrustManager (no hostname verification — a raw TLS client has
- * none, same as the SSLSocket path). OneringTlsTest covers this
- * behavior (platform validation + untrusted rejection).
+ * TrustManager with HOSTNAME-AWARE verification against [hostname]
+ * (the SNI / real domain).
+ *
+ * v1.0.20 (regression fix): the platform TrustManager MUST be
+ * called through the hostname-aware 3-arg overload
+ * `checkServerTrusted(chain, authType, hostname)` of
+ * [X509ExtendedTrustManager]. Since v1.0.19 the app ships a
+ * `<domain-config>` in network_security_config.xml, and Android's
+ * NetworkSecurityTrustManager REFUSES the 2-arg call in that case
+ * ("Domain specific configurations require that hostname aware
+ * checkServerTrusted(X509Certificate[], String, String) is used") —
+ * which broke every Onering entry in v1.0.19 (TLS gagal, 4x on the
+ * phone log 2026-11-24 01:20). The plain SSLSocket path survived
+ * because Conscrypt calls the 3-arg overload itself with the peer
+ * host. For a TrustManager that is NOT an X509ExtendedTrustManager
+ * (test doubles, trust-all wrappers) the 2-arg call is kept as a
+ * fallback. A blank [hostname] also falls back to 2-arg — there is
+ * nothing to verify against (cannot happen through [OneringTls.wrap],
+ * which always falls back to the entry address).
+ *
+ * Hostname verification against the SNI is CORRECT for Onering:
+ * the SNI is the real domain and the edge certificate is issued
+ * for it (e.g. SNI d3vaf207v45s96.cloudfront.net, cert
+ * *.cloudfront.net). An entry whose certificate does NOT match its
+ * SNI is now rejected instead of connecting — that is the intended
+ * behaviour, not a bug to work around.
  */
 internal fun bcTlsAuthentication(
     insecure: Boolean,
     trustManager: X509TrustManager?,
+    hostname: String,
 ): TlsAuthentication {
     return object : TlsAuthentication {
         override fun notifyServerCertificate(serverCertificate: TlsServerCertificate) {
@@ -169,7 +195,18 @@ internal fun bcTlsAuthentication(
                 "RSA" -> "RSA"
                 else -> x509[0].publicKey.algorithm
             }
-            (trustManager ?: platformTrustManager()).checkServerTrusted(x509, authType)
+            val tm = trustManager ?: platformTrustManager()
+            // v1.0.20: hostname-aware 3-arg call — the 2-arg call is
+            // refused by NetworkSecurityTrustManager once a
+            // <domain-config> exists (v1.0.19 regression). Fall back
+            // to 2-arg only for a non-extended TrustManager or a
+            // blank hostname (nothing to verify against).
+            val extended = tm as? X509ExtendedTrustManager
+            if (hostname.isNotBlank() && extended != null) {
+                extended.checkServerTrusted(x509, authType, hostname)
+            } else {
+                tm.checkServerTrusted(x509, authType)
+            }
         }
 
         override fun getClientCredentials(
@@ -188,8 +225,9 @@ private fun platformTrustManager(): X509TrustManager {
  * Bouncy Castle TLS client for an Onering entry: SNI = real domain,
  * ALPN = item.alpn, and the 0xff00 bug extension first. Certificate
  * validation mirrors TlsUtil: trust-all when insecure, otherwise the
- * platform default TrustManager (no hostname verification — a raw
- * TLS client has none, same as the SSLSocket path).
+ * platform default TrustManager with hostname verification against
+ * the SNI (v1.0.20: hostname-aware 3-arg checkServerTrusted — the
+ * 2-arg call is refused on Android once a <domain-config> exists).
  */
 internal class OneringTlsClient(
     crypto: org.bouncycastle.tls.crypto.TlsCrypto,
@@ -263,7 +301,7 @@ internal class OneringTlsClient(
     }
 
     override fun getAuthentication(): TlsAuthentication =
-        bcTlsAuthentication(insecure, trustManager)
+        bcTlsAuthentication(insecure, trustManager, sni)
 }
 
 /**

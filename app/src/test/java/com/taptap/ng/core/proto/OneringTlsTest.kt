@@ -6,10 +6,14 @@ import com.taptap.ng.data.ProfileItem
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.Socket
 import java.security.KeyStore
+import java.security.cert.X509Certificate
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLEngine
 import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -33,14 +37,14 @@ import org.junit.jupiter.api.Test
  */
 class OneringTlsTest {
 
-    private fun oneringItem(insecure: Boolean = true) = ProfileItem(
+    private fun oneringItem(insecure: Boolean = true, sni: String = "support.zoom.us") = ProfileItem(
         remarks = "Onering test",
         address = "127.0.0.1",
         port = 443,
         tls = true,
         insecure = insecure,
         network = "ws",
-        sni = "support.zoom.us",
+        sni = sni,
         oneringEnabled = true,
         oneringBug = "live.iflix.com",
     )
@@ -192,8 +196,12 @@ class OneringTlsTest {
     fun `handshake completes with platform certificate validation`() {
         // insecure=false + trust manager trusting the test keystore:
         // the BC client must validate the chain exactly like the
-        // SSLSocket path does (no hostname check, chain check yes).
-        val captured = runHandshake(oneringItem(insecure = false), testTrustManager())
+        // SSLSocket path does — chain check AND hostname check
+        // against the SNI (v1.0.20). The test cert is issued for
+        // localhost, so the SNI here must be localhost, not the
+        // default support.zoom.us (that mismatch is covered by the
+        // hostname-mismatch test below).
+        val captured = runHandshake(oneringItem(insecure = false, sni = "localhost"), testTrustManager())
         val extensions = parseClientHelloExtensions(captured)
         assertEquals(OneringHello.EXTENSION_TYPE, extensions[0].first)
     }
@@ -214,6 +222,125 @@ class OneringTlsTest {
         try {
             assertThrows(Exception::class.java) {
                 OneringTls.wrap(serverToClient.input, clientToServer.output, oneringItem(insecure = false))
+            }
+        } finally {
+            runCatching { serverSession.close() }
+            serverThread.join(5_000)
+        }
+    }
+
+    /**
+     * v1.0.20: X509ExtendedTrustManager that records WHICH
+     * checkServerTrusted overload the BC client calls, delegating
+     * the real validation to the platform test trust manager.
+     * Proves the client calls the hostname-aware 3-arg overload
+     * with the SNI — the call Android's NetworkSecurityTrustManager
+     * requires once a <domain-config> exists (the 2-arg call is
+     * refused there and broke every Onering entry in v1.0.19).
+     */
+    private class RecordingExtendedTrustManager(
+        private val delegate: X509TrustManager,
+    ) : X509ExtendedTrustManager() {
+        var twoArgCalls = 0
+        var threeArgCalls = 0
+        var threeArgHostname: String? = null
+
+        private fun extendedDelegate(): X509ExtendedTrustManager =
+            delegate as X509ExtendedTrustManager
+
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) =
+            delegate.checkClientTrusted(chain, authType)
+
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+            twoArgCalls++
+            delegate.checkServerTrusted(chain, authType)
+        }
+
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, host: String) {
+            threeArgCalls++
+            threeArgHostname = host
+            extendedDelegate().checkServerTrusted(chain, authType, host)
+        }
+
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, engine: SSLEngine) =
+            extendedDelegate().checkServerTrusted(chain, authType, engine)
+
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, socket: Socket) =
+            extendedDelegate().checkServerTrusted(chain, authType, socket)
+
+        override fun getAcceptedIssuers(): Array<X509Certificate> = delegate.acceptedIssuers
+    }
+
+    /**
+     * v1.0.20: plain (non-extended) X509TrustManager that records
+     * its 2-arg calls and delegates validation to the platform
+     * test trust manager. Proves the fallback path: when the
+     * TrustManager is not an X509ExtendedTrustManager, the client
+     * still validates (2-arg) instead of crashing on a cast.
+     */
+    private class RecordingPlainTrustManager(
+        private val delegate: X509TrustManager,
+    ) : X509TrustManager {
+        var twoArgCalls = 0
+
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) =
+            delegate.checkClientTrusted(chain, authType)
+
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+            twoArgCalls++
+            delegate.checkServerTrusted(chain, authType)
+        }
+
+        override fun getAcceptedIssuers(): Array<X509Certificate> = delegate.acceptedIssuers
+    }
+
+    @Test
+    fun `hostname aware three arg overload is called with SNI`() {
+        // v1.0.20 regression test: the BC client must call
+        // checkServerTrusted(chain, authType, hostname) with the
+        // SNI, never the 2-arg overload Android refuses once a
+        // <domain-config> exists. SNI localhost matches the test
+        // cert (CN/SAN localhost), so the handshake must complete.
+        val recording = RecordingExtendedTrustManager(testTrustManager())
+        runHandshake(oneringItem(insecure = false, sni = "localhost"), recording)
+        assertEquals(1, recording.threeArgCalls, "overload 3-arg harus dipanggil tepat 1x")
+        assertEquals("localhost", recording.threeArgHostname)
+        assertEquals(0, recording.twoArgCalls, "overload 2-arg tidak boleh dipanggil")
+    }
+
+    @Test
+    fun `fallback to two arg when trust manager is not extended`() {
+        // v1.0.20: a plain X509TrustManager (not extended) must
+        // still validate through the 2-arg call — no blind cast,
+        // no crash, handshake completes.
+        val recording = RecordingPlainTrustManager(testTrustManager())
+        runHandshake(oneringItem(insecure = false, sni = "localhost"), recording)
+        assertEquals(1, recording.twoArgCalls, "overload 2-arg harus dipanggil tepat 1x")
+    }
+
+    @Test
+    fun `handshake fails when hostname does not match certificate`() {
+        // v1.0.20: hostname IS verified against the SNI now. The
+        // test cert is issued for localhost; SNI support.zoom.us
+        // must be rejected, not silently trusted. Same harness
+        // shape as the untrusted-cert test above.
+        val clientToServer = QueueChannel()
+        val serverToClient = QueueChannel()
+        val serverEngine = serverContext().createSSLEngine()
+        serverEngine.useClientMode = false
+        val serverSession = TlsEngine.TlsSession(serverEngine, clientToServer.input, serverToClient.output)
+        val serverThread = Thread({
+            runCatching { serverSession.handshake() }
+        }, "onering-test-server-hostname-mismatch").apply { isDaemon = true }
+        serverThread.start()
+        try {
+            assertThrows(Exception::class.java) {
+                OneringTls.wrap(
+                    serverToClient.input,
+                    clientToServer.output,
+                    oneringItem(insecure = false, sni = "support.zoom.us"),
+                    testTrustManager(),
+                )
             }
         } finally {
             runCatching { serverSession.close() }
