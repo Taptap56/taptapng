@@ -412,6 +412,85 @@ class ClashApiHandlerTest {
         assertEquals(20L, conn.get("download").asLong)
     }
 
+    // v1.0.29: every connection carries rule / rulePayload /
+    // chains, in the exact shape yacd's `vJ` destructures
+    // (`{id,upload,download,start,chains,rule,rulePayload,metadata}`).
+    // A ConnectionInfo built without the new fields (the forwarder's
+    // construction sites until the session record carries them)
+    // serializes as "" / "" / [] — never a missing key.
+    @Test
+    fun connectionsSnapshotEmitsRulePayloadAndChainsDefaults() {
+        val deps = defaultDeps()
+        val handler = ClashApiHandler(deps)
+        val json = JsonParser.parseString(handler.connectionsSnapshotJson()).asJsonObject
+        val conn = json.getAsJsonArray("connections")[0].asJsonObject
+        assertTrue(conn.get("rule").isJsonPrimitive)
+        assertEquals("", conn.get("rule").asString)
+        assertTrue(conn.get("rulePayload").isJsonPrimitive)
+        assertEquals("", conn.get("rulePayload").asString)
+        assertTrue(conn.get("chains").isJsonArray)
+        assertEquals(0, conn.getAsJsonArray("chains").size())
+    }
+
+    @Test
+    fun connectionsSnapshotCarriesRuleRulePayloadAndChains() {
+        val deps = defaultDeps()
+        deps.conns = listOf(
+            // FINAL -> proxy langsung.
+            ConnectionInfo(
+                id = "c-final", network = "tcp", host = "example.com",
+                destinationIp = "93.184.216.34", destinationPort = 443,
+                sourceIp = "10.0.0.2", sourcePort = 1234,
+                upload = 10L, download = 20L, startMs = 1_792_000_000_000L,
+                rule = "FINAL", rulePayload = "", chains = listOf("81"),
+            ),
+            // DOMAIN-SUFFIX -> grup bersarang taptap > tes > 81.
+            ConnectionInfo(
+                id = "c-nested", network = "tcp", host = "www.google.com",
+                destinationIp = "142.250.0.1", destinationPort = 443,
+                sourceIp = "10.0.0.2", sourcePort = 1235,
+                upload = 11L, download = 21L, startMs = 1_792_000_000_000L,
+                rule = "DOMAIN-SUFFIX", rulePayload = "google.com",
+                chains = listOf("taptap", "tes", "81"),
+            ),
+            // Bypass: FINAL -> DIRECT.
+            ConnectionInfo(
+                id = "c-direct", network = "tcp", host = "intranet.local",
+                destinationIp = "192.168.1.1", destinationPort = 80,
+                sourceIp = "10.0.0.2", sourcePort = 1236,
+                upload = 12L, download = 22L, startMs = 1_792_000_000_000L,
+                rule = "FINAL", rulePayload = "", chains = listOf("DIRECT"),
+            ),
+            // Blokir: FINAL -> REJECT.
+            ConnectionInfo(
+                id = "c-reject", network = "tcp", host = "ads.example.net",
+                destinationIp = "203.0.113.5", destinationPort = 443,
+                sourceIp = "10.0.0.2", sourcePort = 1237,
+                upload = 13L, download = 23L, startMs = 1_792_000_000_000L,
+                rule = "FINAL", rulePayload = "", chains = listOf("REJECT"),
+            ),
+        )
+        val handler = ClashApiHandler(deps)
+        val json = JsonParser.parseString(handler.connectionsSnapshotJson()).asJsonObject
+        assertEquals(4, json.get("total").asInt)
+        val conns = json.getAsJsonArray("connections")
+        fun stringsAt(i: Int, key: String): List<String> =
+            conns[i].asJsonObject.getAsJsonArray(key)
+                .map { it.asString }
+        assertEquals("FINAL", conns[0].asJsonObject.get("rule").asString)
+        assertEquals("", conns[0].asJsonObject.get("rulePayload").asString)
+        assertEquals(listOf("81"), stringsAt(0, "chains"))
+        assertEquals("DOMAIN-SUFFIX", conns[1].asJsonObject.get("rule").asString)
+        assertEquals("google.com", conns[1].asJsonObject.get("rulePayload").asString)
+        assertEquals(listOf("taptap", "tes", "81"), stringsAt(1, "chains"))
+        assertEquals("FINAL", conns[2].asJsonObject.get("rule").asString)
+        assertEquals("", conns[2].asJsonObject.get("rulePayload").asString)
+        assertEquals(listOf("DIRECT"), stringsAt(2, "chains"))
+        assertEquals("FINAL", conns[3].asJsonObject.get("rule").asString)
+        assertEquals("", conns[3].asJsonObject.get("rulePayload").asString)
+        assertEquals(listOf("REJECT"), stringsAt(3, "chains"))
+    }
+
     @Test
     fun deleteConnectionClosesItAndDeleteAllClosesAll() {
         val deps = defaultDeps()

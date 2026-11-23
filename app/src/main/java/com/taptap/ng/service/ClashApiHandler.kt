@@ -24,6 +24,22 @@ import java.util.TimeZone
  * (GET /connections). Byte counts come from the forwarder's
  * per-session SpeedStats; UDP sessions report 0 (the forwarder
  * does not count UDP bytes per session).
+ *
+ * v1.0.29: the rule fields, in the exact shape the bundled yacd
+ * expects (`assets/index-tgGzoeh6.js`, `vJ`): `rule` is the matched
+ * rule's type (e.g. "FINAL", "DOMAIN-SUFFIX"), `rulePayload` its
+ * pattern ("" for FINAL — yacd renders `rule` alone then), and
+ * `chains` is the resolved proxy chain as an array of strings,
+ * outermost group first, server last (["taptap","tes","81"]);
+ * ["DIRECT"] for a bypassed connection, ["REJECT"] for a blocked
+ * one. yacd keys the outbound type off `chains[0]` ("DIRECT" ->
+ * Direct, "REJECT"/"PASS" -> Reject, anything else -> Proxy) and
+ * renders the chain as `last -> first` (single element as-is,
+ * empty as ""). The three fields default to "" / "" / [] so the
+ * forwarder's existing construction sites keep compiling until
+ * the session record carries them (core worker: read them from
+ * the session record when building a ConnectionInfo — same
+ * names, same types).
  */
 data class ConnectionInfo(
     val id: String,
@@ -36,6 +52,9 @@ data class ConnectionInfo(
     val upload: Long,
     val download: Long,
     val startMs: Long,
+    val rule: String = "",
+    val rulePayload: String = "",
+    val chains: List<String> = emptyList(),
 )
 
 /** One parsed HTTP request (the server fills this in; the handler is pure). */
@@ -706,6 +725,15 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
                 addProperty("upload", c.upload)
                 addProperty("download", c.download)
                 addProperty("start", isoTime(c.startMs))
+                // v1.0.29: yacd's `vJ` destructures exactly these
+                // three (`{..., chains, rule, rulePayload, ...}`) —
+                // `chains` must be an ARRAY of strings (a non-array
+                // is treated as empty), `rulePayload` "" for FINAL.
+                addProperty("rule", c.rule)
+                addProperty("rulePayload", c.rulePayload)
+                add("chains", JsonArray().apply {
+                    for (node in c.chains) add(node)
+                })
             })
         }
         // Totals are tunnel-wide (closed sessions included), not just the live list.
