@@ -290,6 +290,30 @@ class GroupsStore(private val file: File) {
         save()
     }
 
+    /**
+     * Move a rule one step up (towards the head of the list, i.e.
+     * earlier in the top-down match order) or down. The swap is
+     * adjacent-only, so every other rule keeps its relative order.
+     * Returns false — and saves nothing — when the rule does not
+     * exist or is already at the requested edge. No FINAL guard:
+     * moving a rule below FINAL leaves it unreachable, which is
+     * the user's choice (same as TB).
+     */
+    fun moveRuleUp(id: String): Boolean = moveRule(id, -1)
+
+    fun moveRuleDown(id: String): Boolean = moveRule(id, +1)
+
+    private fun moveRule(id: String, delta: Int): Boolean {
+        val idx = rules.indexOfFirst { it.id == id }
+        val target = idx + delta
+        if (idx < 0 || target < 0 || target >= rules.size) return false
+        val rule = rules[idx]
+        rules[idx] = rules[target]
+        rules[target] = rule
+        save()
+        return true
+    }
+
     companion object {
         const val CURRENT_VERSION = 1
 

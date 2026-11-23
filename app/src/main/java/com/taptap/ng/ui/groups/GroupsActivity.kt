@@ -82,6 +82,8 @@ class GroupsActivity : AppCompatActivity() {
         ruleAdapter = RuleAdapter(
             onEdit = { showRuleDialog(it) },
             onDelete = { confirmDeleteRule(it) },
+            onMoveUp = { if (groupsStore.moveRuleUp(it.id)) refresh() },
+            onMoveDown = { if (groupsStore.moveRuleDown(it.id)) refresh() },
         )
         findViewById<RecyclerView>(R.id.groups_list).apply {
             layoutManager = LinearLayoutManager(this@GroupsActivity)
@@ -398,6 +400,8 @@ class GroupsActivity : AppCompatActivity() {
     private inner class RuleAdapter(
         private val onEdit: (RouteRule) -> Unit,
         private val onDelete: (RouteRule) -> Unit,
+        private val onMoveUp: (RouteRule) -> Unit,
+        private val onMoveDown: (RouteRule) -> Unit,
     ) : RecyclerView.Adapter<RuleAdapter.Holder>() {
         private var items: List<RouteRule> = emptyList()
 
@@ -410,6 +414,8 @@ class GroupsActivity : AppCompatActivity() {
             val type: TextView = view.findViewById(R.id.rule_type)
             val pattern: TextView = view.findViewById(R.id.rule_pattern)
             val target: TextView = view.findViewById(R.id.rule_target)
+            val moveUp: ImageButton = view.findViewById(R.id.rule_move_up)
+            val moveDown: ImageButton = view.findViewById(R.id.rule_move_down)
             val edit: ImageButton = view.findViewById(R.id.rule_edit)
             val delete: ImageButton = view.findViewById(R.id.rule_delete)
         }
@@ -431,6 +437,14 @@ class GroupsActivity : AppCompatActivity() {
                     groupsStore.findGroup(rule.target)?.name ?: rule.target,
                 )
             }
+            // Edges cannot move further that way: disable (dimmed),
+            // never hide — the row layout stays stable.
+            holder.moveUp.isEnabled = position > 0
+            holder.moveUp.alpha = if (position > 0) 1.0f else 0.3f
+            holder.moveDown.isEnabled = position < items.size - 1
+            holder.moveDown.alpha = if (position < items.size - 1) 1.0f else 0.3f
+            holder.moveUp.setOnClickListener { onMoveUp(rule) }
+            holder.moveDown.setOnClickListener { onMoveDown(rule) }
             holder.edit.setOnClickListener { onEdit(rule) }
             holder.delete.setOnClickListener { onDelete(rule) }
         }

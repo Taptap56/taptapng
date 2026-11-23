@@ -42,6 +42,25 @@
             android:textAppearance="?attr/textAppearanceBodySmall" />
     </LinearLayout>
 
+    <!-- Reorder: up/down move the rule one step in the top-down
+         match order. At the edges the button is disabled (dimmed),
+         never hidden, so the row layout stays stable. -->
+    <ImageButton
+        android:id="@+id/rule_move_up"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/groups_move_up"
+        android:src="@drawable/ic_arrow_up_24dp" />
+
+    <ImageButton
+        android:id="@+id/rule_move_down"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/groups_move_down"
+        android:src="@drawable/ic_arrow_down_24dp" />
+
     <ImageButton
         android:id="@+id/rule_edit"
         android:layout_width="48dp"

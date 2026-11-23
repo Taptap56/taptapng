@@ -125,6 +125,8 @@
     <string name="groups_add_rule">Tambah aturan</string>
     <string name="groups_edit">Ubah</string>
     <string name="groups_delete">Hapus</string>
+    <string name="groups_move_up">Pindah ke atas</string>
+    <string name="groups_move_down">Pindah ke bawah</string>
     <string name="groups_empty_groups">Belum ada grup</string>
     <string name="groups_empty_rules">Belum ada aturan</string>
     <string name="groups_members_count">%1$d anggota</string>
