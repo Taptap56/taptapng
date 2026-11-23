@@ -76,11 +76,7 @@ object ClashApiServer {
             return
         }
         val port = SettingsStore.clashApiPortInt(settings.clashApiPort)
-        val bindAddr = if (settings.clashApiAllowLan) {
-            InetAddress.getByName("0.0.0.0")
-        } else {
-            InetAddress.getLoopbackAddress()
-        }
+        val bindAddr = bindAddress(settings.clashApiAllowLan)
         val socket = try {
             ServerSocket(port, 50, bindAddr)
         } catch (e: IOException) {
@@ -116,6 +112,20 @@ object ClashApiServer {
             isRunning = false
         }
     }
+
+    /**
+     * Bind address for the Clash API listener (pure, JVM-testable).
+     *
+     * Non-LAN MUST be the IPv4 loopback `127.0.0.1`, never
+     * `InetAddress.getLoopbackAddress()`: on the phone that resolves
+     * to `::1` (IPv6 loopback) while the dashboard URL is hardcoded
+     * `http://127.0.0.1:<port>/ui/`, so the WebView got
+     * ERR_CONNECTION_REFUSED (regression v1.0.20). LAN keeps the
+     * `0.0.0.0` wildcard, unchanged.
+     */
+    internal fun bindAddress(allowLan: Boolean): InetAddress =
+        if (allowLan) InetAddress.getByName("0.0.0.0")
+        else InetAddress.getByName("127.0.0.1")
 
     /** Stop the listener (called by [restart]; process death stops it anyway). */
     @Synchronized
