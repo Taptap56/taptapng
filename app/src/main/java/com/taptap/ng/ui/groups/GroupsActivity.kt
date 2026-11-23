@@ -462,6 +462,20 @@ class GroupsActivity : AppCompatActivity() {
             }
             holder.edit.setOnClickListener { onEdit(group) }
             holder.delete.setOnClickListener { onDelete(group) }
+            // v1.0.27: the main group cannot be edited or deleted
+            // from its row — the ONLY way to change it is renaming
+            // it through the "Grup utama" card (rename by id, see
+            // saveMainGroupName). Both buttons are GONE on the main
+            // row, so it reclaims the space; every other group
+            // keeps edit + delete. Set in BOTH branches:
+            // RecyclerView recycles rows, so a reused main-group
+            // row must not keep a previous group's visible buttons
+            // (and a reused ordinary row must not stay hidden).
+            // Identity is the id via groupActionsVisible, never
+            // the name — a rename must not unhide the buttons.
+            val actionsVisible = groupActionsVisible(group, groupsStore.mainGroupId)
+            holder.edit.visibility = if (actionsVisible) View.VISIBLE else View.GONE
+            holder.delete.visibility = if (actionsVisible) View.VISIBLE else View.GONE
         }
     }
 
@@ -506,6 +520,18 @@ class GroupsActivity : AppCompatActivity() {
                     groupsStore.findGroup(rule.target)?.name ?: rule.target,
                 )
             }
+            // v1.0.27: FINAL shows NONE of the four action buttons
+            // — it cannot be moved, edited or deleted. The toggle
+            // was already hidden for FINAL (v1.0.23, below); the
+            // four buttons complete the lock. Non-FINAL rules keep
+            // all four, with the existing edge dimming on move
+            // up/down. Visibility is set in BOTH branches for the
+            // same recycling reason as the group row.
+            val actionsVisible = ruleActionsVisible(rule)
+            holder.moveUp.visibility = if (actionsVisible) View.VISIBLE else View.GONE
+            holder.moveDown.visibility = if (actionsVisible) View.VISIBLE else View.GONE
+            holder.edit.visibility = if (actionsVisible) View.VISIBLE else View.GONE
+            holder.delete.visibility = if (actionsVisible) View.VISIBLE else View.GONE
             // Edges cannot move further that way: disable (dimmed),
             // never hide — the row layout stays stable.
             holder.moveUp.isEnabled = position > 0
@@ -592,5 +618,29 @@ class GroupsActivity : AppCompatActivity() {
             ProxyGroupType.URL_TEST -> "URL-TEST"
             ProxyGroupType.FALLBACK -> "FALLBACK"
         }
+
+        /**
+         * v1.0.27: whether a rule row shows its action buttons
+         * (move up/down, edit, delete). FINAL never does — it is
+         * the catch-all "Rute akhir" and must stay last, unedited
+         * and undeleted; every other rule type keeps the full set.
+         * (FINAL already had no on/off toggle since v1.0.23.)
+         * Pure, JVM-tested.
+         */
+        fun ruleActionsVisible(rule: RouteRule): Boolean =
+            rule.type != RouteRuleType.FINAL
+
+        /**
+         * v1.0.27: whether a group row shows its edit/delete
+         * buttons. The main group never does: the ONLY way to
+         * change it is renaming it through the "Grup utama" card
+         * ([GroupsStore.renameMainGroup]). Identity is the stored
+         * id — never the name — so renaming the main group does
+         * not unhide its buttons. A null [mainGroupId] (no group
+         * resolved yet) leaves every row editable. Pure,
+         * JVM-tested.
+         */
+        fun groupActionsVisible(group: ProxyGroup, mainGroupId: String?): Boolean =
+            group.id != mainGroupId
     }
 }
