@@ -166,6 +166,19 @@ class RouteEngineTest {
     }
 
     @Test
+    fun reversingRuleOrderChangesTheWinner() {
+        // Two overlapping rules over the same host: whichever is
+        // listed first wins — so a reorder flips the decision.
+        // This is what the Rute page's up/down buttons change.
+        val groups = listOf(group("g1", selected = "a"), group("g2", selected = "b"))
+        val suffix = rule(RouteRuleType.DOMAIN_SUFFIX, pattern = "example.com", target = "g1")
+        val exact = rule(RouteRuleType.DOMAIN, pattern = "example.com", target = "g2")
+        val final = rule(RouteRuleType.FINAL, target = "g2")
+        assertEquals("a", proxyGuid(RouteEngine.resolve("example.com", addr("1.2.3.4"), 443, groups, listOf(suffix, exact, final), emptyMap())))
+        assertEquals("b", proxyGuid(RouteEngine.resolve("example.com", addr("1.2.3.4"), 443, groups, listOf(exact, suffix, final), emptyMap())))
+    }
+
+    @Test
     fun ipOnlyConnectionMatchesCidrRuleAndSkipsDomainRules() {
         val groups = listOf(group("g1", selected = "a"))
         val rules = listOf(
