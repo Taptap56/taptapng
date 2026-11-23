@@ -2,8 +2,9 @@
 
 Rilis 24 November 2026. APK `taptapng-v1.0.26.apk` (vc27, `com.taptap.ng`,
 ditandatangani keystore rilis stabil — bisa menimpa v1.0.2 ke atas).
-20 tes unit baru (total 946 @Test, dihitung dari tree; dijalankan CI,
-Gradle diblokir di VM), plus seluruh regresi yang sudah ada.
+16 tes unit baru (net: 8 baris + 7 ikon + 1 dialog; total 942 @Test,
+dihitung dari tree; dijalankan CI, Gradle diblokir di VM), plus
+seluruh regresi yang sudah ada.
 Dibangun di atas v1.0.25 — fungsi Grup/Rute tidak disentuh, UI-only.
 
 Referensi: 3 screenshot HP user (2026-11-24 05:03–05:04, diedit,
