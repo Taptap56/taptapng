@@ -149,7 +149,8 @@ class GroupsStore(private val file: File) {
         // group, not the stale "Proxy" name.
         val renamed = migrateDefaultGroupName()
         val mainResolved = migrateMainGroupId()
-        if (renamed || mainResolved) save()
+        val nested = ensureNestedInMain()
+        if (renamed || mainResolved || nested) save()
         if (profiles != null) {
             pruneMissingProfiles(profiles.map { it.guid }.toSet())
         }
@@ -279,6 +280,72 @@ class GroupsStore(private val file: File) {
     }
 
     /**
+     * v1.0.27: nested groups — every group except the main group
+     * is ALSO a member of the main group, so a new url-test group
+     * shows up inside "taptap" on the dashboard and can be
+     * selected there. Enforces the invariant in place:
+     * - the main group's nested members are exactly the other
+     *   groups, in group order (existing order kept first, new
+     *   ones appended; stale ids — a group that no longer exists
+     *   — dropped);
+     * - a non-main group never contains the main group or itself
+     *   (a hand-edited file can smuggle those in; they are
+     *   stripped here, and a deeper nesting a hand-edited file
+     *   wrote between non-main groups is kept — the engine
+     *   resolves it with a cycle guard);
+     * - a group with no nested members stores null (Gson omits
+     *   it, so the file stays key-less like a v1.0.26 file).
+     * Runs on every [load] (so a v1.0.26 file — no "groupMembers"
+     * key anywhere — migrates the existing groups in), and after
+     * [addGroup] / [removeGroup]. Returns true when any group
+     * changed; callers persist.
+     */
+    private fun ensureNestedInMain(): Boolean {
+        val main = mainGroup() ?: return false
+        var changed = false
+        val otherIds = groups.filter { it.id != main.id }.map { it.id }
+        for (i in groups.indices) {
+            val g = groups[i]
+            when {
+                g.id == main.id -> {
+                    val kept = g.nestedGroupIds.filter { it in otherIds }
+                    val wanted = (kept + otherIds).distinct()
+                    if (wanted != g.nestedGroupIds) {
+                        groups[i] = g.copy(groupMembers = wanted.ifEmpty { null })
+                        changed = true
+                    }
+                }
+                else -> {
+                    val kept = g.nestedGroupIds.filter { it in otherIds && it != g.id }
+                    if (kept != g.nestedGroupIds) {
+                        groups[i] = g.copy(groupMembers = kept.ifEmpty { null })
+                        changed = true
+                    }
+                }
+            }
+        }
+        return changed
+    }
+
+    /**
+     * v1.0.27: strips illegal nested members from one group
+     * before it is stored — its own id, and the main group's id
+     * when this is not the main group (the main group is never a
+     * member of another group). Used by [updateGroup], whose
+     * callers (the edit dialog, the rename) never set nested
+     * members themselves; a hand-built caller that does is
+     * sanitised the same way.
+     */
+    private fun sanitizeNested(group: ProxyGroup): ProxyGroup {
+        val main = mainGroup()
+        val kept = group.nestedGroupIds.filter { id ->
+            id != group.id && (main == null || main.id == group.id || id != main.id)
+        }
+        return if (kept == group.nestedGroupIds) group
+        else group.copy(groupMembers = kept.ifEmpty { null })
+    }
+
+    /**
      * v1.0.23: the main group, resolved BY ID — never by name.
      * Resolution order (the stored id wins when it still exists):
      * stored [mainGroupId] → the group the FINAL rule targets →
@@ -359,13 +426,18 @@ class GroupsStore(private val file: File) {
 
     fun addGroup(group: ProxyGroup) {
         groups.add(group)
+        // v1.0.27: a new group also joins the main group (unless
+        // it IS the main group — the first group ever added).
+        // The dialog never sets nested members; the store owns
+        // the invariant (see [ensureNestedInMain]).
+        ensureNestedInMain()
         save()
     }
 
     fun updateGroup(group: ProxyGroup) {
         val idx = groups.indexOfFirst { it.id == group.id }
         if (idx >= 0) {
-            groups[idx] = group
+            groups[idx] = sanitizeNested(group)
             save()
         }
     }
@@ -381,6 +453,11 @@ class GroupsStore(private val file: File) {
             mainGroupId = null
             migrateMainGroupId()
         }
+        // v1.0.27: the deleted group leaves every other group's
+        // nested members too (its id is stale there now), and when
+        // the main group changed, the new main group gains the
+        // remaining groups as nested members.
+        ensureNestedInMain()
         save()
     }
 

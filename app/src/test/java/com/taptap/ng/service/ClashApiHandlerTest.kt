@@ -77,11 +77,13 @@ class ClashApiHandlerTest {
         override fun selectProxy(groupName: String, proxyName: String): Boolean {
             val idx = groups.indexOfFirst { it.name == groupName }
             if (idx < 0) return false
-            val g = groups[idx]
-            if (g.type != ProxyGroupType.SELECT) return false
-            val guid = profiles.firstOrNull { it.displayName() == proxyName }?.guid ?: return false
-            if (guid !in g.members) return false
-            groups[idx] = g.copy(selectedMemberGuid = guid)
+            // v1.0.27: the shared rule (see ClashApiHandler) — a
+            // nested group name resolves to the group's id, a
+            // server display name to its guid.
+            val names = ClashApiHandler(this).displayNames()
+            val ref = ClashApiHandler.selectMemberRef(groups, names, groupName, proxyName)
+                ?: return false
+            groups[idx] = groups[idx].copy(selectedMemberGuid = ref)
             return true
         }
         override fun delayTest(guid: String, url: String, timeoutMs: Int): Long? =

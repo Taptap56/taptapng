@@ -210,6 +210,38 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
             f.timeZone = TimeZone.getTimeZone("UTC")
             return f.format(Date(ms))
         }
+
+        /**
+         * v1.0.27: resolve a PUT /proxies/{group} member name to
+         * the member ref to store as the group's selection — a
+         * server guid when the name is a (de-duplicated) server
+         * display name, a group id when the name is a nested group
+         * of [groupName]. Null when the group does not exist, is
+         * not a SELECT group, or the name is not one of its
+         * members. Pure, so the live deps and the test fake share
+         * this one rule instead of mirroring it: a dashboard tap
+         * on a nested group node ("tes" inside "taptap") stores
+         * the nested group's id, and the route engine resolves it
+         * to that group's effective server. When a name matches
+         * both a nested group and a server display name, the
+         * group wins (group names are the dashboard's node names).
+         */
+        fun selectMemberRef(
+            groups: List<ProxyGroup>,
+            /** guid -> unique display name, see [ClashApiHandler.displayNames]. */
+            displayNames: Map<String, String>,
+            groupName: String,
+            proxyName: String,
+        ): String? {
+            val group = groups.firstOrNull { it.name == groupName } ?: return null
+            if (group.type != ProxyGroupType.SELECT) return null
+            val nested = groups.firstOrNull { it.name == proxyName }
+            if (nested != null && nested.id in group.nestedGroupIds) return nested.id
+            val guid = displayNames.entries.firstOrNull { it.value == proxyName }?.key
+                ?: return null
+            if (guid !in group.members) return null
+            return guid
+        }
     }
 
     fun handle(req: ApiRequest): ApiResponse {
@@ -380,26 +412,40 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
         // alias for the fallback group (see handleProxies) so a stale
         // dashboard tab keeps working — but GLOBAL is never emitted.
         for (g in groups) {
-            val nowGuid = RouteEngine.selectMember(g, delays)
+            // v1.0.27: nested groups. `all` lists server display
+            // names AND nested group names — yacd looks every name
+            // in `all` up in this same object, and renders a member
+            // whose type is Selector/URLTest/Fallback as a group
+            // node inside this group's card (its latency follows
+            // the member's `now` chain, with a 3-deep cap, and
+            // falls back to the member's own `history`).
+            // `now` is the selected member's NAME: a server
+            // display name, or a nested group's name (yacd shows
+            // the chain "tes › Server A"). `history` is the
+            // resolved server's history, so the group card — and
+            // a parent card listing this group as a node — shows
+            // the delay of the server traffic would actually use.
+            // A group with only server members emits exactly what
+            // it emitted before: same `now`, same `history`.
+            val memberRef = RouteEngine.selectMemberRef(g, groups, delays)
+            val nowName = when {
+                memberRef == null -> ""
+                groups.any { it.id == memberRef } ->
+                    groups.first { it.id == memberRef }.name
+                else -> names[memberRef] ?: ""
+            }
+            val resolvedGuid = RouteEngine.resolveToServer(g, groups, delays)
             val all = JsonArray().apply {
                 g.members.forEach { guid -> names[guid]?.let { add(it) } }
-            }
-            val history = when (g.type) {
-                ProxyGroupType.SELECT -> nowGuid?.let { historyFor(it) } ?: JsonArray()
-                ProxyGroupType.URL_TEST -> {
-                    // Best known member of the last round.
-                    val best = g.members.minByOrNull { delays[it] ?: Long.MAX_VALUE }
-                    best?.let { historyFor(it) } ?: JsonArray()
-                }
-                ProxyGroupType.FALLBACK -> {
-                    val first = g.members.firstOrNull { delays[it] != null }
-                    first?.let { historyFor(it) } ?: JsonArray()
+                g.nestedGroupIds.forEach { id ->
+                    groups.firstOrNull { it.id == id }?.let { add(it.name) }
                 }
             }
+            val history = resolvedGuid?.let { historyFor(it) } ?: JsonArray()
             proxies.add(g.name, obj {
                 addProperty("name", g.name)
                 addProperty("type", groupTypeName(g.type))
-                addProperty("now", names[nowGuid] ?: "")
+                addProperty("now", nowName)
                 add("all", all)
                 add("history", history)
             })
@@ -473,7 +519,10 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
         val names = displayNames()
         val group = deps.groups().firstOrNull { it.name == name }
         val guid = when {
-            group != null -> RouteEngine.selectMember(group, deps.delays())
+            // v1.0.27: a nested group resolves to its effective
+            // server (best member for URL_TEST, selected for
+            // SELECT) before the test runs.
+            group != null -> RouteEngine.resolveToServer(group, deps.groups(), deps.delays())
             // No "GLOBAL" branch (v1.0.21): it is not a group anymore,
             // so /proxies/GLOBAL/delay and /group/GLOBAL/delay answer
             // 404 like any unknown name. Only PUT keeps the GLOBAL
