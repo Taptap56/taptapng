@@ -481,6 +481,9 @@ object ClashApiServer {
         override fun groups(): List<ProxyGroup> =
             ClashApiRuntime.refreshGroups(appContext.filesDir).groups.toList()
 
+        override fun mainGroup(): ProxyGroup? =
+            ClashApiRuntime.refreshGroups(appContext.filesDir).mainGroup()
+
         override fun rules(): List<RouteRule> =
             ClashApiRuntime.refreshGroups(appContext.filesDir).rules.toList()
 

@@ -138,6 +138,11 @@
     <string name="groups_delete_group">Hapus grup \"%1$s\"?</string>
     <string name="groups_delete_rule">Hapus aturan ini?</string>
     <string name="groups_group_name">Nama grup</string>
+    <string name="groups_main_group">Grup utama</string>
+    <string name="groups_main_group_hint">Berlaku langsung, tanpa restart — rute dibaca per koneksi.</string>
+    <string name="groups_main_group_save">Simpan</string>
+    <string name="groups_main_group_saved">Nama grup utama disimpan</string>
+    <string name="groups_main_group_name_taken">Nama grup sudah dipakai</string>
     <string name="groups_group_type">Tipe grup</string>
     <string name="groups_url_test_url">URL tes (URL-TEST)</string>
     <string name="groups_url_test_interval">Interval tes (detik, 60-3600)</string>

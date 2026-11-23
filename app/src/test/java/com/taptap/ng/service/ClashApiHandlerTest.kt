@@ -64,6 +64,12 @@ class ClashApiHandlerTest {
         override fun mode(): String = modeValue
         override fun setMode(mode: String) { modeValue = mode }
         override fun groups(): List<ProxyGroup> = groups.toList()
+        // v1.0.23: the main group by stored id (null id = legacy
+        // name lookup, mirroring GroupsStore.mainGroup's fallback).
+        var mainGroupId: String? = null
+        override fun mainGroup(): ProxyGroup? =
+            mainGroupId?.let { id -> groups.firstOrNull { it.id == id } }
+                ?: groups.firstOrNull { it.name == RouteEngine.FALLBACK_GROUP_NAME }
         override fun rules(): List<RouteRule> = rules.toList()
         override fun profiles(): List<ProfileItem> = profiles
         override fun delays(): Map<String, Long?> = delays.toMap()
@@ -244,6 +250,23 @@ class ClashApiHandlerTest {
             "guid-a",
             deps.groups.first { it.name == RouteEngine.FALLBACK_GROUP_NAME }.selectedMemberGuid,
         )
+    }
+
+    @Test
+    fun putGlobalAliasFollowsRenamedMainGroup() {
+        // v1.0.23: the GLOBAL alias resolves through the main
+        // group's stored id, not its name — renaming the group
+        // (the "Grup utama" card) must not break a stale
+        // dashboard tab that still PUTs to GLOBAL.
+        val deps = defaultDeps()
+        deps.mainGroupId = "g-proxy"
+        val idx = deps.groups.indexOfFirst { it.id == "g-proxy" }
+        deps.groups[idx] = deps.groups[idx].copy(name = "Utama")
+        val ok = ClashApiHandler(deps).handle(
+            ApiRequest("PUT", "/proxies/GLOBAL", emptyMap(), emptyMap(), "{\"name\":\"Server B\"}"),
+        ) as ApiResponse.Immediate
+        assertEquals(204, ok.status)
+        assertEquals("guid-b", deps.groups.first { it.id == "g-proxy" }.selectedMemberGuid)
     }
 
     @Test

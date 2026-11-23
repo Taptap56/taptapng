@@ -91,6 +91,8 @@ interface ClashApiDeps {
     fun setMode(mode: String)
     /** Groups, refreshed from disk (see ClashApiRuntime). */
     fun groups(): List<ProxyGroup>
+    /** The main group, by stored id (see GroupsStore.mainGroup). */
+    fun mainGroup(): ProxyGroup?
     fun rules(): List<RouteRule>
     fun profiles(): List<ProfileItem>
     fun delays(): Map<String, Long?>
@@ -438,15 +440,15 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
                     ?: return json(400, obj { addProperty("message", "missing selector") })
                 // "GLOBAL" is never listed (see proxiesObject), but a stale
                 // dashboard tab — or an external client — may still PUT a
-                // selection to it. Accept it as an alias for the fallback
+                // selection to it. Accept it as an alias for the main
                 // group: GLOBAL always meant "the selected entry of the
-                // fallback group". A real group literally named GLOBAL wins
+                // main group". A real group literally named GLOBAL wins
                 // over the alias. The alias resolves through
-                // RouteEngine.FALLBACK_GROUP_NAME, never a literal name,
-                // so it follows the fallback group's rename.
+                // deps.mainGroup() (by stored id), never a literal
+                // name, so it follows the main group through a rename.
                 val effectiveSelector = if (selector == "GLOBAL" &&
                     deps.groups().none { it.name == "GLOBAL" }
-                ) RouteEngine.FALLBACK_GROUP_NAME else selector
+                ) deps.mainGroup()?.name ?: RouteEngine.FALLBACK_GROUP_NAME else selector
                 val proxyName = segments.getOrNull(1) ?: run {
                     runCatching { JsonParser.parseString(req.body).asJsonObject }
                         .getOrNull()?.get("name")?.takeIf { it.isJsonPrimitive }?.asString

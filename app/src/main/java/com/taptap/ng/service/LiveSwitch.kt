@@ -63,11 +63,17 @@ fun decideLiveSwitch(isRunning: Boolean, currentGuid: String?, newGuid: String):
  * Point the default SELECT group ("taptap" — the group the FINAL
  * rule targets) at [newGuid], returning the updated group list,
  * or null when there is nothing to change:
- * - no group named "taptap" exists;
- * - the "taptap" group is not SELECT (URL_TEST / FALLBACK pick
+ * - no main group exists;
+ * - the main group is not SELECT (URL_TEST / FALLBACK pick
  *   their member by probe / order, not by stored selection);
  * - the group already selects [newGuid] (effective selection,
  *   i.e. stored selection when still a member, else first member).
+ *
+ * v1.0.23: the group is found BY ID ([mainGroupId], from
+ * [com.taptap.ng.data.GroupsStore.mainGroupId]) when one is
+ * given, so a renamed main group still switches. Without an id
+ * the legacy name lookup applies (hand-built callers, old
+ * tests).
  *
  * A guid that is not a member yet is APPENDED first: the default
  * group is defined as holding every profile guid (see
@@ -79,8 +85,11 @@ fun decideLiveSwitch(isRunning: Boolean, currentGuid: String?, newGuid: String):
 fun applyLiveSwitchSelection(
     groups: List<ProxyGroup>,
     newGuid: String,
+    mainGroupId: String? = null,
 ): List<ProxyGroup>? {
-    val idx = groups.indexOfFirst { it.name == GroupsStore.DEFAULT_GROUP_NAME }
+    val idx = mainGroupId?.let { id -> groups.indexOfFirst { it.id == id } }
+        ?.takeIf { it >= 0 }
+        ?: groups.indexOfFirst { it.name == GroupsStore.DEFAULT_GROUP_NAME }
     if (idx < 0) return null
     val group = groups[idx]
     if (group.type != ProxyGroupType.SELECT) return null

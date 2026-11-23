@@ -96,16 +96,43 @@ class GroupsActivity : AppCompatActivity() {
         }
         findViewById<View>(R.id.add_group).setOnClickListener { showGroupDialog(null) }
         findViewById<View>(R.id.add_rule).setOnClickListener { showRuleDialog(null) }
+        findViewById<View>(R.id.save_main_group).setOnClickListener { saveMainGroupName() }
         refresh()
     }
 
     private fun refresh() {
         groupAdapter.submit(groupsStore.groups.toList())
         ruleAdapter.submit(groupsStore.rules.toList())
+        // v1.0.23: kartu "Grup utama" — nama saat ini (by id,
+        // jadi rename lewat dialog edit grup ikut tampil di sini).
+        findViewById<EditText>(R.id.main_group_name)
+            .setText(groupsStore.mainGroup()?.name ?: "")
         findViewById<View>(R.id.empty_groups).visibility =
             if (groupsStore.groups.isEmpty()) View.VISIBLE else View.GONE
         findViewById<View>(R.id.empty_rules).visibility =
             if (groupsStore.rules.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * v1.0.23: simpan nama baru grup utama dari kartu di atas
+     * seksi grup. Validasi di [GroupsStore.renameMainGroup]:
+     * kosong dan duplikat ditolak dengan Toast, tanpa crash.
+     * Berlaku langsung — rute dibaca per koneksi, tanpa restart.
+     */
+    private fun saveMainGroupName() {
+        val name = findViewById<EditText>(R.id.main_group_name).text.toString()
+        when (groupsStore.renameMainGroup(name)) {
+            is GroupsStore.RenameMainGroupResult.Renamed -> {
+                Toast.makeText(this, R.string.groups_main_group_saved, Toast.LENGTH_SHORT).show()
+                refresh()
+            }
+            GroupsStore.RenameMainGroupResult.Blank ->
+                Toast.makeText(this, R.string.groups_name_required, Toast.LENGTH_SHORT).show()
+            GroupsStore.RenameMainGroupResult.Duplicate ->
+                Toast.makeText(this, R.string.groups_main_group_name_taken, Toast.LENGTH_SHORT).show()
+            GroupsStore.RenameMainGroupResult.NoMainGroup ->
+                Toast.makeText(this, R.string.groups_empty_groups, Toast.LENGTH_SHORT).show()
+        }
     }
 
     // ---- Group dialog ----
