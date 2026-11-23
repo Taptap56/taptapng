@@ -13,7 +13,6 @@ import java.security.cert.X509Certificate
 import java.util.Collections
 import java.util.Enumeration
 import java.util.Hashtable
-import javax.net.ssl.SSLEngine
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
