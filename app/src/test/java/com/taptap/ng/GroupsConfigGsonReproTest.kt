@@ -69,7 +69,7 @@ class GroupsConfigGsonReproTest {
         assertTrue(raw.groups.isNotEmpty(), "expected the default group in groups.json")
         assertEquals(
             "com.google.gson.internal.LinkedTreeMap",
-            raw.groups[0].javaClass.name,
+            raw.groups[0]!!.javaClass.name,
             "release Gson must produce LinkedTreeMap elements (no generic Signature)",
         )
 
