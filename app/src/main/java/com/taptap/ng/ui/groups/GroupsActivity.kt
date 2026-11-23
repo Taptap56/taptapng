@@ -8,7 +8,6 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
-import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -19,6 +18,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputLayout
 import com.taptap.ng.R
@@ -211,8 +211,17 @@ class GroupsActivity : AppCompatActivity() {
             selectedRow = row
         }
 
-        val membersButton = Button(ctx).apply {
+        // v1.0.25: tombol isi hijau yang sama dengan ketiga tombol
+        // header Grup/Rute (Widget.TaptapNG.Button.FilledAccent).
+        // Sebelumnya `Button(ctx)` polos — style isi default M2 yang
+        // latarnya `colorPrimary` (hitam di tema terang), jadi tombol
+        // ini hitam seperti ketiganya. MaterialButton 4-argumen dengan
+        // style sebagai defStyleRes; teks 15sp seperti ketiganya.
+        // Teks, klik (dialog multi-pilih server), dan posisi tidak
+        // berubah.
+        val membersButton = MaterialButton(ctx, null, 0, R.style.Widget_TaptapNG_Button_FilledAccent).apply {
             text = membersButtonText(chosen.size)
+            textSize = 15f
             setOnClickListener {
                 val names = servers.map { it.displayName() }.toTypedArray()
                 val checked = servers.map { it.guid in chosen }.toBooleanArray()

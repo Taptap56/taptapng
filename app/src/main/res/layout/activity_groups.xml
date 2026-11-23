@@ -69,7 +69,7 @@
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/save_main_group"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            style="@style/Widget.TaptapNG.Button.FilledAccent"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/groups_main_group_save"
@@ -98,7 +98,7 @@
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/add_group"
-                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        style="@style/Widget.TaptapNG.Button.FilledAccent"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/groups_add_group"
@@ -145,7 +145,7 @@
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/add_rule"
-                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        style="@style/Widget.TaptapNG.Button.FilledAccent"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/groups_add_rule"

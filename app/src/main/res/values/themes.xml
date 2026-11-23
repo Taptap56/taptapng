@@ -88,6 +88,24 @@
         <item name="closeIconVisible">false</item>
     </style>
 
+    <!-- Tombol isi aksen (v1.0.25): v1.0.24 memakai M2 OutlinedButton
+         untuk ketiga tombol aksi Grup/Rute, tapi teks + garisnya
+         mengikuti `colorPrimary` — hitam (#FF000000) di tema terang,
+         abu-abu di tema gelap — jadi di HP terbaca "tombol hitam".
+         Style ini tombol isi (parent M2 Button = filled) dengan
+         backgroundTint `colorAccent` yang SUDAH beda per tema
+         (#0FB88A terang di values/colors.xml, #22E6A8 gelap di
+         values-night/colors.xml — sama persis dengan warna FAB aktif
+         `colorFabActive`, satu-satunya kontrol isi hijau lain di
+         aplikasi). Teks HARUS hitam eksplisit: warna teks default
+         tombol isi M2 adalah putih (colorOnPrimary), yang di atas
+         mint #22E6A8 / hijau #0FB88A nyaris tak terbaca; hitam di
+         atas keduanya kontrasnya aman. Tidak ada warna tema diubah. -->
+    <style name="Widget.TaptapNG.Button.FilledAccent" parent="Widget.MaterialComponents.Button">
+        <item name="backgroundTint">@color/colorAccent</item>
+        <item name="android:textColor">@android:color/black</item>
+    </style>
+
     <!-- Intentionally EMPTY overlay for dynamicColorThemeOverlay (see
          above): DynamicColors applies this to every activity theme at
          creation. Empty = no color changes, only the missing-attribute
