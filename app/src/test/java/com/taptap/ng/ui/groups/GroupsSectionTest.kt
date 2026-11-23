@@ -11,10 +11,12 @@ import org.junit.jupiter.api.Test
  * single GroupsActivity straight at the requested section, with the
  * toolbar title following the section. No second activity.
  *
- * The section resolution is pure and asserted directly; the wiring
- * (menu ids/titles, handler branches, title mapping, scroll anchor)
- * is asserted on the sources, as in MainToolbarTest — the drawer
- * cannot be exercised on the JVM without an emulator.
+ * The section resolution and the per-section visibility decision
+ * are pure and asserted directly; the wiring (menu ids/titles,
+ * handler branches, title mapping, section containers) is asserted
+ * on the sources, as in MainToolbarTest — the drawer cannot be
+ * exercised on the JVM without an emulator, and neither can the
+ * applied View.GONE visibility (no Robolectric in this tree).
  */
 class GroupsSectionTest {
 
@@ -88,6 +90,36 @@ class GroupsSectionTest {
         )
     }
 
+    // ---- Per-section visibility (v1.0.22: View.GONE, no scroll) ----
+
+    @Test
+    fun `Grup shows only the groups section`() {
+        val visibility = GroupsActivity.sectionsVisibleFor(GroupsActivity.SECTION_GROUPS)
+        assertTrue(visibility.groupsVisible)
+        assertFalse(visibility.rulesVisible)
+    }
+
+    @Test
+    fun `Rute shows only the rules section`() {
+        val visibility = GroupsActivity.sectionsVisibleFor(GroupsActivity.SECTION_ROUTES)
+        assertFalse(visibility.groupsVisible)
+        assertTrue(visibility.rulesVisible)
+    }
+
+    @Test
+    fun `default view shows both sections`() {
+        val visibility = GroupsActivity.sectionsVisibleFor(GroupsActivity.SECTION_DEFAULT)
+        assertTrue(visibility.groupsVisible)
+        assertTrue(visibility.rulesVisible)
+    }
+
+    @Test
+    fun `unknown section shows both sections like the default view`() {
+        val visibility = GroupsActivity.sectionsVisibleFor("bogus")
+        assertTrue(visibility.groupsVisible)
+        assertTrue(visibility.rulesVisible)
+    }
+
     // ---- Handler + activity wiring ----
 
     @Test
@@ -117,7 +149,7 @@ class GroupsSectionTest {
     }
 
     @Test
-    fun `GroupsActivity titles follow the section and scrolls to Rute`() {
+    fun `GroupsActivity titles follow the section and hides the other section`() {
         val kt = read("app/src/main/java/com/taptap/ng/ui/groups/GroupsActivity.kt")
         assertTrue(kt.contains("EXTRA_SECTION"), "section extra must exist")
         assertTrue(
@@ -132,15 +164,36 @@ class GroupsSectionTest {
             kt.contains("else -> R.string.groups_title"),
             "default title must stay groups_title",
         )
+        // v1.0.22: the scroll hack is gone — the irrelevant section
+        // is hidden with GONE instead of scrolled past.
+        assertFalse(kt.contains("scrollTo"), "scroll hack must be gone")
+        assertFalse(kt.contains("rulesHeader"), "scroll anchor must be gone")
+        assertFalse(kt.contains("NestedScrollView"), "scroll import must be gone")
         assertTrue(
-            kt.contains("scrollView.scrollTo(0, rulesHeader.top)"),
-            "Rute must scroll to the rules section header",
+            kt.contains("sectionsVisibleFor(section)"),
+            "onCreate must apply the visibility decision",
+        )
+        assertTrue(
+            kt.contains("findViewById<View>(R.id.groups_section).visibility"),
+            "groups container visibility must be applied",
+        )
+        assertTrue(
+            kt.contains("findViewById<View>(R.id.rules_section).visibility"),
+            "rules container visibility must be applied",
+        )
+        assertTrue(
+            kt.contains("else View.GONE"),
+            "the hidden section must be GONE, not INVISIBLE",
         )
         val layout = read("app/src/main/res/layout/activity_groups.xml")
         assertTrue(layout.contains("android:id=\"@+id/groups_scroll\""), "scroll view needs an id")
         assertTrue(
-            layout.contains("android:id=\"@+id/rules_section_header\""),
-            "rules section header needs an id to scroll to",
+            layout.contains("android:id=\"@+id/groups_section\""),
+            "groups section needs a container id to hide it",
+        )
+        assertTrue(
+            layout.contains("android:id=\"@+id/rules_section\""),
+            "rules section needs a container id to hide it",
         )
     }
 }

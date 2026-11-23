@@ -17,7 +17,6 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.widget.NestedScrollView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.TextInputLayout
@@ -67,6 +66,15 @@ class GroupsActivity : AppCompatActivity() {
         setSupportActionBar(toolbar)
         toolbar.setNavigationOnClickListener { finish() }
 
+        // v1.0.22: show only the requested section (the v1.0.21
+        // posted scroll hack never moved — see sectionsVisibleFor).
+        // No extra = the old full view (overflow menu).
+        val visibility = sectionsVisibleFor(section)
+        findViewById<View>(R.id.groups_section).visibility =
+            if (visibility.groupsVisible) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.rules_section).visibility =
+            if (visibility.rulesVisible) View.VISIBLE else View.GONE
+
         groupAdapter = GroupAdapter(
             onEdit = { showGroupDialog(it) },
             onDelete = { confirmDeleteGroup(it) },
@@ -86,14 +94,6 @@ class GroupsActivity : AppCompatActivity() {
         findViewById<View>(R.id.add_group).setOnClickListener { showGroupDialog(null) }
         findViewById<View>(R.id.add_rule).setOnClickListener { showRuleDialog(null) }
         refresh()
-        // v1.0.21: "Rute" opens scrolled to the rules section (the
-        // groups section is already at the top, so it needs no
-        // scroll). Posted so the layout pass has run first.
-        if (section == SECTION_ROUTES) {
-            val scrollView = findViewById<NestedScrollView>(R.id.groups_scroll)
-            val rulesHeader = findViewById<View>(R.id.rules_section_header)
-            scrollView.post { scrollView.scrollTo(0, rulesHeader.top) }
-        }
     }
 
     private fun refresh() {
@@ -469,6 +469,15 @@ class GroupsActivity : AppCompatActivity() {
             SECTION_GROUPS -> R.string.drawer_groups
             SECTION_ROUTES -> R.string.drawer_routes
             else -> R.string.groups_title
+        }
+
+        /** Which sections are visible for a resolved section. Pure, JVM-tested. */
+        data class SectionVisibility(val groupsVisible: Boolean, val rulesVisible: Boolean)
+
+        fun sectionsVisibleFor(section: String): SectionVisibility = when (section) {
+            SECTION_GROUPS -> SectionVisibility(groupsVisible = true, rulesVisible = false)
+            SECTION_ROUTES -> SectionVisibility(groupsVisible = false, rulesVisible = true)
+            else -> SectionVisibility(groupsVisible = true, rulesVisible = true)
         }
 
         /** Display label for a group type (URL_TEST shows as URL-TEST). */
