@@ -1,4 +1,4 @@
-# TaptapNG v1.0.30
+# TaptapNG v1.0.31
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.ng`, **versi** 1.0.30 (vc31)
+- **id** `com.taptap.ng`, **versi** 1.0.31 (vc32)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,22 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.31 — Paket hemat baterai (backoff primer + observatory + higiene log/stream)
+
+Audit baterai dari laporan user 2026-11-24 14:43 (MIUI: TaptapNG
+60,61%): perbaikan v1.0.16 sudah benar (sleep-until-due, writer 30
+dtk, gate layar-mati Observatory) — yang tidak diperbaiki adalah
+dial-nya sendiri. Primer dial tiap 15 dtk tanpa henti (240/jam),
+lebih cepat dari radio tail, jadi radio tidak pernah idle. Kini:
+(1) backoff adaptif primer di dalam `PemicuManager` — sesudah 4
+PRIME OK beruntun interval digandakan 15→30→60→120 dtk (cap 120),
+satu GAGAL langsung kembali ke interval user; (2) UrlTestLoop
+diikat ke `isActive` layar-mati (satu-satunya loop yang lolos dari
+gate v1.0.16); (3) Observatory hanya mem-probe server di grup
+aktif; (4) higiene DialLog (cache baris SPEED, tailer berbasis
+sekuens) + stream dashboard tutup sesudah 60 dtk idle + `kick()`
+hanya bila grup berubah. Detail + cara tes: `README-v1.0.31.md`.
 
 ## v1.0.30 — Rantai koneksi leaf-first + dashboard bisa di-scroll sampai bawah
 

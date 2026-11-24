@@ -112,7 +112,7 @@ jobs:
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
-        name: taptapng-v1.0.30-release
+        name: taptapng-v1.0.31-release
         path: ${{ github.workspace }}/app/build/outputs/apk/release/*.apk
 
     - name: Upload R8 mapping (diagnose obfuscated names)
@@ -122,5 +122,5 @@ jobs:
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
-        name: taptapng-v1.0.30-mapping
+        name: taptapng-v1.0.31-mapping
         path: ${{ github.workspace }}/app/build/outputs/mapping/release/mapping.txt
