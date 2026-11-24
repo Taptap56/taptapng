@@ -56,10 +56,19 @@ class TunForwarderRouteRecordTest {
             stats: SpeedStats?,
         ): ProxyStream {
             dialed.set(true)
-            val input = PipedInputStream()
+            // Connected pipe that blocks forever — like a live proxy
+            // stream. A bare PipedInputStream() is NOT connected:
+            // its read() throws "Pipe not connected" at once, so
+            // relay() FINs the session before the test can read
+            // activeConnections(). The write end is retained on the
+            // stream so the pipe stays open for the test's lifetime.
+            val sink = PipedOutputStream()
+            val input = PipedInputStream(sink)
             return object : ProxyStream {
                 override val input: InputStream = input
                 override val output: OutputStream = ByteArrayOutputStream()
+                @Suppress("unused")
+                val retainedSink: OutputStream = sink
                 override fun close() {
                     runCatching { input.close() }
                 }

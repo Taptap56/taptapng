@@ -261,11 +261,11 @@ object RouteEngine {
             when (rule.target) {
                 RouteRule.TARGET_DIRECT -> return ResolvedRoute(
                     RouteDecision.Direct,
-                    RouteRecord(rule.type.name, payload, listOf("DIRECT")),
+                    RouteRecord(rule.type.displayName, payload, listOf("DIRECT")),
                 )
                 RouteRule.TARGET_REJECT -> return ResolvedRoute(
                     RouteDecision.Reject,
-                    RouteRecord(rule.type.name, payload, listOf("REJECT")),
+                    RouteRecord(rule.type.displayName, payload, listOf("REJECT")),
                 )
                 else -> {
                     val group = groups.firstOrNull { it.id == rule.target }
@@ -275,7 +275,7 @@ object RouteEngine {
                     return ResolvedRoute(
                         RouteDecision.Proxy(member),
                         RouteRecord(
-                            rule.type.name, payload,
+                            rule.type.displayName, payload,
                             resolveChainNames(group, groups, delays, serverNames)
                                 ?: listOf(serverNames[member] ?: member),
                         ),
@@ -341,9 +341,14 @@ object RouteEngine {
             val ref = selectMemberRef(current, groups, delays, visited) ?: return null
             val nested = groups.firstOrNull { it.id == ref }
             if (nested == null) {
-                // A server guid: the chain ends here.
+                // A server guid: the chain ends here. When the walk
+                // descended through nested groups, the group holding
+                // the server is part of the chain too (["taptap",
+                // "tes", "81"]); a direct member reports just the
+                // server (["81"] — the group itself is implied).
                 val server = serverNames[ref] ?: ref
-                return if (path.isEmpty()) listOf(server) else path + server
+                return if (path.isEmpty()) listOf(server)
+                else path + current.name.ifBlank { current.id } + server
             }
             path.add(current.name.ifBlank { current.id })
             current = nested

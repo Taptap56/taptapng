@@ -6,7 +6,23 @@ import java.util.UUID
 
 /** Route rule type (M7). Rules are matched top-down; the first match wins. */
 enum class RouteRuleType {
-    DOMAIN, DOMAIN_SUFFIX, DOMAIN_KEYWORD, IP_CIDR, FINAL
+    DOMAIN, DOMAIN_SUFFIX, DOMAIN_KEYWORD, IP_CIDR, FINAL;
+
+    /**
+     * Clash / yacd spelling — "DOMAIN-SUFFIX", "DOMAIN-KEYWORD",
+     * "IP-CIDR" (hyphens, not the underscores of [name]). GET
+     * /rules and GET /connections both report this form; [name]
+     * must never leak to the dashboard (v1.0.29: resolveDetailed
+     * sent [name], so a suffix rule arrived as "DOMAIN_SUFFIX").
+     */
+    val displayName: String
+        get() = when (this) {
+            DOMAIN -> "DOMAIN"
+            DOMAIN_SUFFIX -> "DOMAIN-SUFFIX"
+            DOMAIN_KEYWORD -> "DOMAIN-KEYWORD"
+            IP_CIDR -> "IP-CIDR"
+            FINAL -> "FINAL"
+        }
 }
 
 /**

@@ -643,13 +643,10 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
         val arr = JsonArray()
         val groupNames = deps.groups().associateBy({ it.id }, { it.name })
         for (r in deps.rules()) {
-            val type = when (r.type) {
-                RouteRuleType.DOMAIN -> "DOMAIN"
-                RouteRuleType.DOMAIN_SUFFIX -> "DOMAIN-SUFFIX"
-                RouteRuleType.DOMAIN_KEYWORD -> "DOMAIN-KEYWORD"
-                RouteRuleType.IP_CIDR -> "IP-CIDR"
-                RouteRuleType.FINAL -> "FINAL"
-            }
+            // v1.0.29: one spelling for rule types (see
+            // RouteRuleType.displayName) — GET /rules and GET
+            // /connections report the same form.
+            val type = r.type.displayName
             val proxy = when (r.target) {
                 RouteRule.TARGET_DIRECT -> RouteRule.TARGET_DIRECT
                 RouteRule.TARGET_REJECT -> RouteRule.TARGET_REJECT
