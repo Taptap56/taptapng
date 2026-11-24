@@ -909,6 +909,15 @@ class TaptapVpnService : VpnService() {
             cache = urlCache,
             groupsProvider = { groupsStore.groups.toList() },
             profilesProvider = { profileStore.profiles.toList() },
+            // v1.0.31 (H3): sama seperti Observatory di bawah —
+            // ronde ditunda saat layar mati, jadi url-test tidak
+            // jalan 24×/jam di latar belakang.
+            isActive = {
+                runCatching {
+                    (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
+                        .isInteractive
+                }.getOrDefault(true)
+            },
         )
         urlTestLoop = testLoop
         ClashApiRuntime.urlTestLoop = testLoop

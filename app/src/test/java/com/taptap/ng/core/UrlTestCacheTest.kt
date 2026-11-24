@@ -4,12 +4,14 @@ import com.taptap.ng.data.ConfigType
 import com.taptap.ng.data.ProfileItem
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 
 /**
  * Url-test delay cache + loop tests (M7, W2). The loop thread
@@ -293,6 +295,51 @@ class UrlTestCacheTest {
                 "ronde pertama grup baru harus jalan <5 dtk sesudah kick",
             )
             assertEquals(100L, cache.delay("81"))
+        } finally {
+            loop.stop()
+        }
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    fun `isActive false — loop menunda ronde dan tester tidak dipanggil`() {
+        // v1.0.31 (H3): UrlTestLoop sudah menghormati isActive
+        // (ronde ditunda saat layar mati) — tes ini mengunci
+        // perilaku loop-nya; wiring di TaptapVpnService (teruskan
+        // isActive PowerManager seperti Observatory) tidak bisa
+        // diuji JVM. Pola yang sama seperti tes Observatory
+        // (isActive false — tidak ada probe...). GAGAL pada kode
+        // lama bila isActive diabaikan (tester dipanggil saat
+        // ronde jatuh tempo); lolos pada kode baru.
+        val cache = UrlTestCache()
+        val probeCalls = AtomicInteger(0)
+        val roundReached = CountDownLatch(1)
+        val loop = UrlTestLoop(
+            cache = cache,
+            groupsProvider = { listOf(urlTestGroup(intervalSec = 300)) },
+            profilesProvider = { listOf(item("a"), item("b")) },
+            tester = { _, _ ->
+                probeCalls.incrementAndGet()
+                ServerTester.TestResult(100L, null)
+            },
+            isActive = {
+                roundReached.countDown()
+                false
+            },
+            log = {},
+        )
+        loop.start()
+        try {
+            // Tunggu sampai satu ronde jatuh tempo (isActive
+            // dipanggil = ronde terjadi) — tanpa itu tes lolos
+            // hampa bila thread belum sempat jalan.
+            assertTrue(
+                roundReached.await(5, TimeUnit.SECONDS),
+                "loop tidak pernah mencapai ronde jatuh tempo",
+            )
+            Thread.sleep(500)
+            assertEquals(0, probeCalls.get(), "layar mati: tester tidak boleh dipanggil")
+            assertNull(cache.delay("a"))
         } finally {
             loop.stop()
         }
