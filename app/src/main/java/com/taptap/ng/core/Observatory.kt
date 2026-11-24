@@ -136,6 +136,50 @@ object Observatory {
     /** Saran entry terbaik untuk koneksi BERIKUTNYA (log saja, bukan auto-switch). */
     fun bestGuidForNextStart(items: List<ProfileItem>): String? =
         (bestLeastPing(items) ?: bestLeastLoad(items))?.guid
+
+    /**
+     * v1.0.31 (battery, H2): guid server yang benar-benar bisa
+     * terpilih lewat rute yang aktif — anggota grup yang dirujuk
+     * aturan yang aktif (FINAL selalu aktif, seperti di
+     * [RouteEngine]; aturan lain hanya bila [RouteRule.isEnabled])
+     * ditambah grup utama sebagai fallback bila tak ada aturan
+     * yang cocok (sama seperti [RouteEngine.resolveDetailed]).
+     * Grup bersarang di-expand (semua anggota server + grup
+     * bersarangnya, dengan penjaga siklus); target DIRECT/REJECT
+     * tidak menyumbang server. Server di luar himpunan ini tidak
+     * pernah bisa terpilih untuk koneksi berikutnya, jadi
+     * Observatory tidak mem-probe-nya: dengan 8 profil tapi
+     * hanya 2 di grup aktif, satu ronde hanya 2 dial, bukan 8.
+     * Interval, gate layar-mati, dan format saran log tidak
+     * berubah.
+     */
+    fun selectableGuids(
+        groups: List<ProxyGroup>,
+        rules: List<RouteRule>,
+        mainGroupId: String?,
+    ): Set<String> {
+        val out = LinkedHashSet<String>()
+        val byId = groups.associateBy { it.id }
+        val targets = LinkedHashSet<String>()
+        for (rule in rules) {
+            if (rule.type != RouteRuleType.FINAL && !rule.isEnabled) continue
+            if (rule.target == RouteRule.TARGET_DIRECT ||
+                rule.target == RouteRule.TARGET_REJECT
+            ) continue
+            targets += rule.target
+        }
+        RouteEngine.mainGroup(groups, mainGroupId)?.let { targets += it.id }
+        val visited = HashSet<String>()
+        val stack = ArrayDeque(targets)
+        while (stack.isNotEmpty()) {
+            val id = stack.removeLast()
+            if (!visited.add(id)) continue
+            val group = byId[id] ?: continue
+            out += group.members
+            stack.addAll(group.nestedGroupIds)
+        }
+        return out
+    }
 }
 
 /**

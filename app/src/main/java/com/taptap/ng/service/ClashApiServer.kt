@@ -283,19 +283,24 @@ object ClashApiServer {
         head.append("Connection: close\r\n\r\n")
         output.write(head.toString().toByteArray(Charsets.US_ASCII))
         output.flush()
+        // v1.0.31 (battery, H5a): close the stream after a minute
+        // with nothing new — see StreamIdleGate.
+        val gate = StreamIdleGate()
         while (true) {
+            val now = System.currentTimeMillis()
             val line = try {
                 response.produce()
             } catch (_: Exception) {
                 null
             }
-            if (line != null) {
+            if (line != null && gate.shouldSend(line, now)) {
                 val bytes = (line + "\n").toByteArray(Charsets.UTF_8)
                 output.write("${bytes.size.toString(16)}\r\n".toByteArray(Charsets.US_ASCII))
                 output.write(bytes)
                 output.write("\r\n".toByteArray(Charsets.US_ASCII))
                 output.flush()
             }
+            if (gate.isIdle(now)) break
             try {
                 Thread.sleep(STREAM_INTERVAL_MS)
             } catch (_: InterruptedException) {
@@ -351,19 +356,24 @@ object ClashApiServer {
             }
         }
         try {
+            // v1.0.31 (battery, H5a): close the stream after a
+            // minute with nothing new — see StreamIdleGate.
+            val gate = StreamIdleGate()
             while (!closed.get()) {
+                val now = System.currentTimeMillis()
                 val line = try {
                     response.produce()
                 } catch (_: Exception) {
                     null
                 }
-                if (line != null && !closed.get()) {
+                if (line != null && !closed.get() && gate.shouldSend(line, now)) {
                     try {
                         writeWsText(output, line)
                     } catch (_: IOException) {
                         break
                     }
                 }
+                if (gate.isIdle(now)) break
                 try {
                     Thread.sleep(STREAM_INTERVAL_MS)
                 } catch (_: InterruptedException) {
@@ -449,6 +459,45 @@ object ClashApiServer {
     }
 
     private const val STREAM_INTERVAL_MS = 1000L
+
+    /**
+     * v1.0.31 (battery, H5a): idle gate for one dashboard stream
+     * (chunked or WebSocket). A frame only counts as "new" when
+     * its payload differs from the previous frame sent — /traffic,
+     * /connections and /memory produce a frame every second even
+     * when nothing changed, and /logs produces null when quiet,
+     * so "no new frame" is the idle signal for all four. After
+     * [STREAM_IDLE_TIMEOUT_MS] with nothing new the server closes
+     * the stream: the 3 stream threads stop waking every second
+     * while the dashboard sits backgrounded (or idle), and yacd
+     * re-opens the stream on its own when the page is shown again
+     * (its WebSocket close handlers fall back to a fresh fetch;
+     * verified in the bundled yacd JS: traffic/memory `close` →
+     * reconnect, logs `error` → fetch fallback). The stream is
+     * never closed while content keeps changing — live traffic
+     * or a busy log keeps it open indefinitely.
+     */
+    internal class StreamIdleGate(
+        private val idleTimeoutMs: Long = STREAM_IDLE_TIMEOUT_MS,
+        startMs: Long = System.currentTimeMillis(),
+    ) {
+        private var lastSent: String? = null
+        private var lastNewMs: Long = startMs
+
+        /** True when [line] is new content worth sending now. */
+        fun shouldSend(line: String, nowMs: Long): Boolean {
+            if (line == lastSent) return false
+            lastSent = line
+            lastNewMs = nowMs
+            return true
+        }
+
+        /** True when nothing new has been sent for [idleTimeoutMs]. */
+        fun isIdle(nowMs: Long): Boolean = nowMs - lastNewMs >= idleTimeoutMs
+    }
+
+    /** Close a stream after this long with no new frame content. */
+    internal const val STREAM_IDLE_TIMEOUT_MS = 60_000L
 
     // ---- Live deps ----
 
@@ -548,6 +597,9 @@ object ClashApiServer {
         }
 
         override fun logLines(): List<String> = DialLog.lines()
+
+        override fun logLinesSince(fromSeq: Long): Pair<Long, List<String>> =
+            DialLog.linesSince(fromSeq)
 
         override fun assetBytes(path: String): ByteArray? = runCatching {
             appContext.assets.open("yacd/$path").use { it.readBytes() }

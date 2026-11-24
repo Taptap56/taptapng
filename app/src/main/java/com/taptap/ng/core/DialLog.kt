@@ -3,6 +3,8 @@ package com.taptap.ng.core
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Structured dial logging (v1.0.6, fix E).
@@ -88,7 +90,52 @@ object DialLog {
     var logcatSink: ((tag: String, message: String) -> Unit)? = null
 
     private val lock = Any()
-    private val lines = ArrayDeque<String>()
+    /** Ring entries, oldest first. [Entry.seq] is monotonic per line. */
+    private data class Entry(val seq: Long, val line: String)
+    private val lines = ArrayDeque<Entry>()
+
+    /** Monotonic line counter; never reset (see [linesSince]). */
+    private val seqCounter = AtomicLong(0L)
+
+    /**
+     * v1.0.31 (battery, H4a): the newest SPEED line, cached at
+     * write time so the status-bar refresh no longer copies the
+     * whole ring every 2 s to find it (see
+     * [com.taptap.ng.ui.main.SpeedDisplay.latestSpeedSummaryFromLine]).
+     * A SPEED line's message starts with "SPEED " (see
+     * [com.taptap.ng.core.proto.SpeedStats.windowLine] /
+     * [com.taptap.ng.core.proto.SpeedStats.totalLine]); the stage
+     * is not rendered, so the message itself is the marker.
+     * Cleared by [clear]; a SPEED line evicted by the ring cap
+     * stays cached — it is still the newest SPEED line.
+     */
+    private val latestSpeedLine = AtomicReference<String?>(null)
+
+    /** Newest SPEED line, or null when none was logged yet. */
+    fun latestSpeedLine(): String? = latestSpeedLine.get()
+
+    /** Sequence of the newest line written so far (0 = none). */
+    fun currentSequence(): Long = seqCounter.get()
+
+    /**
+     * v1.0.31 (battery, H4b): lines appended after [fromSeq],
+     * in order, with the current sequence — O(new lines), never
+     * a full-ring copy. A [fromSeq] older than the ring (or -1)
+     * returns the whole ring (snapshot); a [fromSeq] at/after
+     * the newest line returns an empty list. [clear] does NOT
+     * reset the counter, so a tailer holding a pre-clear
+     * sequence correctly receives only lines written after it.
+     */
+    fun linesSince(fromSeq: Long): Pair<Long, List<String>> = synchronized(lock) {
+        val fresh = ArrayList<String>()
+        for (i in lines.indices.reversed()) {
+            val e = lines[i]
+            if (e.seq <= fromSeq) break
+            fresh.add(e.line)
+        }
+        fresh.reverse()
+        seqCounter.get() to fresh
+    }
 
     /**
      * v1.0.3 (XVEON parity): a line is timestamp + message ONLY —
@@ -175,14 +222,19 @@ object DialLog {
     private fun add(text: String) {
         val stamp = stampFormat.get()!!.format(Date())
         val line = "[$stamp] $text"
+        val seq = seqCounter.incrementAndGet()
         synchronized(lock) {
             if (lines.size >= MAX_LINES) lines.removeFirst()
-            lines.addLast(line)
+            lines.addLast(Entry(seq, line))
         }
+        if (text.startsWith("SPEED ")) latestSpeedLine.set(line)
         runCatching { logcatSink?.invoke(TAG, line) }
     }
 
-    fun lines(): List<String> = synchronized(lock) { lines.toList() }
+    fun lines(): List<String> = synchronized(lock) { lines.map { it.line } }
 
-    fun clear() = synchronized(lock) { lines.clear() }
+    fun clear() {
+        synchronized(lock) { lines.clear() }
+        latestSpeedLine.set(null)
+    }
 }

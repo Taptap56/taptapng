@@ -74,6 +74,7 @@ class ClashApiHandlerNestedTest {
         override fun closeConnection(id: String): Boolean = false
         override fun closeAllConnections() {}
         override fun logLines(): List<String> = emptyList()
+        override fun logLinesSince(fromSeq: Long): Pair<Long, List<String>> = 0L to emptyList()
         override fun assetBytes(path: String): ByteArray? = null
     }
 

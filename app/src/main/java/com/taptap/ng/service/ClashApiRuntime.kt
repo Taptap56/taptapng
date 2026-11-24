@@ -76,10 +76,41 @@ object ClashApiRuntime {
         val profiles = ProfileStore(ProfileStore.defaultFile(filesDir))
             .apply { load() }
         store.load(profiles.profiles, profiles.selectedGuid)
-        // v1.0.28: a group may have appeared / changed on disk
-        // (GroupsActivity, PUT select) — wake the loop so its
-        // first round runs now, not at the next due time.
-        urlTestLoop?.kick()
+        // v1.0.31 (battery, H5b): kick the url-test loop ONLY when
+        // the groups actually changed. refreshGroups runs on every
+        // Clash API read (every dashboard poll), and the old
+        // unconditional kick woke the sleeping worker once a
+        // second for nothing. A group that appeared / changed
+        // (create/edit/select, profile add/remove pruning) still
+        // kicks at once, so its first round still runs now, not
+        // at the next due time (v1.0.28 behaviour, kept).
+        if (groupsChanged(store)) {
+            urlTestLoop?.kick()
+        }
         return store
+    }
+
+    /**
+     * Fingerprint of the group state that decides a url-test
+     * round: groups (members, selection, url-test settings),
+     * rules, and the main-group id. Data-class equality, so a
+     * rename / member add / selection move / rule toggle all
+     * count as a change; a plain re-read of identical content
+     * does not. The first call has no baseline and counts as
+     * changed (kick once, like before).
+     */
+    internal fun groupsFingerprint(store: GroupsStore): Int =
+        java.util.Objects.hash(store.groups.toList(), store.rules.toList(), store.mainGroupId)
+
+    /** Fingerprint of the last refresh that kicked (null = none yet). */
+    @Volatile
+    private var lastGroupsFingerprint: Int? = null
+
+    @Synchronized
+    private fun groupsChanged(store: GroupsStore): Boolean {
+        val fingerprint = groupsFingerprint(store)
+        if (fingerprint == lastGroupsFingerprint) return false
+        lastGroupsFingerprint = fingerprint
+        return true
     }
 }
