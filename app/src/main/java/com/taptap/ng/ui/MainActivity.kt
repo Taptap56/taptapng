@@ -351,7 +351,9 @@ class MainActivity : AppCompatActivity() {
         val view = findViewById<android.widget.TextView>(R.id.speed_text)
         val text = SpeedDisplay.formatSpeedText(
             settings.speedEnabled,
-            SpeedDisplay.latestSpeedSummary(DialLog.lines()),
+            // v1.0.31 (battery, H4a): newest SPEED line straight
+            // from DialLog's cache — no full-ring copy every 2 s.
+            SpeedDisplay.latestSpeedSummaryFromLine(DialLog.latestSpeedLine()),
         )
         if (text == null) {
             view.visibility = View.GONE

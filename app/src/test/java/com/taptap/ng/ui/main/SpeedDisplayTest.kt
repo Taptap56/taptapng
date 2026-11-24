@@ -59,6 +59,20 @@ class SpeedDisplayTest {
     }
 
     @Test
+    fun `latestSpeedSummaryFromLine reads the cached line without a list`() {
+        // v1.0.31 (H4a): MainActivity tidak lagi menyalin ring —
+        // baris SPEED terbaru datang dari DialLog.latestSpeedLine().
+        assertEquals("↓ 1.23 MB/s", SpeedDisplay.latestSpeedSummaryFromLine(windowLine))
+        assertEquals("↓ 2.50 MB/s", SpeedDisplay.latestSpeedSummaryFromLine(totalLine))
+        assertNull(SpeedDisplay.latestSpeedSummaryFromLine(null))
+        assertNull(
+            SpeedDisplay.latestSpeedSummaryFromLine(
+                "[11:00:00.123] Starting profile 'x'...",
+            ),
+        )
+    }
+
+    @Test
     fun `speed on shows the summary`() {
         assertEquals(
             "↓ 1.23 MB/s",

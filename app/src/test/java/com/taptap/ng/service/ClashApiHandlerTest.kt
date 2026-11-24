@@ -98,6 +98,12 @@ class ClashApiHandlerTest {
             conns.forEach { closedIds += it.id }
         }
         override fun logLines(): List<String> = logLines
+        // v1.0.31 (H4b): sequence = line count (fake); -1 = snapshot.
+        override fun logLinesSince(fromSeq: Long): Pair<Long, List<String>> {
+            val seq = logLines.size.toLong()
+            val fresh = logLines.drop(fromSeq.coerceAtLeast(0L).toInt())
+            return seq to fresh
+        }
         override fun assetBytes(path: String): ByteArray? = assets[path]
     }
 
@@ -530,6 +536,34 @@ class ClashApiHandlerTest {
         assertTrue(first.get("payload").asString.contains("START ok"))
         // No new lines -> null (stream stays open, server retries).
         assertEquals(null, logs.produce())
+    }
+
+    @Test
+    fun logsTailerSendsOnlyNewLinesInOrder() {
+        // v1.0.31 (H4b): tailer berbasis sekuens — snapshot awal
+        // sekali, lalu hanya baris baru, tanpa salinan ring penuh.
+        // GAGAL pada kode lama bila dua baris identik ada di ring
+        // (lastIndexOf melewatkan duplikat kedua).
+        val deps = defaultDeps()
+        deps.logLines = listOf("[10:00:00.000] A sama", "[10:00:01.000] A sama")
+        val handler = ClashApiHandler(deps)
+        val tailer = handler.logsTailer()
+        val first = JsonParser.parseString(tailer()!!).asJsonObject
+        assertTrue(first.get("payload").asString.contains("A sama"))
+        // Baris duplikat kedua tetap terkirim (bukan dilewatkan).
+        val second = JsonParser.parseString(tailer()!!).asJsonObject
+        assertTrue(second.get("payload").asString.contains("A sama"))
+        assertEquals(null, tailer())
+        // Baris baru sesudahnya terkirim berurutan, yang lama tidak diulang.
+        deps.logLines = deps.logLines + listOf(
+            "[10:00:02.000] B baru",
+            "[10:00:03.000] C baru",
+        )
+        val third = JsonParser.parseString(tailer()!!).asJsonObject
+        assertTrue(third.get("payload").asString.contains("B baru"))
+        val fourth = JsonParser.parseString(tailer()!!).asJsonObject
+        assertTrue(fourth.get("payload").asString.contains("C baru"))
+        assertEquals(null, tailer())
     }
 
     // ---- UI ----

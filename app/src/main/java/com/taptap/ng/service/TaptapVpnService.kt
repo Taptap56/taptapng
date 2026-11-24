@@ -1030,8 +1030,23 @@ class TaptapVpnService : VpnService() {
             observatoryRunner = ObservatoryRunner(
                 config = obsConfig,
                 itemsProvider = {
-                    ProfileStore(ProfileStore.defaultFile(filesDir))
+                    val profiles = ProfileStore(ProfileStore.defaultFile(filesDir))
                         .apply { load() }.profiles.toList()
+                    // v1.0.31 (battery, H2): probe HANYA server yang
+                    // bisa terpilih lewat rute aktif (lihat
+                    // Observatory.selectableGuids) — server di luar
+                    // grup aktif tidak pernah jadi saran, jadi tidak
+                    // di-probe. Tanpa grup (tak mungkin saat tunnel
+                    // hidup — store dibuat di atas), fallback ke
+                    // semua profil seperti dulu.
+                    val store = ClashApiRuntime.groupsStore
+                    if (store == null) profiles
+                    else {
+                        val selectable = Observatory.selectableGuids(
+                            store.groups, store.rules, store.mainGroupId,
+                        )
+                        profiles.filter { it.guid in selectable }
+                    }
                 },
                 isActive = {
                     runCatching {

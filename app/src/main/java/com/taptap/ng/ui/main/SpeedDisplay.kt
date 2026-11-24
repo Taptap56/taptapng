@@ -25,6 +25,16 @@ object SpeedDisplay {
      */
     fun latestSpeedSummary(lines: List<String>): String? {
         val line = lines.asReversed().firstOrNull { it.contains("SPEED ") } ?: return null
+        return latestSpeedSummaryFromLine(line)
+    }
+
+    /**
+     * v1.0.31 (battery, H4a): same rate, from the newest SPEED
+     * line already cached by [DialLog.latestSpeedLine] — no ring
+     * copy, no scan. Null = no SPEED line yet.
+     */
+    fun latestSpeedSummaryFromLine(line: String?): String? {
+        if (line == null) return null
         val rate = RATE.find(line)?.groupValues?.getOrNull(1) ?: return null
         return "↓ $rate MB/s"
     }

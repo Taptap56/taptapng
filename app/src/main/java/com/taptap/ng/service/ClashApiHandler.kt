@@ -127,6 +127,13 @@ interface ClashApiDeps {
     fun closeConnection(id: String): Boolean
     fun closeAllConnections()
     fun logLines(): List<String>
+    /**
+     * v1.0.31 (battery, H4b): lines appended after [fromSeq] plus
+     * the current sequence — O(new lines), never a full-ring copy
+     * (see [DialLog.linesSince]). A [fromSeq] of -1 returns the
+     * whole ring (initial snapshot).
+     */
+    fun logLinesSince(fromSeq: Long): Pair<Long, List<String>>
     /** Raw bytes of one bundled yacd asset (path relative to yacd/), or null. */
     fun assetBytes(path: String): ByteArray?
 }
@@ -768,24 +775,21 @@ class ClashApiHandler(private val deps: ClashApiDeps) {
      * only lines appended after the last one sent. Lines are sent
      * one per produce() call as Clash log objects
      * {"type":"info","payload":"...","time":"..."}.
+     *
+     * v1.0.31 (battery, H4b): offset-based — [DialLog.linesSince]
+     * returns only the lines appended since the last sequence
+     * sent, with no full-ring copy and no lastIndexOf scan. The
+     * old string-match tail could resend (or skip) lines when
+     * two identical lines sat in the ring; the sequence cannot
+     * collide. Order + content of the stream are unchanged.
      */
     internal fun logsTailer(): () -> String? {
         val pending = ArrayDeque<String>()
-        var lastSent: String? = null
-        var primed = false
+        var lastSeq = -1L
         val tailer: () -> String? = tailer@{
-            if (!primed) {
-                primed = true
-                val lines = deps.logLines()
-                pending.addAll(lines)
-                lastSent = lines.lastOrNull()
-            } else {
-                val lines = deps.logLines()
-                val idx = lastSent?.let { lines.lastIndexOf(it) } ?: -1
-                val fresh = if (idx < 0) lines else lines.drop(idx + 1)
-                pending.addAll(fresh)
-                if (fresh.isNotEmpty()) lastSent = fresh.last()
-            }
+            val (newSeq, fresh) = deps.logLinesSince(lastSeq)
+            lastSeq = newSeq
+            pending.addAll(fresh)
             val line = pending.removeFirstOrNull() ?: return@tailer null
             gson.toJson(obj {
                 addProperty("type", "info")
