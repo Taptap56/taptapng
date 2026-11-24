@@ -98,6 +98,15 @@ class TaptapVpnService : VpnService() {
         val isRunning: Boolean get() = connection.isRunning
 
         /**
+         * v1.0.32: true only when the tunnel is actually up
+         * (RUNNING) — false while STARTING, FAILED or IDLE.
+         * [isRunning] is true from the moment a start is requested,
+         * so it cannot gate the dashboard; the dashboard gate reads
+         * this instead (see DashboardGate).
+         */
+        val isConnected: Boolean get() = connection.isConnected
+
+        /**
          * Profiles that cannot ride the TUN in this version. Start
          * must fail with a clear status instead of blackholing
          * traffic or hanging on "Connecting..." forever. v1.0.4:

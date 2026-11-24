@@ -64,6 +64,7 @@ import com.taptap.ng.service.TaptapVpnService
 import com.taptap.ng.service.decideLiveSwitch
 import com.taptap.ng.ui.groups.GroupsActivity
 import com.taptap.ng.ui.log.LogActivity
+import com.taptap.ng.ui.main.DashboardGate
 import com.taptap.ng.ui.main.DashboardUrl
 import com.taptap.ng.ui.main.GROUP_ALL_ID
 import com.taptap.ng.ui.main.MainViewModel
@@ -99,6 +100,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mainTabs: TabLayout
     private lateinit var dashboardContainer: View
     private lateinit var dashboardDisabled: View
+    private lateinit var dashboardVpnOff: View
     private lateinit var dashboardError: View
     private var dashboardWebView: WebView? = null
     private var dashboardMode = false
@@ -177,6 +179,7 @@ class MainActivity : AppCompatActivity() {
         mainTabs = findViewById(R.id.main_tabs)
         dashboardContainer = findViewById(R.id.dashboard_container)
         dashboardDisabled = findViewById(R.id.dashboard_disabled)
+        dashboardVpnOff = findViewById(R.id.dashboard_vpn_off)
         dashboardError = findViewById(R.id.dashboard_error)
         dashboardMode = savedInstanceState?.getBoolean(KEY_DASHBOARD_MODE, false) ?: false
         onBackPressedDispatcher.addCallback(this, dashboardBackCallback)
@@ -317,11 +320,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        dashboardWebView?.let { webView ->
-            (webView.parent as? ViewGroup)?.removeView(webView)
-            webView.destroy()
-        }
-        dashboardWebView = null
+        // v1.0.32: same teardown as the VPN-off transition.
+        destroyDashboardWebView()
         super.onDestroy()
     }
 
@@ -338,6 +338,14 @@ class MainActivity : AppCompatActivity() {
             else getString(R.string.status_stopped)
         }
         viewModel.setRunning(running, status)
+        // v1.0.32: the dashboard follows the REAL tunnel state, not
+        // the optimistic UI — a stop (or a start still in STARTING)
+        // tears the WebView down, a connect rebuilds it. This runs
+        // on the 2 s poll, on resume and 1.5 s after a start, so the
+        // switch lands within ~2 s of the VPN going up/down. The
+        // FAB toggle needs no extra hook: stopVpn/startVpn both
+        // funnel back here (poll / postDelayed sync).
+        if (dashboardMode) showDashboard()
     }
 
     /**
@@ -556,28 +564,67 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Show the dashboard, or the disabled panel when the Clash API
-     * is off. The WebView is created lazily here, on first
-     * selection — never at Activity creation. The loaded URL is
-     * re-checked on every show so a port/secret change in Settings
-     * is picked up without a restart.
+     * is off, or the VPN-off placeholder when the tunnel is not up.
+     * v1.0.32: the dashboard only runs while the VPN is actually
+     * connected (RUNNING — not merely STARTING). While the VPN is
+     * down the WebView is destroyed outright (stopLoading + detach
+     * + destroy + null + URL marker reset), so no yacd polling or
+     * WebSocket stream survives; the next connect rebuilds it from
+     * scratch. Priority: API off > VPN off > WebView. The loaded URL
+     * is re-checked on every show so a port/secret change in
+     * Settings is picked up without a restart.
+     *
+     * The Clash API server itself is deliberately NOT stopped here:
+     * it follows the app process (TaptapNGApp.onCreate), and no
+     * in-app consumer reaches it over HTTP — the server list, delay
+     * test, groups and live switch all use ClashApiRuntime directly
+     * in-process; the only HTTP client is this WebView. Idle it is
+     * a single blocking accept thread; streams exist only while a
+     * WebSocket client is connected, and that client is gone once
+     * the WebView is destroyed.
      */
     private fun showDashboard() {
-        if (!settings.clashApiEnabled) {
-            dashboardDisabled.visibility = View.VISIBLE
-            dashboardError.visibility = View.GONE
-            dashboardWebView?.visibility = View.GONE
-            return
+        when (DashboardGate.decide(TaptapVpnService.isConnected, settings.clashApiEnabled)) {
+            DashboardGate.State.API_DISABLED -> {
+                dashboardDisabled.visibility = View.VISIBLE
+                dashboardVpnOff.visibility = View.GONE
+                dashboardError.visibility = View.GONE
+                dashboardWebView?.visibility = View.GONE
+            }
+            DashboardGate.State.VPN_OFF -> {
+                dashboardDisabled.visibility = View.GONE
+                dashboardVpnOff.visibility = View.VISIBLE
+                dashboardError.visibility = View.GONE
+                destroyDashboardWebView()
+            }
+            DashboardGate.State.WEBVIEW -> {
+                dashboardDisabled.visibility = View.GONE
+                dashboardVpnOff.visibility = View.GONE
+                val webView = dashboardWebView ?: createDashboardWebView().also { dashboardWebView = it }
+                webView.visibility = View.VISIBLE
+                val url = currentDashboardUrl()
+                if (dashboardUrlLoaded != url) {
+                    dashboardError.visibility = View.GONE
+                    dashboardUrlLoaded = url
+                    // Never log `url`: it may carry ?secret=.
+                    webView.loadUrl(url)
+                }
+            }
         }
-        dashboardDisabled.visibility = View.GONE
-        val webView = dashboardWebView ?: createDashboardWebView().also { dashboardWebView = it }
-        webView.visibility = View.VISIBLE
-        val url = currentDashboardUrl()
-        if (dashboardUrlLoaded != url) {
-            dashboardError.visibility = View.GONE
-            dashboardUrlLoaded = url
-            // Never log `url`: it may carry ?secret=.
-            webView.loadUrl(url)
-        }
+    }
+
+    /** Tear the dashboard WebView down completely (v1.0.32): stop any
+     *  in-flight load, detach it so no stream/polling survives,
+     *  destroy it, and forget the loaded URL so the next connect
+     *  loads fresh. No-op when there is no WebView. */
+    private fun destroyDashboardWebView() {
+        val webView = dashboardWebView ?: return
+        dashboardWebView = null
+        dashboardUrlLoaded = null
+        webView.stopLoading()
+        (webView.parent as? ViewGroup)?.removeView(webView)
+        webView.destroy()
+        updateBackCallback()
     }
 
     /**
@@ -592,6 +639,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun reloadDashboard() {
+        // v1.0.32: never reload into a dead/absent WebView — let
+        // showDashboard() pick the right panel (API-off / VPN-off /
+        // WebView) instead of loading a URL while the VPN is down.
+        if (DashboardGate.decide(TaptapVpnService.isConnected, settings.clashApiEnabled)
+            != DashboardGate.State.WEBVIEW
+        ) {
+            showDashboard()
+            return
+        }
         dashboardError.visibility = View.GONE
         val webView = dashboardWebView ?: run { showDashboard(); return }
         dashboardUrlLoaded = currentDashboardUrl()

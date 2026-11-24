@@ -1,4 +1,4 @@
-# TaptapNG v1.0.30
+# TaptapNG v1.0.32
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.ng`, **versi** 1.0.30 (vc31)
+- **id** `com.taptap.ng`, **versi** 1.0.32 (vc33)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,27 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.32 — Dashboard hanya aktif saat VPN jalan
+
+Tab Dashboard tidak lagi memuat yacd saat VPN mati: tampil placeholder
+statis "VPN mati — nyalakan VPN untuk membuka dashboard", WebView tidak
+dibuat/dimuat, tidak ada polling/stream. VPN nyala (tunnel RUNNING,
+bukan sekadar STARTING) → dashboard jalan normal seperti v1.0.30.
+VPN dimatikan saat dashboard terbuka → WebView dihentikan/dihancurkan
+(stopLoading + lepas dari parent + destroy + null + reset penanda URL)
+dan tab kembali ke placeholder, paling lambat ~2 dtk sesudah VPN
+mati/nyala (poll 2 dtk yang sudah ada). Prioritas panel: API Clash
+mati → panel `dashboardDisabled` yang sudah ada; API nyala + VPN mati
+→ placeholder baru; keduanya nyala → WebView. Server Clash API
+(127.0.0.1:9091) TETAP jalan mengikuti proses aplikasi — tidak ada
+konsumen HTTP in-app selain WebView (daftar server, delay test, grup,
+live switch semua pakai ClashApiRuntime langsung in-process), dan saat
+idle ia hanya satu thread accept yang blocking. Yang tidak berubah:
+primer tetap interval 15 dtk tanpa backoff, Observatory seperti
+v1.0.30, mux OFF, bottomMargin WebView tetap 80dp.
+Catatan versi: vc32 sudah dipakai v1.0.31 yang ditolak user, jadi
+v1.0.32 memakai vc33. Detail + cara tes: `README-v1.0.32.md`.
 
 ## v1.0.30 — Rantai koneksi leaf-first + dashboard bisa di-scroll sampai bawah
 

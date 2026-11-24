@@ -96,6 +96,29 @@
                     android:text="@string/dashboard_enable" />
             </LinearLayout>
 
+            <!-- VPN mati (v1.0.32): dashboard hanya jalan saat VPN
+                 benar-benar konek — placeholder statis, WebView tidak
+                 dibuat/dimuat sama sekali. -->
+            <LinearLayout
+                android:id="@+id/dashboard_vpn_off"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="?attr/colorSurface"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="24dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:text="@string/dashboard_vpn_off"
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
             <!-- Load error (server not ready yet / bind failed):
                  retry without leaving the tab. -->
             <LinearLayout

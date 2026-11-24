@@ -115,6 +115,7 @@
     <string name="tab_server">Server</string>
     <string name="tab_dashboard">Dashboard</string>
     <string name="dashboard_disabled">Clash API is off — the dashboard needs the local API server.</string>
+    <string name="dashboard_vpn_off">VPN mati — nyalakan VPN untuk membuka dashboard.</string>
     <string name="dashboard_enable">Enable Clash API</string>
     <string name="dashboard_load_error">Dashboard failed to load — the local API server may not be ready yet.</string>
     <string name="groups_title">Grup proxy &amp; rute</string>

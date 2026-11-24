@@ -74,6 +74,16 @@ class VpnConnection {
         get() = state == State.STARTING || state == State.RUNNING
 
     /**
+     * v1.0.32: true only once the tunnel is actually up (RUNNING).
+     * Unlike [isRunning], false while STARTING — a start that never
+     * completes must not count as "VPN jalan", so the dashboard
+     * gate ([com.taptap.ng.ui.main.DashboardGate]) uses this, never
+     * [isRunning]: STARTING still shows the VPN-off placeholder.
+     */
+    val isConnected: Boolean
+        get() = state == State.RUNNING
+
+    /**
      * A (re)start was requested for [label]. Returns what the caller
      * must do — and the status already names [label], so the UI poll
      * picks the new entry up within one cycle.
