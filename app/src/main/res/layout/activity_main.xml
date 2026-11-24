@@ -55,7 +55,11 @@
         <!-- M7 (W5): Dashboard tab container. The WebView itself is
              created lazily in code on first selection (never at
              Activity creation, to save memory) and added as the
-             first child, so the two overlays below sit on top of it. -->
+             first child, so the two overlays below sit on top of it.
+             v1.0.30: the WebView carries an 80dp bottom margin (see
+             MainActivity.createDashboardWebView) so its viewport
+             ends above the 64dp bottom bar, like the server list's
+             80dp bottom padding. -->
         <FrameLayout
             android:id="@+id/dashboard_container"
             android:layout_width="match_parent"

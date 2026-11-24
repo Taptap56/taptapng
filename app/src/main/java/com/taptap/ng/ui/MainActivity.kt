@@ -24,6 +24,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -610,10 +611,25 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun createDashboardWebView(): WebView {
         val webView = WebView(this)
-        webView.layoutParams = ViewGroup.LayoutParams(
+        webView.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
-        )
+        ).apply {
+            // v1.0.30: clearance bawah 80dp — pola yang sama
+            // dengan daftar server (paddingBottom 80dp +
+            // clipToPadding false di activity_main.xml): bottom
+            // bar 64dp menutupi 64dp terbawah container, jadi
+            // viewport yacd (100vh) berakhir di bawah bar dan
+            // kaki halaman tidak bisa di-scroll ke atas bar.
+            // Margin ini memendekkan WebView sehingga viewport
+            // berakhir 16dp di atas bar — semua halaman
+            // dashboard (Proxies, Connections, Rules, Overview)
+            // bisa di-scroll sampai bawah. Margin dipasang di
+            // WebView (bukan di container): FrameLayout selalu
+            // menghormati margin anak, sementara tinggi
+            // MATCH_PARENT container diatur ScrollingViewBehavior.
+            bottomMargin = (80 * resources.displayMetrics.density).toInt()
+        }
         webView.settings.apply {
             // yacd needs JS + DOM storage + localStorage (it keeps
             // its API config and preferences there).
