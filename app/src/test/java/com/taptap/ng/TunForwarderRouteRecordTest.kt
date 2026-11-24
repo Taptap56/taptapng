@@ -228,7 +228,8 @@ class TunForwarderRouteRecordTest {
             )
             val id = h.fwd.activeConnections().first { it.network == "tcp" }.id
             assertEquals(
-                RouteRecord("FINAL", "", listOf("taptap", "tes", "81")),
+                // v1.0.30: mihomo order — leaf first.
+                RouteRecord("FINAL", "", listOf("81", "tes", "taptap")),
                 h.fwd.connectionRoutes()[id],
             )
         } finally {
@@ -409,7 +410,7 @@ class TunForwarderRouteRecordTest {
             val conn = h.fwd.activeConnections().first { it.network == "tcp" }
             assertEquals("FINAL", conn.rule)
             assertEquals("", conn.rulePayload)
-            assertEquals(listOf("taptap", "tes", "81"), conn.chains)
+            assertEquals(listOf("81", "tes", "taptap"), conn.chains)
         } finally {
             h.stop()
         }

@@ -109,11 +109,13 @@ data class RouteRecord(
  *   [RouteEngine.resolveDetailed]).
  * - [RouteRecord.rulePayload]: the matched rule's pattern
  *   ("" for FINAL).
- * - [RouteRecord.chains]: the proxy chain as display names —
- *   the nested group names on the path plus the final server
- *   name (["taptap", "tes", "81"]); just the server name
- *   (["81"]) when the server is a direct member; ["DIRECT"]
- *   for a bypass, ["REJECT"] for a block.
+ * - [RouteRecord.chains]: the proxy chain as display names, in
+ *   MIHOMO ORDER (v1.0.30) — the final server first, then the
+ *   nested group names back out to the outermost group
+ *   (["81", "tes", "taptap"]); just the server name (["81"])
+ *   when the server is a direct member; ["DIRECT"] for a bypass,
+ *   ["REJECT"] for a block. Leaf-first so yacd's chains[0] is
+ *   the server (row label + outboundType), not a group name.
  */
 data class ResolvedRoute(
     val decision: RouteDecision,
@@ -184,8 +186,9 @@ object RouteEngine {
      * - A matched rule reports its type name ([RouteRuleType])
      *   and its normalised pattern ("" for FINAL).
      * - A matched group reports its chain ([resolveChainNames]):
-     *   nested group names + the server display name, or just
-     *   the server name for a direct member.
+     *   the server display name first, then the nested group
+     *   names back out (mihomo order, v1.0.30), or just the
+     *   server name for a direct member.
      * - DIRECT / REJECT targets report chains ["DIRECT"] /
      *   ["REJECT"].
      * - Clash modes report rule "GLOBAL" / "DIRECT" (the
@@ -306,13 +309,14 @@ object RouteEngine {
 
     /**
      * v1.0.29: the proxy chain a connection through [group]
-     * takes, as display names — the nested group names on the
-     * path plus the final server's display name, e.g.
-     * ["taptap", "tes", "81"] when the main group selects nested
-     * group "tes" which selects server "81". When the server is
-     * a DIRECT member of [group] (no nesting on the path) the
-     * chain is just the server name, e.g. ["81"] — the group
-     * itself is implied, like the Clash API's `now` for a plain
+     * takes, as display names — in MIHOMO ORDER (v1.0.30): the
+     * final server first, then the nested group names back out
+     * to the outermost group, e.g. ["81", "tes", "taptap"]
+     * when the main group selects nested group "tes" which
+     * selects server "81". When the server is a DIRECT member
+     * of [group] (no nesting on the path) the chain is just
+     * the server name, e.g. ["81"] — the group itself is
+     * implied, like the Clash API's `now` for a plain
      * selection. Null when nothing resolves (empty group, or a
      * cycle — the same guard as [resolveToServer]). The walk
      * mirrors [resolveToServer] exactly (same
@@ -343,12 +347,18 @@ object RouteEngine {
             if (nested == null) {
                 // A server guid: the chain ends here. When the walk
                 // descended through nested groups, the group holding
-                // the server is part of the chain too (["taptap",
-                // "tes", "81"]); a direct member reports just the
-                // server (["81"] — the group itself is implied).
+                // the server is part of the chain too — but in
+                // MIHOMO ORDER (v1.0.30): leaf first, outermost
+                // group last (["81", "tes", "taptap"]), so yacd's
+                // chains[0] is the server (its row label +
+                // outboundType) and chainsFull renders
+                // "taptap → tes → 81" after its reverse-join. A
+                // direct member reports just the server (["81"] —
+                // the group itself is implied).
                 val server = serverNames[ref] ?: ref
-                return if (path.isEmpty()) listOf(server)
+                val groupFirst = if (path.isEmpty()) listOf(server)
                 else path + current.name.ifBlank { current.id } + server
+                return groupFirst.reversed()
             }
             path.add(current.name.ifBlank { current.id })
             current = nested

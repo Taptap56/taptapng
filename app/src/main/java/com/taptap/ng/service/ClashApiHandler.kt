@@ -30,10 +30,11 @@ import java.util.TimeZone
  * rule's type (e.g. "FINAL", "DOMAIN-SUFFIX"), `rulePayload` its
  * pattern ("" for FINAL — yacd renders `rule` alone then), and
  * `chains` is the resolved proxy chain as an array of strings,
- * outermost group first, server last (["taptap","tes","81"]);
- * ["DIRECT"] for a bypassed connection, ["REJECT"] for a blocked
- * one. yacd keys the outbound type off `chains[0]` ("DIRECT" ->
- * Direct, "REJECT"/"PASS" -> Reject, anything else -> Proxy) and
+ * in MIHOMO ORDER (v1.0.30): server first, outermost group
+ * last (["81","tes","taptap"]); ["DIRECT"] for a bypassed
+ * connection, ["REJECT"] for a blocked one. yacd keys the
+ * outbound type off `chains[0]` ("DIRECT" -> Direct,
+ * "REJECT"/"PASS" -> Reject, anything else -> Proxy) and
  * renders the chain as `last -> first` (single element as-is,
  * empty as ""). The three fields default to "" / "" / [] so the
  * forwarder's existing construction sites keep compiling until

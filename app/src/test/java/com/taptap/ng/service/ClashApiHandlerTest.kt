@@ -444,14 +444,15 @@ class ClashApiHandlerTest {
                 upload = 10L, download = 20L, startMs = 1_792_000_000_000L,
                 rule = "FINAL", rulePayload = "", chains = listOf("81"),
             ),
-            // DOMAIN-SUFFIX -> grup bersarang taptap > tes > 81.
+            // DOMAIN-SUFFIX -> grup bersarang, rantai urutan mihomo
+            // (v1.0.30): server dulu, grup terluar terakhir.
             ConnectionInfo(
                 id = "c-nested", network = "tcp", host = "www.google.com",
                 destinationIp = "142.250.0.1", destinationPort = 443,
                 sourceIp = "10.0.0.2", sourcePort = 1235,
                 upload = 11L, download = 21L, startMs = 1_792_000_000_000L,
                 rule = "DOMAIN-SUFFIX", rulePayload = "google.com",
-                chains = listOf("taptap", "tes", "81"),
+                chains = listOf("81", "tes", "taptap"),
             ),
             // Bypass: FINAL -> DIRECT.
             ConnectionInfo(
@@ -482,7 +483,7 @@ class ClashApiHandlerTest {
         assertEquals(listOf("81"), stringsAt(0, "chains"))
         assertEquals("DOMAIN-SUFFIX", conns[1].asJsonObject.get("rule").asString)
         assertEquals("google.com", conns[1].asJsonObject.get("rulePayload").asString)
-        assertEquals(listOf("taptap", "tes", "81"), stringsAt(1, "chains"))
+        assertEquals(listOf("81", "tes", "taptap"), stringsAt(1, "chains"))
         assertEquals("FINAL", conns[2].asJsonObject.get("rule").asString)
         assertEquals("", conns[2].asJsonObject.get("rulePayload").asString)
         assertEquals(listOf("DIRECT"), stringsAt(2, "chains"))

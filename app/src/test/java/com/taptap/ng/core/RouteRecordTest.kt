@@ -127,7 +127,8 @@ class RouteRecordTest {
         assertEquals(RouteDecision.Proxy("guid-81"), r.decision)
         assertEquals("FINAL", r.record.rule)
         assertEquals("", r.record.rulePayload)
-        assertEquals(listOf("taptap", "tes", "81"), r.record.chains)
+        // v1.0.30: mihomo order — leaf (server) first.
+        assertEquals(listOf("81", "tes", "taptap"), r.record.chains)
     }
 
     @Test
@@ -215,7 +216,38 @@ class RouteRecordTest {
         )
         assertTrue(
             RouteEngine.resolveChainNames(main, groups, delays, names) ==
-                listOf("taptap", "tes", "81"),
+                listOf("81", "tes", "taptap"),
+        )
+    }
+
+    @Test
+    fun chainNamesDirectCallIsLeafFirstForNested() {
+        // v1.0.30: resolveChainNames on its own (not only via
+        // resolveDetailed) returns the mihomo order — server
+        // first, outermost group last — for a 3-deep nesting,
+        // and just the server for a direct member.
+        val main = group(
+            "main", name = "taptap",
+            members = emptyList(), selected = "tes",
+            nested = listOf("tes"),
+        )
+        val nested = group(
+            "tes", name = "tes", type = ProxyGroupType.URL_TEST,
+            members = listOf("guid-81"),
+        )
+        val groups = listOf(main, nested)
+        val delays = mapOf<String, Long?>("guid-81" to 312L)
+        assertEquals(
+            listOf("81", "tes", "taptap"),
+            RouteEngine.resolveChainNames(main, groups, delays, names),
+        )
+        assertEquals(
+            listOf("81"),
+            RouteEngine.resolveChainNames(
+                group("g1", name = "taptap", selected = "guid-81"),
+                listOf(group("g1", name = "taptap", selected = "guid-81")),
+                emptyMap(), names,
+            ),
         )
     }
 }
