@@ -74,6 +74,23 @@ object PemicuManager {
      *  Pemicu fields while the VPN runs takes effect within 5 s. */
     private const val IDLE_SLEEP_MS = 5_000L
 
+    /** Backoff adaptif primer (v1.0.31, H1 — hemat baterai):
+     *  primer lama mendial tiap interval user tanpa henti
+     *  (~240 dial/jam pada 15 dtk) meski jendela sudah stabil
+     *  berjam-jam — radio seluler praktis tidak pernah idle
+     *  (interval 15 dtk < radio tail ~10–20 dtk). Sesudah
+     *  [PRIME_BACKOFF_OKS_PER_STEP] PRIME OK beruntun, interval
+     *  digandakan satu tangga (15→30→60→120) sampai
+     *  [PRIME_BACKOFF_CAP_SEC]; SATU kali GAGAL langsung kembali
+     *  ke interval user dan hitungan OK di-nol-kan. Jendela
+     *  tertutup / baru dibuka tidak di-backoff: [stop]/[start]
+     *  menghapus state ini, jadi sesi baru selalu mulai dari
+     *  interval user. Pola tangga + cap mengikuti TB yang terbukti
+     *  menahan jendela ~2 jam. Primer TIDAK PERNAH dihentikan —
+     *  hanya frekuensinya yang turun saat jendela stabil. */
+    const val PRIME_BACKOFF_OKS_PER_STEP = 4
+    const val PRIME_BACKOFF_CAP_SEC = 120
+
     /** One prime host + its interval (seconds). */
     data class PemicuTarget(
         val host: String,
@@ -165,13 +182,16 @@ object PemicuManager {
     }
 
     /** The targets whose interval has elapsed since their last
-     *  prime (a host never primed is due at once). */
+     *  prime (a host never primed is due at once). The interval
+     *  is the EFFECTIVE one (v1.0.31, H1): a target with a stable
+     *  window waits out its backed-off interval, not the raw
+     *  user interval. */
     fun dueTargets(
         targets: List<PemicuTarget>,
         lastPrime: Map<String, Long>,
         now: Long,
     ): List<PemicuTarget> = targets.filter { target ->
-        now - (lastPrime[target.key()] ?: 0L) >= target.intervalSec * 1_000L
+        now - (lastPrime[target.key()] ?: 0L) >= effectiveIntervalSec(target) * 1_000L
     }
 
     /**
@@ -193,7 +213,10 @@ object PemicuManager {
         var minMs = Long.MAX_VALUE
         var maxIntervalMs = 0L
         for (target in targets) {
-            val intervalMs = target.intervalSec * 1_000L
+            // v1.0.31 (H1): the sleep follows the EFFECTIVE
+            // (backed-off) interval, or the loop would wake every
+            // user interval just to find nothing due.
+            val intervalMs = effectiveIntervalSec(target) * 1_000L
             if (intervalMs > maxIntervalMs) maxIntervalMs = intervalMs
             val last = lastPrime[target.key()]
             val nextDue = if (last == null) 0L else last + intervalMs
@@ -201,6 +224,59 @@ object PemicuManager {
             if (wait < minMs) minMs = wait
         }
         return minMs.coerceIn(MIN_SLEEP_MS, maxIntervalMs.coerceAtLeast(MIN_SLEEP_MS))
+    }
+
+    /**
+     * Interval efektif satu target dengan backoff adaptif
+     * (v1.0.31, H1): interval user × 2^tangga, dijepit ke
+     * [PRIME_BACKOFF_CAP_SEC] — kecuali bila interval user
+     * sendiri sudah >= cap (mis. 300 dtk), maka cap-nya interval
+     * user itu (backoff tidak boleh MEMPERCEPAT prime). Tanpa
+     * state backoff = interval user apa adanya.
+     */
+    fun effectiveIntervalSec(target: PemicuTarget): Int =
+        intervalAtBackoffStep(target.intervalSec, backoff[target.key()]?.step ?: 0)
+
+    /** Tangga backoff saat ini untuk satu host:port (tes). */
+    internal fun backoffStepFor(key: String): Int = backoff[key]?.step ?: 0
+
+    /** OK beruntun saat ini untuk satu host:port (tes). */
+    internal fun backoffOkStreakFor(key: String): Int = backoff[key]?.okStreak ?: 0
+
+    private fun intervalAtBackoffStep(baseSec: Int, step: Int): Int {
+        val cap = maxOf(PRIME_BACKOFF_CAP_SEC, baseSec)
+        val doubled = baseSec.toLong() * (1L shl step.coerceIn(0, 10))
+        return minOf(doubled, cap.toLong()).toInt()
+    }
+
+    /**
+     * Catat hasil satu dial loop ke state backoff (v1.0.31, H1).
+     * OK: streak +1; tiap [PRIME_BACKOFF_OKS_PER_STEP] OK
+     * beruntun naik satu tangga (streak di-nol-kan) sampai cap.
+     * GAGAL (apa pun penyebabnya): state dihapus — interval
+     * kembali ke interval user seketika. Hanya dipanggil dari
+     * dial loop; [primeNow]/[primeNowSync] (manual / start)
+     * sengaja TIDAK mencatat — sesi baru mulai dari interval
+     * user apa pun hasil prime awalnya.
+     */
+    internal fun recordPrimeResult(target: PemicuTarget, ok: Boolean) {
+        val key = target.key()
+        if (!ok) {
+            backoff.remove(key)
+            return
+        }
+        backoff.compute(key) { _, cur ->
+            val streak = (cur?.okStreak ?: 0) + 1
+            val step = cur?.step ?: 0
+            if (streak >= PRIME_BACKOFF_OKS_PER_STEP) {
+                val cap = maxOf(PRIME_BACKOFF_CAP_SEC, target.intervalSec)
+                val nextStep =
+                    if (intervalAtBackoffStep(target.intervalSec, step) < cap) step + 1 else step
+                BackoffState(okStreak = 0, step = nextStep)
+            } else {
+                BackoffState(okStreak = streak, step = step)
+            }
+        }
     }
 
     /** The log line for a prime result, same short shape as the
@@ -383,6 +459,16 @@ object PemicuManager {
     private var loopThread: Thread? = null
 
     private val lastPrime = ConcurrentHashMap<String, Long>()
+
+    /** Backoff adaptif per host:port (v1.0.31, H1): (OK beruntun
+     *  pada tangga ini, tangga pengganda saat ini). Hanya ditulis
+     *  dari hasil dial loop ([recordPrimeResult]); dibaca
+     *  [effectiveIntervalSec] oleh [dueTargets] /
+     *  [msUntilNextDue]. Dihapus [stop]/[start] — sesi baru
+     *  selalu mulai dari interval user. */
+    private data class BackoffState(val okStreak: Int, val step: Int)
+    private val backoff = ConcurrentHashMap<String, BackoffState>()
+
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
 
     /** Sockets of the dials currently in flight. Closing them from
@@ -416,6 +502,9 @@ object PemicuManager {
         synchronized(lock) {
             generation++
             gen = generation
+            // v1.0.31 (H1): (re)start selalu mulai dari interval
+            // user — jendela yang baru dibuka tidak di-backoff.
+            backoff.clear()
             loopThread?.interrupt()
             loopThread = thread(name = "taptapng-pemicu", isDaemon = true) {
                 DialLog.log("PRIME", "loop prime jalan")
@@ -446,6 +535,10 @@ object PemicuManager {
             runCatching { socket.close() }
         }
         activeSockets.clear()
+        // v1.0.31 (H1): sesi berakhir — state backoff dihapus
+        // bersama lastPrime, jadi sesi berikutnya mulai dari
+        // interval user (jendela baru dibuka tidak di-backoff).
+        backoff.clear()
         // v1.0.4: inFlight TIDAK lagi dikosongkan — thread prime lama
         // masih jalan (socket-nya baru saja ditutup, jadi mereka
         // selesai sendiri); mengosongkan di sini membuat start cepat
@@ -486,6 +579,10 @@ object PemicuManager {
                             // tes sebelumnya selesai sesudah
                             // DialLog.clear() tes berikutnya).
                             if (gen == generation) {
+                                // v1.0.31 (H1): hasil dial menggerakkan
+                                // backoff adaptif — OK beruntun menaikkan
+                                // tangga, GAGAL mereset ke interval user.
+                                recordPrimeResult(target, result is PrimeResult.Ok)
                                 DialLog.log("PRIME", formatPrimeResult(result))
                             }
                         } catch (e: Exception) {
@@ -493,6 +590,7 @@ object PemicuManager {
                             // net so a loop bug can never kill the
                             // scheduler thread.
                             if (gen == generation) {
+                                recordPrimeResult(target, false)
                                 DialLog.log(
                                     "PRIME",
                                     "PRIME GAGAL ${target.host}:${target.port} (${e.javaClass.simpleName})",

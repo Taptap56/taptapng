@@ -10,11 +10,14 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.security.KeyStore
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLEngineResult
 import javax.net.ssl.SSLException
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLSocket
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -23,6 +26,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 
 /**
  * Tests for [PemicuManager] (M5, v1.0.24).
@@ -215,6 +219,156 @@ class PemicuManagerTest {
         assertEquals(10_000L, PemicuManager.msUntilNextDue(listOf(target, other), last, now))
         // No targets: idle sleep (5 s), so edits are picked up soon.
         assertEquals(5_000L, PemicuManager.msUntilNextDue(emptyList(), emptyMap(), now))
+    }
+
+    // --- Backoff adaptif primer (v1.0.31, H1) ---
+    // Tes-tes ini GAGAL pada kode lama (tidak ada
+    // recordPrimeResult / effectiveIntervalSec sama sekali) dan
+    // lolos pada kode baru.
+
+    @Test
+    fun `backoff stays at user interval before 4 consecutive OKs`() {
+        val target = PemicuManager.PemicuTarget("backoff.test", 443, 15)
+        assertEquals(15, PemicuManager.effectiveIntervalSec(target))
+        repeat(3) {
+            PemicuManager.recordPrimeResult(target, true)
+            assertEquals(15, PemicuManager.effectiveIntervalSec(target))
+        }
+        assertEquals(3, PemicuManager.backoffOkStreakFor(target.key()))
+        assertEquals(0, PemicuManager.backoffStepFor(target.key()))
+    }
+
+    @Test
+    fun `backoff doubles every 4 consecutive OKs up to the 120s cap`() {
+        val target = PemicuManager.PemicuTarget("backoff.test", 443, 15)
+        repeat(4) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(30, PemicuManager.effectiveIntervalSec(target))
+        repeat(4) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(60, PemicuManager.effectiveIntervalSec(target))
+        repeat(4) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(120, PemicuManager.effectiveIntervalSec(target))
+        repeat(8) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(120, PemicuManager.effectiveIntervalSec(target))
+    }
+
+    @Test
+    fun `one failure resets backoff to the user interval at once`() {
+        val target = PemicuManager.PemicuTarget("backoff.test", 443, 15)
+        repeat(8) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(60, PemicuManager.effectiveIntervalSec(target))
+        PemicuManager.recordPrimeResult(target, false)
+        assertEquals(15, PemicuManager.effectiveIntervalSec(target))
+        assertEquals(0, PemicuManager.backoffOkStreakFor(target.key()))
+        // Streak yang terputus tidak dihitung: butuh 4 OK segar lagi.
+        repeat(3) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(15, PemicuManager.effectiveIntervalSec(target))
+        PemicuManager.recordPrimeResult(target, true)
+        assertEquals(30, PemicuManager.effectiveIntervalSec(target))
+    }
+
+    @Test
+    fun `backoff ladder follows a non-15s user interval`() {
+        val target = PemicuManager.PemicuTarget("backoff30.test", 443, 30)
+        repeat(4) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(60, PemicuManager.effectiveIntervalSec(target))
+        repeat(4) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(120, PemicuManager.effectiveIntervalSec(target))
+        repeat(4) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(120, PemicuManager.effectiveIntervalSec(target))
+    }
+
+    @Test
+    fun `backoff never shortens an interval already above the cap`() {
+        val target = PemicuManager.PemicuTarget("backoff300.test", 443, 300)
+        repeat(12) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(300, PemicuManager.effectiveIntervalSec(target))
+    }
+
+    @Test
+    fun `dueTargets and msUntilNextDue use the backed-off interval`() {
+        val target = PemicuManager.PemicuTarget("backoff.test", 443, 15)
+        val now = 1_000_000L
+        repeat(8) { PemicuManager.recordPrimeResult(target, true) } // 15 -> 30 -> 60
+        assertEquals(60, PemicuManager.effectiveIntervalSec(target))
+        // Primed 30 s ago: due pada interval user (15/30) tapi
+        // BELUM due pada interval backoff (60).
+        val last = mapOf(target.key() to (now - 30_000L))
+        assertEquals(
+            emptyList<PemicuManager.PemicuTarget>(),
+            PemicuManager.dueTargets(listOf(target), last, now),
+        )
+        assertEquals(30_000L, PemicuManager.msUntilNextDue(listOf(target), last, now))
+        // Primed 60 s ago: due.
+        val elapsed = mapOf(target.key() to (now - 60_000L))
+        assertEquals(listOf(target), PemicuManager.dueTargets(listOf(target), elapsed, now))
+        assertEquals(1_000L, PemicuManager.msUntilNextDue(listOf(target), elapsed, now))
+    }
+
+    @Test
+    fun `stop clears backoff so a new session starts at the user interval`() {
+        val target = PemicuManager.PemicuTarget("backoff.test", 443, 15)
+        repeat(4) { PemicuManager.recordPrimeResult(target, true) }
+        assertEquals(30, PemicuManager.effectiveIntervalSec(target))
+        PemicuManager.stop()
+        assertEquals(15, PemicuManager.effectiveIntervalSec(target))
+        assertEquals(0, PemicuManager.backoffStepFor(target.key()))
+    }
+
+    @Test
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
+    fun `loop backs off after 4 consecutive PRIME OKs`() {
+        // v1.0.31 (H1), end-to-end: loop nyata melawan server TLS
+        // lokal (trust-all menerima self-signed — serverContext
+        // yang sama dengan tes trust-all di atas). Interval 5 dtk:
+        // 4 OK beruntun (~15 dtk) harus menaikkan interval efektif
+        // 5 -> 10; pada kode lama (tanpa backoff) interval efektif
+        // tetap 5. Yang dibuktikan di sini hanya tangga naik lewat
+        // loop nyata; konsekuensi waktunya (due lebih lambat)
+        // sudah dikunci tes murni dueTargets/msUntilNextDue di atas.
+        val sslContext = serverContext()
+        val serverSocket = sslContext.serverSocketFactory
+            .createServerSocket(0, 50, InetAddress.getByName("127.0.0.1")) as SSLServerSocket
+        val acceptThread = Thread({
+            try {
+                while (!serverSocket.isClosed) {
+                    val s = serverSocket.accept()
+                    Thread({
+                        runCatching { (s as SSLSocket).startHandshake() }
+                        runCatching { s.close() }
+                    }, "pemicu-test-tls-accept").apply { isDaemon = true; start() }
+                }
+            } catch (_: Exception) {
+                // Server ditutup.
+            }
+        }, "pemicu-test-tls-server").apply { isDaemon = true; start() }
+        try {
+            DialLog.clear()
+            val target = PemicuManager.PemicuTarget("127.0.0.1", serverSocket.localPort, 5)
+            PemicuManager.start { listOf(target) }
+            try {
+                val deadline = System.currentTimeMillis() + 30_000
+                while (DialLog.lines().count { it.contains("PRIME OK") } < 4 &&
+                    System.currentTimeMillis() < deadline
+                ) {
+                    Thread.sleep(100)
+                }
+                assertEquals(
+                    4,
+                    DialLog.lines().count { it.contains("PRIME OK") },
+                    "loop harus mencatat 4 PRIME OK dalam 30 dtk: ${DialLog.lines()}",
+                )
+                assertEquals(
+                    10,
+                    PemicuManager.effectiveIntervalSec(target),
+                    "sesudah 4 OK beruntun interval efektif harus 5 -> 10",
+                )
+                assertEquals(1, PemicuManager.backoffStepFor(target.key()))
+            } finally {
+                PemicuManager.stop()
+            }
+        } finally {
+            serverSocket.close()
+        }
     }
 
     @Test
