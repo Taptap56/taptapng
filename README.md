@@ -1,4 +1,4 @@
-# TaptapNG v1.0.29
+# TaptapNG v1.0.30
 
 Aplikasi Android BARU dari awal — UI persis v2rayNG 2.3.15 (Android
 Views: XML layouts + RecyclerView + Material Components, **tanpa
@@ -6,7 +6,7 @@ Compose**), isinya protokol in-app (Kotlin/Java), **tanpa bundel
 xray-core**. Arsitektur ala XVEON: protokol ditulis langsung di kode
 app, jadi APK kecil (bukan 41 MB).
 
-- **id** `com.taptap.ng`, **versi** 1.0.29 (vc30)
+- **id** `com.taptap.ng`, **versi** 1.0.30 (vc31)
 - Data: `profiles.json` (Gson) di files dir privat app
 - Terowongan: `VpnService` (`TaptapVpnService`, TUN 172.19.0.1/30)
 
@@ -25,6 +25,18 @@ Core (in-app, tanpa native):
    └─> (milestone berikut: VMess/VLESS/Trojan/SS, SlowDNS/DNSTT,
         Onering, PemicuManager)
 ```
+
+## v1.0.30 — Rantai koneksi leaf-first + dashboard bisa di-scroll sampai bawah
+
+Dua perbaikan dari tes HP v1.0.29 (2026-11-24 07:57–07:58): (1) baris
+Connections untuk pilihan bersarang menampilkan "FINAL › taptap" (nama
+grup), bukan server — `chains` kami grup-dulu, mihomo server-dulu;
+kini `RouteEngine.resolveChainNames()` leaf-first (`["81","tes",
+"taptap"]`, langsung `["81"]`, `["DIRECT"]`/`["REJECT"]` tetap).
+(2) Dashboard tidak bisa di-scroll sampai bawah — bottom bar 64dp
+menutupi 64dp terbawah WebView; kini WebView `bottomMargin` 80dp
+(pola yang sama seperti daftar server: `paddingBottom` 80dp).
+Detail + cara tes: `README-v1.0.30.md`.
 
 ## v1.0.29 — Ikon launcher jadi logo kue TB/TC
 
